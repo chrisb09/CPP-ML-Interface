@@ -1,11 +1,10 @@
 #pragma once
 
 #include "ml_coupling_behavior.hpp"
-#include "ml_coupling_application_properties.hpp"
 
 class MLCouplingBehaviorPeriodic : public MLCouplingBehavior {
     public:
-        MLCouplingBehaviorPeriodic(MLCouplingApplicationProperties* properties, int inference_interval, int coupled_steps_before_inference, int coupled_steps_stride, int step_increment_after_inference) : MLCouplingBehavior(properties)
+        MLCouplingBehaviorPeriodic(int inference_interval, int coupled_steps_before_inference, int coupled_steps_stride, int step_increment_after_inference)
         {
             this->inference_interval = inference_interval;
             this->coupled_steps_before_inference = coupled_steps_before_inference;
@@ -35,14 +34,12 @@ class MLCouplingBehaviorPeriodic : public MLCouplingBehavior {
         bool should_send_data() override {
             // Determine if we should send data in the current step
             // We send data for the required number of coupled steps before inference
-            if (properties->supports_coupling_without_inference()) {
-                long long int steps_since_last_inference = step_count % inference_interval;
-                long long int steps_until_next_inference = inference_interval - steps_since_last_inference;
+            long long int steps_since_last_inference = step_count % inference_interval;
+            long long int steps_until_next_inference = inference_interval - steps_since_last_inference;
 
-                if (steps_until_next_inference < coupled_steps_before_inference * coupled_steps_stride &&
-                    steps_until_next_inference % coupled_steps_stride == 0) {
-                    return true;
-                }
+            if (steps_until_next_inference < coupled_steps_before_inference * coupled_steps_stride &&
+                steps_until_next_inference % coupled_steps_stride == 0) {
+                return true;
             }
             return false;
         }

@@ -2,20 +2,23 @@
 
 #include "ml_coupling_provider.hpp"
 #include "ml_coupling_normalization.hpp"
-#include "ml_coupling_application_properties.hpp"
 
 template <typename In, typename Out>
-class MLCouplingApplication : public MLCouplingApplicationProperties {
+class MLCouplingApplication {
     public:
-        MLCouplingApplication(std::shared_ptr<MLCouplingNormalization<In, Out>> normalization)
-            : normalization(normalization) {}
+        MLCouplingApplication(std::unique_ptr<MLCouplingNormalization<In, Out>> normalization)
+            : normalization(std::move(normalization)) {}
         virtual ~MLCouplingApplication() = default;
 
         // Initialize the ML coupling application
         virtual void init() = 0;
 
+        virtual void preprocess() {} = 0;
+
         // Run the ML coupling application logic
         virtual void infer_ml_model() = 0;
+
+        virtual void postprocess() {} = 0;
 
         // Finalize and clean up resources
         virtual void finalize() = 0;
@@ -42,5 +45,5 @@ class MLCouplingApplication : public MLCouplingApplicationProperties {
         }
 
     private:
-        std::shared_ptr<MLCouplingNormalization<In, Out>> normalization;
+        std::unique_ptr<MLCouplingNormalization<In, Out>> normalization;
 };

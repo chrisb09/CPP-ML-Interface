@@ -1,5 +1,8 @@
 @startuml CPP_NEW_ML_Interface
 
+' Layout hints to encourage a tree-like rendering
+top to bottom direction
+' skinparam linetype ortho
 skinparam classAttributeIconSize 0
 skinparam backgroundColor #FFFFFF
 skinparam class {
@@ -12,23 +15,31 @@ skinparam class {
 class "MLCoupling<In,Out>" <<abstract>> {
     - provider: std::unique_ptr<MLCouplingProvider<In,Out>>
     - application: std::unique_ptr<MLCouplingApplication<In,Out>>
-    # input_data: std::shared_ptr<In>
-    # output_data: std::shared_ptr<Out>
-    + init(provider*, application*)
+    - behavior: std::unique_ptr<MLCouplingBehavior<In,Out>>
+    # input_data: std::vector<std::span<In>>
+    # output_data: std::vector<std::span<Out>>
+    + init(In** input_data, int input_data_count, std::vector<int> input_data_sizes,
+           Out** output_data, size_t output_data_count, std::vector<int> output_data_sizes,
+           MLCouplingProvider<In,Out>*, MLCouplingApplication<In,Out>*, MLCouplingBehavior<In,Out>* = nullptr)
     + infer_ml_model()
     + finalize()
 }
 
 class "MLCouplingProvider<In,Out>" <<abstract>> {
+    + ~MLCouplingProvider()
     + init()
     + inference()
     + finalize()
 }
 
 class "MLCouplingApplication<In,Out>" <<abstract>> {
+    + MLCouplingApplication(std::shared_ptr<MLCouplingNormalization<In,Out>> normalization)
+    + ~MLCouplingApplication()
     - normalization: std::shared_ptr<MLCouplingNormalization<In,Out>>
     + init()
+    + preprocess()
     + infer_ml_model()
+    + postprocess()
     + finalize()
     + ml_step()
     # normalize_input(In&)
@@ -49,15 +60,16 @@ class "MLCouplingMinMaxNormalization<In,Out>" {
     + denormalize_output(Out&)
 }
 
-class "MLCouplingApplicationProperties" {
-    + ~MLCouplingApplicationProperties()
-    + supports_coupling_without_inference(): bool
-    + supports_time_step_increase(): bool
+class "MLCouplingApplicationTurbulenceClosure<In,Out>" {
+    + preprocess()
+    + postprocess()
+    + infer_ml_model()
+    - uniform_filtering()
+    - downsampling()
+    - compute_tau_ij()
 }
 
 class "MLCouplingBehavior" <<abstract>> {
-    - properties: MLCouplingApplicationProperties*
-    + MLCouplingBehavior(MLCouplingApplicationProperties*)
     + should_perform_inference(): bool
     + time_step_delta(): int
     + should_send_data(): bool
@@ -81,14 +93,14 @@ class "MLCouplingBehaviorPeriodic" {
 }
 
 ' Relationships
-"MLCoupling<In,Out>" "1" *-- "1" "MLCouplingProvider<In,Out>" : owns
-"MLCoupling<In,Out>" "1" *-- "1" "MLCouplingApplication<In,Out>" : owns
-"MLCouplingApplication<In,Out>" "1" o-- "0..1" "MLCouplingNormalization<In,Out>" : has (shared)
-"MLCouplingMinMaxNormalization<In,Out>" --|> "MLCouplingNormalization<In,Out>"
+"MLCoupling<In,Out>" "1" ||--|| "1" "MLCouplingProvider<In,Out>" : owns
+"MLCoupling<In,Out>" "1" ||--|| "1" "MLCouplingApplication<In,Out>" : owns
+"MLCoupling<In,Out>" "1" ||--o| "0..1" "MLCouplingBehavior" : owns
+"MLCouplingApplication<In,Out>" "1" ||--o| "0..1" "MLCouplingNormalization<In,Out>" : owns
+"MLCouplingNormalization<In,Out>" <|-- "MLCouplingMinMaxNormalization<In,Out>"
 
-"MLCouplingApplication<In,Out>" --|> "MLCouplingApplicationProperties"
-"MLCouplingBehavior" ..> "MLCouplingApplicationProperties" : uses
-"MLCouplingBehaviorDefault" --|> "MLCouplingBehavior"
-"MLCouplingBehaviorPeriodic" --|> "MLCouplingBehavior"
+"MLCouplingApplication<In,Out>" <|-- "MLCouplingApplicationTurbulenceClosure<In,Out>"
+"MLCouplingBehavior" <|-- "MLCouplingBehaviorDefault"
+"MLCouplingBehavior" <|-- "MLCouplingBehaviorPeriodic"
 
 @enduml

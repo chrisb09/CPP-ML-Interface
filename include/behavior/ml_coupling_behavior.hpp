@@ -1,11 +1,7 @@
 #pragma once
 
-#include "ml_coupling_application_properties.hpp"
-
 class MLCouplingBehavior {
     public:
-        
-        MLCouplingBehavior(MLCouplingApplicationProperties* properties) : properties(properties) {}
 
         virtual bool should_perform_inference() = 0;
 
@@ -19,6 +15,4 @@ class MLCouplingBehavior {
         // which has access to the application properties
         virtual bool should_send_data() = 0;
 
-    protected:
-        MLCouplingApplicationProperties* properties;
 };

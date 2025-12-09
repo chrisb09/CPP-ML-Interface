@@ -1,12 +1,10 @@
 #pragma once
 
 #include "ml_coupling_behavior.hpp"
-#include "ml_coupling_application_properties.hpp"
 
 class MLCouplingBehaviorDefault : public MLCouplingBehavior {
     public:
-        MLCouplingBehaviorDefault(MLCouplingApplicationProperties* properties) 
-            : MLCouplingBehavior(properties) {
+        MLCouplingBehaviorDefault() {
             
         }
 
@@ -21,7 +19,7 @@ class MLCouplingBehaviorDefault : public MLCouplingBehavior {
         }
 
         bool should_send_data() override {
-            // Default behavior: always send data if supported
-            return properties->supports_coupling_without_inference();
+            // Default behavior: always send data 
+            return true;
         }
 };
