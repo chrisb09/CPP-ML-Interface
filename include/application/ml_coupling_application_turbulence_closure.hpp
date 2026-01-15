@@ -1,7 +1,7 @@
 #pragma once
 
 template <typename In, typename Out>
-class MLCouplingApplicationTurbulenceClosure {
+class MLCouplingApplicationTurbulenceClosure : public MLCouplingApplication<In, Out> {
     public:
         virtual ~MLCouplingApplicationTurbulenceClosure() = default;
 

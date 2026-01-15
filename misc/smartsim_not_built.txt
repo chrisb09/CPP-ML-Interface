@@ -1,0 +1,29 @@
+
+Smart Python Packages:
+╒════════════╤═══════════╕
+│ Name       │ Version   │
+╞════════════╪═══════════╡
+│ SmartSim   │ [32m0.8.0[0m     │
+│ SmartRedis │ [32m0.6.1[0m     │
+╘════════════╧═══════════╛
+
+Orchestrator Configuration:
+Traceback (most recent call last):
+  File "/rwthfs/rz/cluster/hpcwork/ro092286/tmp_smartsim/python/smartsim/bin/smart", line 8, in <module>
+    sys.exit(main())
+             ^^^^^^
+  File "/rwthfs/rz/cluster/hpcwork/ro092286/tmp_smartsim/python/smartsim/lib/python3.11/site-packages/smartsim/_core/_cli/__main__.py", line 43, in main
+    return smart_cli.execute(sys.argv)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/rwthfs/rz/cluster/hpcwork/ro092286/tmp_smartsim/python/smartsim/lib/python3.11/site-packages/smartsim/_core/_cli/cli.py", line 88, in execute
+    return menu_item.handler(args, unparsed_args)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/rwthfs/rz/cluster/hpcwork/ro092286/tmp_smartsim/python/smartsim/lib/python3.11/site-packages/smartsim/_core/_cli/info.py", line 33, in execute
+    db_path = _utils.get_db_path()
+              ^^^^^^^^^^^^^^^^^^^^
+  File "/rwthfs/rz/cluster/hpcwork/ro092286/tmp_smartsim/python/smartsim/lib/python3.11/site-packages/smartsim/_core/_cli/utils.py", line 123, in get_db_path
+    for option in bin_path.iterdir():
+  File "/cvmfs/software.hpc.rwth.de/Linux/RH9/x86_64/intel/sapphirerapids/software/Python/3.11.5-GCCcore-13.2.0/lib/python3.11/pathlib.py", line 931, in iterdir
+    for name in os.listdir(self):
+                ^^^^^^^^^^^^^^^^
+FileNotFoundError: [Errno 2] No such file or directory: '/rwthfs/rz/cluster/hpcwork/ro092286/tmp_smartsim/python/smartsim/lib/python3.11/site-packages/smartsim/_core/bin'

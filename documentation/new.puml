@@ -16,11 +16,8 @@ class "MLCoupling<In,Out>" <<abstract>> {
     - provider: std::unique_ptr<MLCouplingProvider<In,Out>>
     - application: std::unique_ptr<MLCouplingApplication<In,Out>>
     - behavior: std::unique_ptr<MLCouplingBehavior<In,Out>>
-    # input_data: std::vector<std::span<In>>
-    # output_data: std::vector<std::span<Out>>
-    + init(In** input_data, int input_data_count, std::vector<int> input_data_sizes,
-           Out** output_data, size_t output_data_count, std::vector<int> output_data_sizes,
-           MLCouplingProvider<In,Out>*, MLCouplingApplication<In,Out>*, MLCouplingBehavior<In,Out>* = nullptr)
+    + init(MLCouplingDataProcessor<In,Out>*, MLCouplingProvider<In,Out>*,
+           MLCouplingApplication<In,Out>*, MLCouplingBehavior<In,Out>* = nullptr)
     + infer_ml_model()
     + finalize()
 }
@@ -33,31 +30,32 @@ class "MLCouplingProvider<In,Out>" <<abstract>> {
 }
 
 class "MLCouplingApplication<In,Out>" <<abstract>> {
-    + MLCouplingApplication(std::shared_ptr<MLCouplingNormalization<In,Out>> normalization)
+    + MLCouplingApplication(std::unique_ptr<MLCouplingDataProcessor<In,Out>> data_processor)
     + ~MLCouplingApplication()
-    - normalization: std::shared_ptr<MLCouplingNormalization<In,Out>>
+    - data_processor: std::unique_ptr<MLCouplingDataProcessor<In,Out>>
     + init()
-    + preprocess()
-    + infer_ml_model()
-    + postprocess()
     + finalize()
     + ml_step()
-    # normalize_input(In&)
-    # denormalize_output(Out&)
+    # preprocess()
+    # infer_ml_model()
+    # postprocess()
+    - normalize_input()
+    - denormalize_output()
 }
 
 class "MLCouplingNormalization<In,Out>" <<abstract>> {
-    + normalize_input(In&)
-    + denormalize_output(Out&)
+    + normalize_input(In*, int)
+    + denormalize_output(Out*, int)
 }
 
 class "MLCouplingMinMaxNormalization<In,Out>" {
-    - input_min_: In
-    - input_max_: In
-    - output_min_: Out
-    - output_max_: Out
-    + normalize_input(In&)
-    + denormalize_output(Out&)
+    - input_min: In
+    - input_max: In
+    - output_min: Out
+    - output_max: Out
+    + MLCouplingMinMaxNormalization(In, In, Out, Out)
+    + normalize_input(In*, int)
+    + denormalize_output(Out*, int)
 }
 
 class "MLCouplingApplicationTurbulenceClosure<In,Out>" {
@@ -67,6 +65,19 @@ class "MLCouplingApplicationTurbulenceClosure<In,Out>" {
     - uniform_filtering()
     - downsampling()
     - compute_tau_ij()
+}
+
+class "MLCouplingDataProcessor<In,Out>" {
+    + MLCouplingDataProcessor(std::vector<In*>, std::vector<std::vector<int>>,
+                              std::vector<Out*>, std::vector<std::vector<int>>,
+                              MLCouplingNormalization<In,Out>*)
+    # input_data: std::vector<In*>
+    # input_data_dimensions: std::vector<std::vector<int>>
+    # output_data: std::vector<Out*>
+    # output_data_dimensions: std::vector<std::vector<int>>
+    # normalize_input(In&)
+    # denormalize_output(Out&)
+    - normalization: std::unique_ptr<MLCouplingNormalization<In,Out>>
 }
 
 class "MLCouplingBehavior" <<abstract>> {
@@ -92,15 +103,38 @@ class "MLCouplingBehaviorPeriodic" {
     + should_send_data(): bool
 }
 
+class "MLCouplingProviderPhydll<In,Out>" {
+    + init()
+    + inference()
+    + finalize()
+}
+
+class "MLCouplingProviderAixelerate<In,Out>" {
+    + init()
+    + inference()
+    + finalize()
+}
+
+class "MLCouplingProviderSmartsim<In,Out>" {
+    + init()
+    + inference()
+    + finalize()
+}
+
 ' Relationships
 "MLCoupling<In,Out>" "1" ||--|| "1" "MLCouplingProvider<In,Out>" : owns
 "MLCoupling<In,Out>" "1" ||--|| "1" "MLCouplingApplication<In,Out>" : owns
 "MLCoupling<In,Out>" "1" ||--o| "0..1" "MLCouplingBehavior" : owns
-"MLCouplingApplication<In,Out>" "1" ||--o| "0..1" "MLCouplingNormalization<In,Out>" : owns
+"MLCouplingApplication<In,Out>" "1" ||--|| "1" "MLCouplingDataProcessor<In,Out>" : owns
+"MLCouplingDataProcessor<In,Out>" "1" ||--o| "0..1" "MLCouplingNormalization<In,Out>" : owns
 "MLCouplingNormalization<In,Out>" <|-- "MLCouplingMinMaxNormalization<In,Out>"
 
 "MLCouplingApplication<In,Out>" <|-- "MLCouplingApplicationTurbulenceClosure<In,Out>"
 "MLCouplingBehavior" <|-- "MLCouplingBehaviorDefault"
 "MLCouplingBehavior" <|-- "MLCouplingBehaviorPeriodic"
+
+"MLCouplingProvider<In,Out>" <|-- "MLCouplingProviderPhydll<In,Out>"
+"MLCouplingProvider<In,Out>" <|-- "MLCouplingProviderAixelerate<In,Out>"
+"MLCouplingProvider<In,Out>" <|-- "MLCouplingProviderSmartsim<In,Out>"
 
 @enduml

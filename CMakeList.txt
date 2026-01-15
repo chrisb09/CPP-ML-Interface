@@ -1,0 +1,35 @@
+cmake_minimum_required(VERSION 3.10)
+project(HPC_Registry_Project)
+
+set(CMAKE_CXX_STANDARD 17)
+
+# 1. Alle Header-Dateien finden, die gescannt werden sollen
+file(GLOB_RECURSE ALL_HEADERS "${CMAKE_CURRENT_SOURCE_DIR}/include/**/*.hpp")
+
+# 2. Pfad für die generierte Datei definieren
+set(GENERATED_SRC "${CMAKE_CURRENT_BINARY_DIR}/generated_registry.cpp")
+
+# 3. Der "Custom Command" - Das Herzstück
+# Das ist wie ein Maven-Plugin-Goal
+add_custom_command(
+    OUTPUT "${GENERATED_SRC}"
+    COMMAND python3 "${CMAKE_CURRENT_SOURCE_DIR}/scripts/generate_registry.py" 
+            "${GENERATED_SRC}" "MLCouplingProvider,MLCouplingNormalization,MLCouplingDataProcessor,MLCouplingBehavior,MLCouplingApplication" ${ALL_HEADERS}
+    DEPENDS ${ALL_HEADERS} "${CMAKE_CURRENT_SOURCE_DIR}/scripts/generate_registry.py"
+    COMMENT "Clang scannt Header nach Unterklassen..."
+)
+
+# 4.1 Als SHARED Library kompilieren (erzeugt libhpc_modules.so)
+add_library(hpc_modules SHARED 
+    src/Base.cpp 
+    ${GENERATED_SRC}
+)
+
+target_include_directories(hpc_modules PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/include")
+
+# 4.2 Die Executable erstellen
+# WICHTIG: Die generierte Datei muss mit in die Liste der Sourcen!
+add_executable(my_app main.cpp ${GENERATED_SRC})
+
+# Header-Verzeichnis bekannt machen
+target_include_directories(my_app PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/include")
