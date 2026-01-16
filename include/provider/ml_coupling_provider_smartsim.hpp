@@ -20,11 +20,6 @@ public:
         // TODO: So far the parameters are just dummy parameters.
     }
 
-    void init() override
-    {
-        // TODO:
-    }
-
     void send_data(MLCouplingData<In> input_data_after_preprocessing) override
     {
         // TODO
@@ -36,10 +31,4 @@ public:
         return MLCouplingData<Out>(nullptr, std::vector<std::vector<int>>{});
     }
 
-    void finalize() override
-    {
-        // TODO:
-    }
-
-private:
 };

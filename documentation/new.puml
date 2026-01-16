@@ -15,32 +15,30 @@ skinparam class {
 class "MLCoupling<In,Out>" {
     - provider: std::unique_ptr<MLCouplingProvider<In,Out>>
     - application: std::unique_ptr<MLCouplingApplication<In,Out>>
-    - behavior: std::unique_ptr<MLCouplingBehavior<In,Out>>
-    + init(MLCouplingDataProcessor<In,Out>*, MLCouplingProvider<In,Out>*,
-           MLCouplingApplication<In,Out>*, MLCouplingBehavior<In,Out>* = nullptr)
-    + infer_ml_model()
-    + finalize()
+    - behavior: std::unique_ptr<MLCouplingBehavior>
+    + MLCoupling(MLCouplingProvider<In,Out>*,
+                 MLCouplingApplication<In,Out>*, MLCouplingBehavior* = nullptr)
+    + ~MLCoupling()
+    + ml_step()
 }
 
 class "MLCouplingProvider<In,Out>" <<abstract>> {
-    + ~MLCouplingProvider()
-    + init()
-    + inference()
-    + finalize()
+    + MLCouplingProvider()
+    + send_data(MLCouplingData<In>)
+    + inference(MLCouplingData<In>): MLCouplingData<Out>
 }
 
 class "MLCouplingApplication<In,Out>" <<abstract>> {
     + MLCouplingApplication(std::unique_ptr<MLCouplingDataProcessor<In,Out>> data_processor)
     + ~MLCouplingApplication()
-    - data_processor: std::unique_ptr<MLCouplingDataProcessor<In,Out>>
+    # data_processor: std::unique_ptr<MLCouplingDataProcessor<In,Out>>
     + init()
     + finalize()
-    + ml_step()
-    # preprocess()
-    # infer_ml_model()
-    # postprocess()
-    - normalize_input()
-    - denormalize_output()
+    + step(bool, bool)
+    # preprocess(MLCouplingData<In>): MLCouplingData<In>
+    # coupling_step(MLCouplingData<In>)
+    # ml_step(MLCouplingData<In>): MLCouplingData<Out>
+    # postprocess(MLCouplingData<Out>): MLCouplingData<Out>
 }
 
 class "MLCouplingNormalization<In,Out>" <<abstract>> {
@@ -59,25 +57,35 @@ class "MLCouplingMinMaxNormalization<In,Out>" {
 }
 
 class "MLCouplingApplicationTurbulenceClosure<In,Out>" {
-    + preprocess()
-    + postprocess()
-    + infer_ml_model()
+    + preprocess(MLCouplingData<In>): MLCouplingData<In>
+    + postprocess(MLCouplingData<Out>): MLCouplingData<Out>
+    + coupling_step(MLCouplingData<In>)
+    + ml_step(MLCouplingData<In>): MLCouplingData<Out>
     - uniform_filtering()
     - downsampling()
     - compute_tau_ij()
 }
 
 class "MLCouplingDataProcessor<In,Out>" {
+    + input_data: MLCouplingData<In>
+    + input_data_after_preprocessing: MLCouplingData<In>
+    + output_data_before_postprocessing: MLCouplingData<Out>
+    + output_data: MLCouplingData<Out>
     + MLCouplingDataProcessor(std::vector<In*>, std::vector<std::vector<int>>,
                               std::vector<Out*>, std::vector<std::vector<int>>,
                               MLCouplingNormalization<In,Out>*)
-    # input_data: std::vector<In*>
-    # input_data_dimensions: std::vector<std::vector<int>>
-    # output_data: std::vector<Out*>
-    # output_data_dimensions: std::vector<std::vector<int>>
+    + MLCouplingDataProcessor(MLCouplingData<In>, MLCouplingData<Out>,
+                              MLCouplingNormalization<In,Out>*)
     # normalize_input(In&)
     # denormalize_output(Out&)
     - normalization: std::unique_ptr<MLCouplingNormalization<In,Out>>
+}
+
+class "MLCouplingData<T>" {
+    + data: std::vector<T*>
+    + data_dimensions: std::vector<std::vector<int>>
+    + MLCouplingData(const std::vector<T*>&, const std::vector<std::vector<int>>&)
+    + MLCouplingData()
 }
 
 class "MLCouplingBehavior" <<abstract>> {
@@ -104,21 +112,19 @@ class "MLCouplingBehaviorPeriodic" {
 }
 
 class "MLCouplingProviderPhydll<In,Out>" {
-    + init()
-    + inference()
-    + finalize()
+    + send_data(MLCouplingData<In>)
+    + inference(MLCouplingData<In>): MLCouplingData<Out>
 }
 
 class "MLCouplingProviderAixelerate<In,Out>" {
-    + init()
-    + inference()
-    + finalize()
+    + send_data(MLCouplingData<In>)
+    + inference(MLCouplingData<In>): MLCouplingData<Out>
 }
 
 class "MLCouplingProviderSmartsim<In,Out>" {
-    + init()
-    + inference()
-    + finalize()
+    + MLCouplingProviderSmartsim(std::string, int, int, int, int, int)
+    + send_data(MLCouplingData<In>)
+    + inference(MLCouplingData<In>): MLCouplingData<Out>
 }
 
 ' Relationships
@@ -127,6 +133,7 @@ class "MLCouplingProviderSmartsim<In,Out>" {
 "MLCoupling<In,Out>" "1" ||--o| "0..1" "MLCouplingBehavior" : owns
 "MLCouplingApplication<In,Out>" "1" ||--|| "1" "MLCouplingDataProcessor<In,Out>" : owns
 "MLCouplingDataProcessor<In,Out>" "1" ||--o| "0..1" "MLCouplingNormalization<In,Out>" : owns
+"MLCouplingDataProcessor<In,Out>" "1" o--|| "4" "MLCouplingData<T>" : uses
 "MLCouplingNormalization<In,Out>" <|-- "MLCouplingMinMaxNormalization<In,Out>"
 
 "MLCouplingApplication<In,Out>" <|-- "MLCouplingApplicationTurbulenceClosure<In,Out>"

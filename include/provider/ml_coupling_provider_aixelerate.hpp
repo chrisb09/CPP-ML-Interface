@@ -8,9 +8,6 @@ template <typename In, typename Out>
 class MLCouplingProviderAixelerate : public MLCouplingProvider<In, Out> {
 
     public:
-        void init() override {
-            // TODO:
-        }
 
         void send_data(MLCouplingData<In> input_data_after_preprocessing) override
         {
@@ -22,11 +19,5 @@ class MLCouplingProviderAixelerate : public MLCouplingProvider<In, Out> {
             // TODO
             return MLCouplingData<Out>(nullptr, std::vector<std::vector<int>>{});
         }
-
-        void finalize() override {
-            // TODO:
-        }
-
-    private:
 
 };

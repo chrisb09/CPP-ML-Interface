@@ -6,10 +6,8 @@
 template <typename In, typename Out>
 class MLCouplingProvider {
     public:
-        virtual ~MLCouplingProvider() = default;
 
-        // Initialize the ML coupling provider
-        virtual void init() = 0;
+        virtual MLCouplingProvider() = default;
 
         // Essentially for the coupling step: send data to the ML model
         virtual void send_data(MLCouplingData<In> input_data_after_preprocessing) = 0;
@@ -18,9 +16,6 @@ class MLCouplingProvider {
         virtual MLCouplingData<Out> inference(MLCouplingData<In> input_data_after_preprocessing) = 0;
 
         // Later, we might add a train() method here as well
-
-        // Finalize and clean up resources
-        virtual void finalize() = 0;
 
         //TODO: consider adding a method to get the MPI communicator if needed, I'm not sure yet
 

@@ -17,12 +17,10 @@ class MLCoupling
     // would interact with.
     public:
         MLCoupling<In, Out>(
-                  MLCouplingDataProcessor<In, Out>* data_processor,
                   MLCouplingProvider<In, Out>* provider,
                   MLCouplingApplication<In, Out>* application,
                   MLCouplingBehavior* behavior = nullptr)
         {
-            this->data_processor.reset(data_processor);
             this->provider.reset(provider);
             this->provider->init();
             this->application.reset(application);
@@ -36,9 +34,9 @@ class MLCoupling
 
         void ml_step() {
             if (application && behavior && behavior->should_perform_inference()) {
-                data_processor->input_data_after_preprocessing = application->preprocess(data_processor->input_data);
+                application->data_processor->input_data_after_preprocessing = application->preprocess(application->data_processor->input_data);
                 application->ml_step();
-                data_processor->output_data_before_postprocessing = application->postprocess(data_processor->output_data);
+                application->data_processor->output_data_before_postprocessing = application->postprocess(application->data_processor->output_data);
             }
         }
 
@@ -52,7 +50,6 @@ class MLCoupling
         }
 
 private:
-    std::unique_ptr<MLCouplingDataProcessor<In, Out>> data_processor;
     std::unique_ptr<MLCouplingProvider<In, Out>> provider;
     std::unique_ptr<MLCouplingApplication<In, Out>> application;
     std::unique_ptr<MLCouplingBehavior> behavior;
