@@ -7,6 +7,7 @@
 #include "provider/ml_coupling_provider.hpp"
 #include "application/ml_coupling_application.hpp"
 #include "behavior/ml_coupling_behavior.hpp"
+#include "behavior/ml_coupling_behavior_default.hpp"
 
 
 template <typename In, typename Out>
@@ -19,7 +20,7 @@ class MLCoupling
                   MLCouplingDataProcessor<In, Out>* data_processor,
                   MLCouplingProvider<In, Out>* provider,
                   MLCouplingApplication<In, Out>* application,
-                  MLCouplingBehavior<In, Out>* behavior = nullptr)
+                  MLCouplingBehavior* behavior = nullptr)
         {
             this->data_processor.reset(data_processor);
             this->provider.reset(provider);
@@ -42,5 +43,5 @@ class MLCoupling
 private:
     std::unique_ptr<MLCouplingProvider<In, Out>> provider;
     std::unique_ptr<MLCouplingApplication<In, Out>> application;
-    std::unique_ptr<MLCouplingBehavior<In, Out>> behavior;
+    std::unique_ptr<MLCouplingBehavior> behavior;
 };
