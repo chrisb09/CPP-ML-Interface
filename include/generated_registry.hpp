@@ -30,9 +30,108 @@
 
 
 
+// Lookup function for MLCouplingProvider (provider)
+// Maps registry names and aliases to actual class names
+inline std::string resolve_provider_class_name(const std::string& name_or_alias) {
+    static const std::unordered_map<std::string, std::string> lookup = {
+        {"MLCouplingProviderAixelerate", "MLCouplingProviderAixelerate"},
+        {"Aixelerate", "MLCouplingProviderAixelerate"},
+        {"aixelerate", "MLCouplingProviderAixelerate"},
+        {"AIxelerate", "MLCouplingProviderAixelerate"},
+        {"MLCouplingProviderPhydll", "MLCouplingProviderPhydll"},
+        {"Phydll", "MLCouplingProviderPhydll"},
+        {"phydll", "MLCouplingProviderPhydll"},
+        {"PhyDLL", "MLCouplingProviderPhydll"},
+        {"MLCouplingProviderSmartsim", "MLCouplingProviderSmartsim"},
+        {"Smartsim", "MLCouplingProviderSmartsim"},
+        {"smartsim", "MLCouplingProviderSmartsim"},
+        {"SmartSim", "MLCouplingProviderSmartsim"},
+    };
+    
+    auto it = lookup.find(name_or_alias);
+    if (it != lookup.end()) {
+        return it->second;
+    }
+    return name_or_alias; // Return as-is if no mapping found
+}
+
+// Lookup function for MLCouplingNormalization (normalization)
+// Maps registry names and aliases to actual class names
+inline std::string resolve_normalization_class_name(const std::string& name_or_alias) {
+    static const std::unordered_map<std::string, std::string> lookup = {
+        {"MLCouplingMinMaxNormalization", "MLCouplingMinMaxNormalization"},
+        {"MinMax", "MLCouplingMinMaxNormalization"},
+        {"minmax", "MLCouplingMinMaxNormalization"},
+        {"min-max", "MLCouplingMinMaxNormalization"},
+        {"MinMaxNormalization", "MLCouplingMinMaxNormalization"},
+    };
+    
+    auto it = lookup.find(name_or_alias);
+    if (it != lookup.end()) {
+        return it->second;
+    }
+    return name_or_alias; // Return as-is if no mapping found
+}
+
+// Lookup function for MLCouplingDataProcessor (data_processor)
+// Maps registry names and aliases to actual class names
+inline std::string resolve_data_processor_class_name(const std::string& name_or_alias) {
+    static const std::unordered_map<std::string, std::string> lookup = {
+        {"MLCouplingDataProcessorSimple", "MLCouplingDataProcessorSimple"},
+        {"Simple", "MLCouplingDataProcessorSimple"},
+        {"simple", "MLCouplingDataProcessorSimple"},
+    };
+    
+    auto it = lookup.find(name_or_alias);
+    if (it != lookup.end()) {
+        return it->second;
+    }
+    return name_or_alias; // Return as-is if no mapping found
+}
+
+// Lookup function for MLCouplingBehavior (behavior)
+// Maps registry names and aliases to actual class names
+inline std::string resolve_behavior_class_name(const std::string& name_or_alias) {
+    static const std::unordered_map<std::string, std::string> lookup = {
+        {"MLCouplingBehaviorDefault", "MLCouplingBehaviorDefault"},
+        {"Default", "MLCouplingBehaviorDefault"},
+        {"default", "MLCouplingBehaviorDefault"},
+        {"MLCouplingBehaviorPeriodic", "MLCouplingBehaviorPeriodic"},
+        {"Periodic", "MLCouplingBehaviorPeriodic"},
+        {"periodic", "MLCouplingBehaviorPeriodic"},
+    };
+    
+    auto it = lookup.find(name_or_alias);
+    if (it != lookup.end()) {
+        return it->second;
+    }
+    return name_or_alias; // Return as-is if no mapping found
+}
+
+// Lookup function for MLCouplingApplication (application)
+// Maps registry names and aliases to actual class names
+inline std::string resolve_application_class_name(const std::string& name_or_alias) {
+    static const std::unordered_map<std::string, std::string> lookup = {
+        {"MLCouplingApplicationTurbulenceClosure", "MLCouplingApplicationTurbulenceClosure"},
+        {"TurbulenceClosure", "MLCouplingApplicationTurbulenceClosure"},
+        {"turbulence-closure", "MLCouplingApplicationTurbulenceClosure"},
+        {"turbulence_closure", "MLCouplingApplicationTurbulenceClosure"},
+        {"turbulence", "MLCouplingApplicationTurbulenceClosure"},
+    };
+    
+    auto it = lookup.find(name_or_alias);
+    if (it != lookup.end()) {
+        return it->second;
+    }
+    return name_or_alias; // Return as-is if no mapping found
+}
+
 template<typename In, typename Out>
 MLCouplingProvider<In, Out>* create_instance_mlcouplingprovider(const std::string &class_name, std::unordered_map<std::string,void*> parameter) {
-        if (class_name == "MLCouplingProviderAixelerate") {
+    // Resolve name or alias to actual class name
+    std::string resolved_class_name = resolve_provider_class_name(class_name);
+
+        if (resolved_class_name == "MLCouplingProviderAixelerate") {
             // Constructor with 0 parameter(s)
             // Parameters: 
             if (parameter.size() == 0) {
@@ -45,7 +144,7 @@ MLCouplingProvider<In, Out>* create_instance_mlcouplingprovider(const std::strin
                 }
             }
             return nullptr;
-        } else if (class_name == "MLCouplingProviderPhydll") {
+        } else if (resolved_class_name == "MLCouplingProviderPhydll") {
             // Constructor with 0 parameter(s)
             // Parameters: 
             if (parameter.size() == 0) {
@@ -58,7 +157,7 @@ MLCouplingProvider<In, Out>* create_instance_mlcouplingprovider(const std::strin
                 }
             }
             return nullptr;
-        } else if (class_name == "MLCouplingProviderSmartsim") {
+        } else if (resolved_class_name == "MLCouplingProviderSmartsim") {
             // Constructor with 6 parameter(s)
             // Parameters: std::string host = "localhost", int port = 6379, int nodes = 1, int tasks_per_node = 1, int cpus_per_task = 1, int gpus_per_task = 0
             if (parameter.size() >= 0 && parameter.size() <= 6) {
@@ -154,7 +253,10 @@ MLCouplingProvider<In, Out>* create_instance_mlcouplingprovider(const std::strin
 
 template<typename In, typename Out>
 MLCouplingNormalization<In, Out>* create_instance_mlcouplingnormalization(const std::string &class_name, std::unordered_map<std::string,void*> parameter) {
-        if (class_name == "MLCouplingMinMaxNormalization") {
+    // Resolve name or alias to actual class name
+    std::string resolved_class_name = resolve_normalization_class_name(class_name);
+
+        if (resolved_class_name == "MLCouplingMinMaxNormalization") {
             // Constructor with 4 parameter(s)
             // Parameters: In input_min, In input_max, Out output_min, Out output_max
             if (parameter.size() == 4) {
@@ -196,7 +298,10 @@ MLCouplingNormalization<In, Out>* create_instance_mlcouplingnormalization(const 
 
 template<typename In, typename Out>
 MLCouplingDataProcessor<In, Out>* create_instance_mlcouplingdataprocessor(const std::string &class_name, std::unordered_map<std::string,void*> parameter) {
-        if (class_name == "MLCouplingDataProcessorSimple") {
+    // Resolve name or alias to actual class name
+    std::string resolved_class_name = resolve_data_processor_class_name(class_name);
+
+        if (resolved_class_name == "MLCouplingDataProcessorSimple") {
             // Constructor with 4 parameter(s)
             // Parameters: std::vector<In *> input_data, std::vector<std::vector<int>> input_data_dimensions, std::vector<Out *> output_data, std::vector<std::vector<int>> output_data_dimensions
             if (parameter.size() == 4) {
@@ -237,7 +342,10 @@ MLCouplingDataProcessor<In, Out>* create_instance_mlcouplingdataprocessor(const 
 }
 
 MLCouplingBehavior* create_instance_mlcouplingbehavior(const std::string &class_name, std::unordered_map<std::string,void*> parameter) {
-        if (class_name == "MLCouplingBehaviorDefault") {
+    // Resolve name or alias to actual class name
+    std::string resolved_class_name = resolve_behavior_class_name(class_name);
+
+        if (resolved_class_name == "MLCouplingBehaviorDefault") {
             // Constructor with 0 parameter(s)
             // Parameters: 
             if (parameter.size() == 0) {
@@ -250,7 +358,7 @@ MLCouplingBehavior* create_instance_mlcouplingbehavior(const std::string &class_
                 }
             }
             return nullptr;
-        } else if (class_name == "MLCouplingBehaviorPeriodic") {
+        } else if (resolved_class_name == "MLCouplingBehaviorPeriodic") {
             // Constructor with 4 parameter(s)
             // Parameters: int inference_interval, int coupled_steps_before_inference, int coupled_steps_stride, int step_increment_after_inference
             if (parameter.size() == 4) {
@@ -302,7 +410,10 @@ MLCouplingBehavior* create_instance_mlcouplingbehavior(const std::string &class_
 
 template<typename In, typename Out>
 MLCouplingApplication<In, Out>* create_instance_mlcouplingapplication(const std::string &class_name, std::unordered_map<std::string,void*> parameter) {
-        if (class_name == "MLCouplingApplicationTurbulenceClosure") {
+    // Resolve name or alias to actual class name
+    std::string resolved_class_name = resolve_application_class_name(class_name);
+
+        if (resolved_class_name == "MLCouplingApplicationTurbulenceClosure") {
             // Constructor with 0 parameter(s)
             // Parameters: 
             if (parameter.size() == 0) {

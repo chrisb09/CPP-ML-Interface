@@ -56,11 +56,14 @@ def generate():
     base_classes_found = dict()
     subclass_constructors = dict()  # Store constructor info for each subclass
     template_parameters = dict()  # Store template parameters: {class_name: [param_names]}
+    class_metadata = dict()  # Store metadata: {base_class: {class_name: {registry_name, aliases}}}
+    base_class_categories = dict()  # Store categories: {base_class: category_name}
     
     for base_class in base_classes:
         found_classes[base_class] = []
         subclass_constructors[base_class] = dict()  # {subclass_name: [constructors]}
         template_parameters[base_class] = []
+        class_metadata[base_class] = dict()
 
     # Allow user to supply additional clang args via CLANG_ARGS env var
     env_clang_args = os.environ.get('CLANG_ARGS')
@@ -96,6 +99,33 @@ def generate():
                     param_name = child.spelling or f"N{len(template_params)}"
                     template_params.append(param_name)
         return template_params
+
+    def get_class_metadata(node, header_path):
+        """Extract @registry_name, @registry_aliases, and @category from comments above class"""
+        if not node.location or not node.location.line:
+            return {}
+        
+        try:
+            with open(header_path, 'r') as f:
+                lines = f.readlines()
+            
+            class_line = node.location.line - 1  # 0-indexed
+            metadata = {}
+            
+            # Look backwards max 15 lines for metadata
+            for i in range(max(0, class_line - 15), class_line):
+                line = lines[i]
+                if match := re.match(r'//\s*@registry_name:\s*(.+)', line):
+                    metadata['registry_name'] = match.group(1).strip()
+                elif match := re.match(r'//\s*@registry_aliases:\s*(.+)', line):
+                    aliases = [a.strip() for a in match.group(1).split(',')]
+                    metadata['aliases'] = aliases
+                elif match := re.match(r'//\s*@category:\s*(.+)', line):
+                    metadata['category'] = match.group(1).strip()
+            
+            return metadata
+        except:
+            return {}
 
     def is_containing_class_declaration(node, class_name, current_file):
         # Return tuple: (is_containing, constructors)
@@ -250,6 +280,13 @@ def generate():
                         print(f"File {h} contains class {base_class}")
                         base_classes_found[base_class] = h
                         template_parameters[base_class] = base_template_params
+                        
+                        # Extract category metadata for base class
+                        base_metadata = get_class_metadata(node, h)
+                        if 'category' in base_metadata:
+                            base_class_categories[base_class] = base_metadata['category']
+                            print(f"    Base class category: {base_metadata['category']}")
+                        
                         continue
                         
                     is_sub = is_subclass_of(node, base_class)
@@ -265,6 +302,15 @@ def generate():
                             subclass_template_params = get_template_parameters(node)
                             if subclass_template_params:
                                 print(f"    Subclass {node.spelling} template parameters: {subclass_template_params}")
+                            
+                            # Get metadata for this subclass
+                            metadata = get_class_metadata(node, h)
+                            if metadata:
+                                class_metadata[base_class][node.spelling] = metadata
+                                if 'registry_name' in metadata:
+                                    print(f"    Registry name: {metadata['registry_name']}")
+                                if 'aliases' in metadata:
+                                    print(f"    Aliases: {', '.join(metadata['aliases'])}")
                             
                             # Get constructors for this subclass
                             subclass_constructors_list = get_class_constructors(node, node.spelling)
@@ -303,6 +349,49 @@ def generate():
         f.write("\n")
         f.write("\n")
         f.write("\n")
+        
+        # Generate lookup functions for name/alias to class name mapping
+        for base_class in base_classes:
+            category = base_class_categories.get(base_class, base_class.lower())
+            
+            f.write(f"// Lookup function for {base_class} ({category})\n")
+            f.write(f"// Maps registry names and aliases to actual class names\n")
+            f.write(f"inline std::string resolve_{category}_class_name(const std::string& name_or_alias) {{\n")
+            f.write(f"    static const std::unordered_map<std::string, std::string> lookup = {{\n")
+            
+            # Add mappings for each subclass
+            for entry in found_classes[base_class]:
+                if len(entry) == 3:
+                    cls, h, _ = entry
+                else:
+                    cls, h = entry
+                
+                if cls in base_classes:
+                    continue
+                    
+                metadata = class_metadata[base_class].get(cls, {})
+                
+                # Add class name mapping to itself (for backward compatibility)
+                f.write(f'        {{"{cls}", "{cls}"}},\n')
+                
+                # Add registry name if it exists
+                if 'registry_name' in metadata:
+                    registry_name = metadata['registry_name']
+                    f.write(f'        {{"{registry_name}", "{cls}"}},\n')
+                
+                # Add aliases if they exist
+                if 'aliases' in metadata:
+                    for alias in metadata['aliases']:
+                        f.write(f'        {{"{alias}", "{cls}"}},\n')
+            
+            f.write(f"    }};\n")
+            f.write(f"    \n")
+            f.write(f"    auto it = lookup.find(name_or_alias);\n")
+            f.write(f"    if (it != lookup.end()) {{\n")
+            f.write(f"        return it->second;\n")
+            f.write(f"    }}\n")
+            f.write(f"    return name_or_alias; // Return as-is if no mapping found\n")
+            f.write(f"}}\n\n")
                 
         for base_class in base_classes:
             # Generate template parameters for the factory function
@@ -317,7 +406,12 @@ def generate():
                 
             text = ""
             
+            category = base_class_categories.get(base_class, base_class.lower())
+            
             text += f"{template_str} create_instance_{base_class.lower()}(const std::string &class_name, std::unordered_map<std::string,void*> parameter) {{\n"
+            text += f"    // Resolve name or alias to actual class name\n"
+            text += f"    std::string resolved_class_name = resolve_{category}_class_name(class_name);\n"
+            text += f"\n"
             
             count1 = 0
             count2 = 0
@@ -336,9 +430,9 @@ def generate():
                     continue
                 count1 += 1
                 if count1 == 1:
-                    text += f'        if (class_name == "{cls}") {{\n'
+                    text += f'        if (resolved_class_name == "{cls}") {{\n'
                 else:
-                    text += f'        }} else if (class_name == "{cls}") {{\n'
+                    text += f'        }} else if (resolved_class_name == "{cls}") {{\n'
                 
                 # Use template parameters for the subclass instantiation
                 if subclass_template_params:
