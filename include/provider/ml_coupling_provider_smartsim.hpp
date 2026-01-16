@@ -1,9 +1,10 @@
 #pragma once
 
 #include "ml_coupling_provider.hpp"
+#include <string>
 
 template <typename In, typename Out>
-class MLCouplingProviderSmartsim : MLCouplingProvider
+class MLCouplingProviderSmartsim : public MLCouplingProvider<In, Out>
 {
 
 public:

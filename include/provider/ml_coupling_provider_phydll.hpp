@@ -3,7 +3,7 @@
 #include "ml_coupling_provider.hpp"
 
 template <typename In, typename Out>
-class MLCouplingProviderPhydll : MLCouplingProvider {
+class MLCouplingProviderPhydll : public MLCouplingProvider<In, Out> {
 
     public:
         void init() override {

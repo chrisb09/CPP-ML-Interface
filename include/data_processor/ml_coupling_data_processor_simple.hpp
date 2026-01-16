@@ -5,7 +5,7 @@
 #include "../normalization/ml_coupling_normalization.hpp"
 
 template <typename In, typename Out>
-class MLCouplingDataProcessorSimple : MLCouplingDataProcessor {
+class MLCouplingDataProcessorSimple : public MLCouplingDataProcessor<In, Out> {
 
     MLCouplingDataProcessorSimple(std::vector<In*> input_data,
             std::vector<std::vector<int>> input_data_dimensions,

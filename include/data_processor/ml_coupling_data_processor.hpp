@@ -1,5 +1,6 @@
 #pragma once
 
+#include <memory>
 #include <vector>
 
 #include "../normalization/ml_coupling_normalization.hpp"

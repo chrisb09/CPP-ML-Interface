@@ -68,10 +68,21 @@ def generate():
         try:
             parse_args = shlex.split(env_clang_args)
         except Exception:
-            parse_args = ['-std=c++17']
+            parse_args = ['-std=c++17', '-I.', '-Iinclude']
     else:
         # default: use c++17 and the project include dir
-        parse_args = ['-std=c++17', '-I.', '-Iinclude']
+        # Add -xc++ to force C++ mode and system includes
+        parse_args = [
+            '-std=c++17',
+            '-I.',
+            '-Iinclude',
+            '-xc++',  # Force C++ mode
+            # Try to include common system header paths
+        ]
+        # Try to add system include paths
+        for sys_include in ['/usr/include/c++/11', '/usr/include/c++/13', '/usr/include']:
+            if os.path.exists(sys_include):
+                parse_args.append(f'-I{sys_include}')
 
     def get_template_parameters(node):
         """Extract template parameter names from a class template node"""
@@ -232,12 +243,17 @@ def generate():
 
     # Datei schreiben
     with open(output_path, "w") as f:
+        # Header Guard
+        f.write("#pragma once\n\n")
         
         f.write(f"#include <string>\n#include <vector>\n\n")
         
         for base_class in base_classes:
             if base_class in base_classes_found:
-                f.write(f'#include "{base_classes_found[base_class]}" // {base_class} \n')
+                import_path = base_classes_found[base_class]
+                if import_path.startswith("include/"):
+                    import_path = import_path[len("include/"):]
+                f.write(f'#include "{import_path}" // {base_class} \n')
         
         for base_class in base_classes:
             f.write(f'\n// Includes for subclasses of {base_class}\n')
@@ -247,7 +263,10 @@ def generate():
                     cls, h, _ = entry
                 else:
                     cls, h = entry
-                f.write(f'#include "{h}" // {cls} \n')
+                import_path = h
+                if import_path.startswith("include/"):
+                    import_path = import_path[len("include/"):]
+                f.write(f'#include "{import_path}" // {cls} \n')
         
         f.write("\n")
         f.write("\n")

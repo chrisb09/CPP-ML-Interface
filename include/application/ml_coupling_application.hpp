@@ -1,6 +1,7 @@
 #pragma once
 
-#include "ml_coupling_provider.hpp"
+#include <memory>
+#include "../provider/ml_coupling_provider.hpp"
 #include "../data_processor/ml_coupling_data_processor.hpp"
 
 template <typename In, typename Out>
@@ -17,19 +18,19 @@ class MLCouplingApplication {
         virtual void finalize() = 0;
 
         void ml_step() {
-            normalize_input();
+            // this->data_processor->normalize_input(); // When ready
             infer_ml_model(); // Should call provider->inference() internally   
-            denormalize_output();
+            // this->data_processor->denormalize_output(); // When ready
         }
 
     protected:
-        virtual void preprocess() {} = 0;
+        virtual void preprocess() {}
 
         // Run the ML coupling application logic
         virtual void infer_ml_model() = 0;
 
-        virtual void postprocess() {} = 0;
+        virtual void postprocess() {}
 
-    private:
+    protected:
         std::unique_ptr<MLCouplingDataProcessor<In, Out>> data_processor;
 };

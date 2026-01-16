@@ -6,11 +6,11 @@ class MLCouplingApplicationTurbulenceClosure : public MLCouplingApplication<In, 
         virtual ~MLCouplingApplicationTurbulenceClosure() = default;
 
         void preprocess() override {
-            normalize_input();
+            // this->data_processor->normalize_input(); // When ready
         }
 
         void postprocess() override {
-            denormalize_output();
+            // this->data_processor->denormalize_output(); // When ready
         }
 
         // Just an example so far
