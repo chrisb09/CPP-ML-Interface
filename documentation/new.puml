@@ -30,10 +30,7 @@ class "MLCouplingProvider<In,Out>" <<abstract>> {
 
 class "MLCouplingApplication<In,Out>" <<abstract>> {
     + MLCouplingApplication(std::unique_ptr<MLCouplingDataProcessor<In,Out>> data_processor)
-    + ~MLCouplingApplication()
     # data_processor: std::unique_ptr<MLCouplingDataProcessor<In,Out>>
-    + init()
-    + finalize()
     + step(bool, bool)
     # preprocess(MLCouplingData<In>): MLCouplingData<In>
     # coupling_step(MLCouplingData<In>)
@@ -42,8 +39,8 @@ class "MLCouplingApplication<In,Out>" <<abstract>> {
 }
 
 class "MLCouplingNormalization<In,Out>" <<abstract>> {
-    + normalize_input(In*, int)
-    + denormalize_output(Out*, int)
+    + normalize_input(MLCouplingData<In>)
+    + denormalize_output(MLCouplingData<Out>)
 }
 
 class "MLCouplingMinMaxNormalization<In,Out>" {
@@ -52,8 +49,12 @@ class "MLCouplingMinMaxNormalization<In,Out>" {
     - output_min: Out
     - output_max: Out
     + MLCouplingMinMaxNormalization(In, In, Out, Out)
+    + MLCouplingMinMaxNormalization(In*, int, Out*, int)
+    + MLCouplingMinMaxNormalization(MLCouplingData<In>, MLCouplingData<Out>)
     + normalize_input(In*, int)
+    + normalize_input(MLCouplingData<In>)
     + denormalize_output(Out*, int)
+    + denormalize_output(MLCouplingData<Out>)
 }
 
 class "MLCouplingApplicationTurbulenceClosure<In,Out>" {
