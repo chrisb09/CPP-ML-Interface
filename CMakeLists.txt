@@ -3,6 +3,10 @@ project(HPC_Registry_Project)
 
 set(CMAKE_CXX_STANDARD 17)
 
+
+set(EXECUTABLE_NAME "cpp_ml_interface_executable")
+set(LIBRARY_NAME "cpp_ml_interface_library")
+
 include(FetchContent)
 
 FetchContent_Declare(
@@ -35,26 +39,26 @@ add_custom_target(generate_registry DEPENDS "${GENERATED_SRC}")
 file(GLOB_RECURSE LIB_SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/src/*.cpp")
 list(FILTER LIB_SOURCES EXCLUDE REGEX ".*main\\.cpp$")  # main.cpp ausschließen
 
-add_library(hpc_modules SHARED 
+add_library(${LIBRARY_NAME} SHARED 
     ${LIB_SOURCES}
     ${GENERATED_SRC}  # Generierte Datei mit einbeziehen
 )
 
 # Abhängigkeit zur Code-Generierung
-add_dependencies(hpc_modules generate_registry)
+add_dependencies(${LIBRARY_NAME} generate_registry)
 
-target_include_directories(hpc_modules PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/include")
+target_include_directories(${LIBRARY_NAME} PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/include")
 
 # TOML++ verlinken
-target_link_libraries(hpc_modules PUBLIC tomlplusplus::tomlplusplus)
+target_link_libraries(${LIBRARY_NAME} PUBLIC tomlplusplus::tomlplusplus)
 
 # 4.2 Executable erstellen
-add_executable(my_app src/main.cpp)
+add_executable(${EXECUTABLE_NAME} src/main.cpp)
 
-target_include_directories(my_app PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/include")
+target_include_directories(${EXECUTABLE_NAME} PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/include")
 
 # Libraries verlinken
-target_link_libraries(my_app PRIVATE 
-    hpc_modules
+target_link_libraries(${EXECUTABLE_NAME} PRIVATE 
+    ${LIBRARY_NAME}
     tomlplusplus::tomlplusplus
 )
