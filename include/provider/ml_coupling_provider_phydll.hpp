@@ -12,8 +12,15 @@ class MLCouplingProviderPhydll : public MLCouplingProvider<In, Out> {
             // TODO:
         }
 
-        void inference() override {
+        void send_data(MLCouplingData<In> input_data_after_preprocessing) override
+        {
             // TODO
+        }
+
+        MLCouplingData<Out> inference(MLCouplingData<In> input_data_after_preprocessing) override
+        {
+            // TODO
+            return MLCouplingData<Out>(nullptr, std::vector<std::vector<int>>{});
         }
 
         void finalize() override {

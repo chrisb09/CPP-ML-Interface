@@ -16,7 +16,7 @@ class MLCoupling
     // I'd see this class as essentially the API that the user
     // would interact with.
     public:
-        void init(
+        MLCoupling<In, Out>(
                   MLCouplingDataProcessor<In, Out>* data_processor,
                   MLCouplingProvider<In, Out>* provider,
                   MLCouplingApplication<In, Out>* application,
@@ -34,13 +34,15 @@ class MLCoupling
             }
         }
 
-        void infer_ml_model() {
-            if (application) {
+        void ml_step() {
+            if (application && behavior && behavior->should_perform_inference()) {
+                data_processor->input_data_after_preprocessing = application->preprocess(data_processor->input_data);
                 application->ml_step();
+                data_processor->output_data_before_postprocessing = application->postprocess(data_processor->output_data);
             }
         }
 
-        void finalize() {
+        ~MLCoupling() {
             if (provider) {
                 provider->finalize();
             }

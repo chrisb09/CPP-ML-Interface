@@ -17,7 +17,10 @@ class MLCouplingDataProcessorSimple : public MLCouplingDataProcessor<In, Out> {
               input_data_dimensions,
               output_data,
               output_data_dimensions,
-              new MLCouplingNormalization<In, Out>()
+              new MLCouplingMinMaxNormalization<In, Out>(input_data.data(),
+                                                         input_data.size(),
+                                                         output_data.data(),
+                                                         output_data.size());
             );
     }
 

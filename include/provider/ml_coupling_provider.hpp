@@ -1,5 +1,7 @@
 #pragma once
 
+#include "../data_processor/ml_coupling_data.hpp"
+
 // @category: provider
 template <typename In, typename Out>
 class MLCouplingProvider {
@@ -9,8 +11,13 @@ class MLCouplingProvider {
         // Initialize the ML coupling provider
         virtual void init() = 0;
 
-        // Perform inference using the ML model
-        virtual void inference() = 0; // strategy_inference in the old code
+        // Essentially for the coupling step: send data to the ML model
+        virtual void send_data(MLCouplingData<In> input_data_after_preprocessing) = 0;
+
+        // Perform inference with the ML model and get the output data
+        virtual MLCouplingData<Out> inference(MLCouplingData<In> input_data_after_preprocessing) = 0;
+
+        // Later, we might add a train() method here as well
 
         // Finalize and clean up resources
         virtual void finalize() = 0;
