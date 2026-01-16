@@ -1,5 +1,6 @@
 #pragma once
 
+// @category: behavior
 class MLCouplingBehavior {
     public:
 

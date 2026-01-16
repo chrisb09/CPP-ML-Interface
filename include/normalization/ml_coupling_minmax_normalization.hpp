@@ -6,6 +6,8 @@
 
 #include <limits>
 
+// @registry_name: MinMax
+// @registry_aliases: minmax, min-max, MinMaxNormalization
 //template <typename In, typename Out>
 template <typename In, typename Out,
           typename = std::enable_if_t<std::is_arithmetic_v<In> && std::is_arithmetic_v<Out>>>

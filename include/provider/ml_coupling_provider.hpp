@@ -1,5 +1,6 @@
 #pragma once
 
+// @category: provider
 template <typename In, typename Out>
 class MLCouplingProvider {
     public:

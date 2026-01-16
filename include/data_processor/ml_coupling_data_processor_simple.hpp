@@ -4,6 +4,8 @@
 
 #include "../normalization/ml_coupling_normalization.hpp"
 
+// @registry_name: Simple
+// @registry_aliases: simple
 template <typename In, typename Out>
 class MLCouplingDataProcessorSimple : public MLCouplingDataProcessor<In, Out> {
 

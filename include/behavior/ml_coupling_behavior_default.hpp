@@ -2,6 +2,8 @@
 
 #include "ml_coupling_behavior.hpp"
 
+// @registry_name: Default
+// @registry_aliases: default
 class MLCouplingBehaviorDefault : public MLCouplingBehavior {
     public:
         MLCouplingBehaviorDefault() {

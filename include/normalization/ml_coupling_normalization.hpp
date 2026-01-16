@@ -1,5 +1,6 @@
 #pragma once
 
+// @category: normalization
 template <typename In, typename Out>
 class MLCouplingNormalization {
     public:

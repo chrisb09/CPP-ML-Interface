@@ -2,6 +2,8 @@
 
 #include "ml_coupling_provider.hpp"
 
+// @registry_name: Aixelerate
+// @registry_aliases: aixelerate, AIxelerate
 template <typename In, typename Out>
 class MLCouplingProviderAixelerate : public MLCouplingProvider<In, Out> {
 

@@ -3,6 +3,8 @@
 #include "ml_coupling_provider.hpp"
 #include <string>
 
+// @registry_name: Smartsim
+// @registry_aliases: smartsim, SmartSim
 template <typename In, typename Out>
 class MLCouplingProviderSmartsim : public MLCouplingProvider<In, Out>
 {

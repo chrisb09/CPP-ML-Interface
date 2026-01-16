@@ -7,6 +7,7 @@
 
 // data pre- and post-processing to get
 
+// @category: data_processor
 template <typename In, typename Out>
 class MLCouplingDataProcessor {
 

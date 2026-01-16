@@ -2,6 +2,8 @@
 
 #include "ml_coupling_behavior.hpp"
 
+// @registry_name: Periodic
+// @registry_aliases: periodic
 class MLCouplingBehaviorPeriodic : public MLCouplingBehavior {
     public:
         MLCouplingBehaviorPeriodic(int inference_interval, int coupled_steps_before_inference, int coupled_steps_stride, int step_increment_after_inference)

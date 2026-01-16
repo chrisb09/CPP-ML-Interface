@@ -1,5 +1,7 @@
 #pragma once
 
+// @registry_name: TurbulenceClosure
+// @registry_aliases: turbulence-closure, turbulence_closure, turbulence
 template <typename In, typename Out>
 class MLCouplingApplicationTurbulenceClosure : public MLCouplingApplication<In, Out> {
     public:

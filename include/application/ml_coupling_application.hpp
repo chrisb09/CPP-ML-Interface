@@ -4,6 +4,7 @@
 #include "../provider/ml_coupling_provider.hpp"
 #include "../data_processor/ml_coupling_data_processor.hpp"
 
+// @category: application
 template <typename In, typename Out>
 class MLCouplingApplication {
     public:
