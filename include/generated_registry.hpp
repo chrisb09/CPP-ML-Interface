@@ -2,6 +2,7 @@
 
 #include <string>
 #include <vector>
+#include <unordered_map>
 
 #include "provider/ml_coupling_provider.hpp" // MLCouplingProvider 
 #include "normalization/ml_coupling_normalization.hpp" // MLCouplingNormalization 
@@ -30,6 +31,86 @@
 
 
 template<typename In, typename Out>
+MLCouplingProvider<In, Out>* create_instance_mlcouplingprovider(const std::string &class_name, std::unordered_map<std::string,void*> parameter) {
+        if (class_name == "MLCouplingProviderAixelerate") {
+            // Constructor with 0 parameter(s)
+            // Parameters: 
+            if (parameter.size() == 0) {
+                std::vector<void*> params_vector;
+                try {
+                    // Extract parameters from the map
+                    return create_instance_mlcouplingprovider<In, Out>(class_name, params_vector);
+                } catch (...) {
+                    // Handle exceptions if necessary
+                }
+            }
+            return nullptr;
+        } else if (class_name == "MLCouplingProviderPhydll") {
+            // Constructor with 0 parameter(s)
+            // Parameters: 
+            if (parameter.size() == 0) {
+                std::vector<void*> params_vector;
+                try {
+                    // Extract parameters from the map
+                    return create_instance_mlcouplingprovider<In, Out>(class_name, params_vector);
+                } catch (...) {
+                    // Handle exceptions if necessary
+                }
+            }
+            return nullptr;
+        } else if (class_name == "MLCouplingProviderSmartsim") {
+            // Constructor with 6 parameter(s)
+            // Parameters: std::string host = "localhost", int port = 6379, int nodes = 1, int tasks_per_node = 1, int cpus_per_task = 1, int gpus_per_task = 0
+            if (parameter.size() >= 0 && parameter.size() <= 6) {
+                std::vector<void*> params_vector;
+                try {
+                    // Extract parameters from the map
+                    if (parameter.find("host") != parameter.end()) {
+                        params_vector.push_back(parameter.at("host"));
+                    } else {
+                        static std::string default_host = "localhost";
+                        params_vector.push_back(&default_host);
+                    }
+                    if (parameter.find("port") != parameter.end()) {
+                        params_vector.push_back(parameter.at("port"));
+                    } else {
+                        static int default_port = 6379;
+                        params_vector.push_back(&default_port);
+                    }
+                    if (parameter.find("nodes") != parameter.end()) {
+                        params_vector.push_back(parameter.at("nodes"));
+                    } else {
+                        static int default_nodes = 1;
+                        params_vector.push_back(&default_nodes);
+                    }
+                    if (parameter.find("tasks_per_node") != parameter.end()) {
+                        params_vector.push_back(parameter.at("tasks_per_node"));
+                    } else {
+                        static int default_tasks_per_node = 1;
+                        params_vector.push_back(&default_tasks_per_node);
+                    }
+                    if (parameter.find("cpus_per_task") != parameter.end()) {
+                        params_vector.push_back(parameter.at("cpus_per_task"));
+                    } else {
+                        static int default_cpus_per_task = 1;
+                        params_vector.push_back(&default_cpus_per_task);
+                    }
+                    if (parameter.find("gpus_per_task") != parameter.end()) {
+                        params_vector.push_back(parameter.at("gpus_per_task"));
+                    } else {
+                        static int default_gpus_per_task = 0;
+                        params_vector.push_back(&default_gpus_per_task);
+                    }
+                    return create_instance_mlcouplingprovider<In, Out>(class_name, params_vector);
+                } catch (...) {
+                    // Handle exceptions if necessary
+                }
+            }
+            return nullptr;
+        }
+    }
+
+template<typename In, typename Out>
 MLCouplingProvider<In, Out>* create_instance_mlcouplingprovider(const std::string &class_name, std::vector<void*> parameter) {
 
         if (class_name == "MLCouplingProviderAixelerate") {
@@ -56,7 +137,7 @@ MLCouplingProvider<In, Out>* create_instance_mlcouplingprovider(const std::strin
             return nullptr;
         } else if (class_name == "MLCouplingProviderSmartsim") {
             // Constructor with 6 parameter(s)
-            // Parameters: std::string host, int port, int nodes, int tasks_per_node, int cpus_per_task, int gpus_per_task
+            // Parameters: std::string host = "localhost", int port = 6379, int nodes = 1, int tasks_per_node = 1, int cpus_per_task = 1, int gpus_per_task = 0
             if (parameter.size() == 6) {
                 try {
                     return new MLCouplingProviderSmartsim<In, Out>(*reinterpret_cast<std::string*>(parameter[0]), *reinterpret_cast<int*>(parameter[1]), *reinterpret_cast<int*>(parameter[2]), *reinterpret_cast<int*>(parameter[3]), *reinterpret_cast<int*>(parameter[4]), *reinterpret_cast<int*>(parameter[5]));
@@ -70,6 +151,28 @@ MLCouplingProvider<In, Out>* create_instance_mlcouplingprovider(const std::strin
 
     return nullptr;
 }
+
+template<typename In, typename Out>
+MLCouplingNormalization<In, Out>* create_instance_mlcouplingnormalization(const std::string &class_name, std::unordered_map<std::string,void*> parameter) {
+        if (class_name == "MLCouplingMinMaxNormalization") {
+            // Constructor with 4 parameter(s)
+            // Parameters: In input_min, In input_max, Out output_min, Out output_max
+            if (parameter.size() == 4) {
+                std::vector<void*> params_vector;
+                try {
+                    // Extract parameters from the map
+                    params_vector.push_back(parameter.at("input_min"));
+                    params_vector.push_back(parameter.at("input_max"));
+                    params_vector.push_back(parameter.at("output_min"));
+                    params_vector.push_back(parameter.at("output_max"));
+                    return create_instance_mlcouplingnormalization<In, Out>(class_name, params_vector);
+                } catch (...) {
+                    // Handle exceptions if necessary
+                }
+            }
+            return nullptr;
+        }
+    }
 
 template<typename In, typename Out>
 MLCouplingNormalization<In, Out>* create_instance_mlcouplingnormalization(const std::string &class_name, std::vector<void*> parameter) {
@@ -92,6 +195,28 @@ MLCouplingNormalization<In, Out>* create_instance_mlcouplingnormalization(const 
 }
 
 template<typename In, typename Out>
+MLCouplingDataProcessor<In, Out>* create_instance_mlcouplingdataprocessor(const std::string &class_name, std::unordered_map<std::string,void*> parameter) {
+        if (class_name == "MLCouplingDataProcessorSimple") {
+            // Constructor with 4 parameter(s)
+            // Parameters: std::vector<In *> input_data, std::vector<std::vector<int>> input_data_dimensions, std::vector<Out *> output_data, std::vector<std::vector<int>> output_data_dimensions
+            if (parameter.size() == 4) {
+                std::vector<void*> params_vector;
+                try {
+                    // Extract parameters from the map
+                    params_vector.push_back(parameter.at("input_data"));
+                    params_vector.push_back(parameter.at("input_data_dimensions"));
+                    params_vector.push_back(parameter.at("output_data"));
+                    params_vector.push_back(parameter.at("output_data_dimensions"));
+                    return create_instance_mlcouplingdataprocessor<In, Out>(class_name, params_vector);
+                } catch (...) {
+                    // Handle exceptions if necessary
+                }
+            }
+            return nullptr;
+        }
+    }
+
+template<typename In, typename Out>
 MLCouplingDataProcessor<In, Out>* create_instance_mlcouplingdataprocessor(const std::string &class_name, std::vector<void*> parameter) {
 
         if (class_name == "MLCouplingDataProcessorSimple") {
@@ -110,6 +235,40 @@ MLCouplingDataProcessor<In, Out>* create_instance_mlcouplingdataprocessor(const 
 
     return nullptr;
 }
+
+MLCouplingBehavior* create_instance_mlcouplingbehavior(const std::string &class_name, std::unordered_map<std::string,void*> parameter) {
+        if (class_name == "MLCouplingBehaviorDefault") {
+            // Constructor with 0 parameter(s)
+            // Parameters: 
+            if (parameter.size() == 0) {
+                std::vector<void*> params_vector;
+                try {
+                    // Extract parameters from the map
+                    return create_instance_mlcouplingbehavior(class_name, params_vector);
+                } catch (...) {
+                    // Handle exceptions if necessary
+                }
+            }
+            return nullptr;
+        } else if (class_name == "MLCouplingBehaviorPeriodic") {
+            // Constructor with 4 parameter(s)
+            // Parameters: int inference_interval, int coupled_steps_before_inference, int coupled_steps_stride, int step_increment_after_inference
+            if (parameter.size() == 4) {
+                std::vector<void*> params_vector;
+                try {
+                    // Extract parameters from the map
+                    params_vector.push_back(parameter.at("inference_interval"));
+                    params_vector.push_back(parameter.at("coupled_steps_before_inference"));
+                    params_vector.push_back(parameter.at("coupled_steps_stride"));
+                    params_vector.push_back(parameter.at("step_increment_after_inference"));
+                    return create_instance_mlcouplingbehavior(class_name, params_vector);
+                } catch (...) {
+                    // Handle exceptions if necessary
+                }
+            }
+            return nullptr;
+        }
+    }
 
 MLCouplingBehavior* create_instance_mlcouplingbehavior(const std::string &class_name, std::vector<void*> parameter) {
 
@@ -140,6 +299,24 @@ MLCouplingBehavior* create_instance_mlcouplingbehavior(const std::string &class_
 
     return nullptr;
 }
+
+template<typename In, typename Out>
+MLCouplingApplication<In, Out>* create_instance_mlcouplingapplication(const std::string &class_name, std::unordered_map<std::string,void*> parameter) {
+        if (class_name == "MLCouplingApplicationTurbulenceClosure") {
+            // Constructor with 0 parameter(s)
+            // Parameters: 
+            if (parameter.size() == 0) {
+                std::vector<void*> params_vector;
+                try {
+                    // Extract parameters from the map
+                    return create_instance_mlcouplingapplication<In, Out>(class_name, params_vector);
+                } catch (...) {
+                    // Handle exceptions if necessary
+                }
+            }
+            return nullptr;
+        }
+    }
 
 template<typename In, typename Out>
 MLCouplingApplication<In, Out>* create_instance_mlcouplingapplication(const std::string &class_name, std::vector<void*> parameter) {

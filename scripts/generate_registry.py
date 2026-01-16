@@ -123,6 +123,8 @@ def generate():
 
     def get_class_constructors(node, class_name):
         # Extract constructor information from a class node
+        # Returns: list of constructors, where each constructor is a list of tuples:
+        # [(param_type, param_name, default_value), ...]
         constructors = []
         for child in node.get_children():
             if child.kind == clang.cindex.CursorKind.CONSTRUCTOR:  # type: ignore
@@ -132,13 +134,43 @@ def generate():
                     if param.kind == clang.cindex.CursorKind.PARM_DECL:  # type: ignore
                         param_type = param.type.spelling if param.type else "unknown"
                         param_name = param.spelling if param.spelling else "unnamed"
-                        params.append((param_type, param_name))
+                        
+                        # Try to extract default value
+                        default_value = None
+                        # Check if parameter has children (which would be the default value expression)
+                        for param_child in param.get_children():
+                            # Default values are typically represented as various expression types
+                            if param_child.kind in (
+                                clang.cindex.CursorKind.INTEGER_LITERAL,  # type: ignore
+                                clang.cindex.CursorKind.FLOATING_LITERAL,  # type: ignore
+                                clang.cindex.CursorKind.STRING_LITERAL,  # type: ignore
+                                clang.cindex.CursorKind.CXX_BOOL_LITERAL_EXPR,  # type: ignore
+                                clang.cindex.CursorKind.CXX_NULL_PTR_LITERAL_EXPR,  # type: ignore
+                                clang.cindex.CursorKind.UNEXPOSED_EXPR,  # type: ignore
+                                clang.cindex.CursorKind.CALL_EXPR,  # type: ignore
+                                clang.cindex.CursorKind.UNARY_OPERATOR,  # type: ignore
+                            ):
+                                # Get the token range for the default value
+                                try:
+                                    tokens = list(param_child.get_tokens())
+                                    if tokens:
+                                        default_value = ' '.join([t.spelling for t in tokens])
+                                except:
+                                    pass
+                                break
+                        
+                        params.append((param_type, param_name, default_value))
                 constructors.append(params)
                 
         if constructors:
             print(f"    Found {len(constructors)} constructor(s) for {class_name}:")
             for i, params in enumerate(constructors):
-                param_strs = [f"{ptype} {pname}" for ptype, pname in params]
+                param_strs = []
+                for ptype, pname, pdefault in params:
+                    if pdefault:
+                        param_strs.append(f"{ptype} {pname} = {pdefault}")
+                    else:
+                        param_strs.append(f"{ptype} {pname}")
                 print(f"      Constructor {i+1}: {class_name}({', '.join(param_strs)})")
         else:
             print(f"    No explicit constructors found for {class_name} (default constructor available)")
@@ -246,7 +278,7 @@ def generate():
         # Header Guard
         f.write("#pragma once\n\n")
         
-        f.write(f"#include <string>\n#include <vector>\n\n")
+        f.write(f"#include <string>\n#include <vector>\n#include <unordered_map>\n\n")
         
         for base_class in base_classes:
             if base_class in base_classes_found:
@@ -282,8 +314,83 @@ def generate():
             
             if len(base_template_params) == 0:
                 template_str = f"{base_class}*"
+                
+            text = ""
             
-            text = f"{template_str} create_instance_{base_class.lower()}(const std::string &class_name, std::vector<void*> parameter) {{\n"
+            text += f"{template_str} create_instance_{base_class.lower()}(const std::string &class_name, std::unordered_map<std::string,void*> parameter) {{\n"
+            
+            count1 = 0
+            count2 = 0
+            for entry in found_classes[base_class]:
+                # Handle both old format (cls, h) and new format (cls, h, template_params)
+                if len(entry) == 3:
+                    cls, h, subclass_template_params = entry
+                else:
+                    cls, h = entry
+                    subclass_template_params = []
+                    
+                count2 += 1
+                if cls in base_classes:
+                    continue
+                if cls not in subclass_constructors[base_class]:
+                    continue
+                count1 += 1
+                if count1 == 1:
+                    text += f'        if (class_name == "{cls}") {{\n'
+                else:
+                    text += f'        }} else if (class_name == "{cls}") {{\n'
+                
+                # Use template parameters for the subclass instantiation
+                if subclass_template_params:
+                    subclass_template_args = ", ".join(base_template_params[:len(subclass_template_params)])
+                    cls_instantiation = f"{cls}<{subclass_template_args}>"
+                else:
+                    cls_instantiation = cls
+                
+                for ctor in subclass_constructors[base_class].get(cls, []):
+                    param_count = len(ctor)
+                    parameters_with_defaults = len([p for p in ctor if p[2] is not None])
+                    parameters_without_defaults = param_count - parameters_with_defaults
+                    text += f'            // Constructor with {param_count} parameter(s)\n'
+                    
+                    # Build parameter documentation
+                    param_docs = []
+                    for ptype, pname, pdefault in ctor:
+                        if pdefault:
+                            param_docs.append(f"{ptype} {pname} = {pdefault}")
+                        else:
+                            param_docs.append(f"{ptype} {pname}")
+                    text += f'            // Parameters: {", ".join(param_docs)}\n'
+                    if parameters_with_defaults > 0:
+                        text += f'            if (parameter.size() >= {parameters_without_defaults} && parameter.size() <= {param_count}) {{\n'
+                    else:
+                        text += f'            if (parameter.size() == {param_count}) {{\n'
+                    text += f'                std::vector<void*> params_vector;\n'
+                    text += f'                try {{\n'
+                    text += f'                    // Extract parameters from the map\n'
+                    for i, (ptype, pname, pdefault) in enumerate(ctor):
+                        if pdefault:
+                            text += f'                    if (parameter.find("{pname}") != parameter.end()) {{\n'
+                            text += f'                        params_vector.push_back(parameter.at("{pname}"));\n'
+                            text += f'                    }} else {{\n'
+                            text += f'                        static {ptype} default_{pname} = {pdefault};\n'
+                            text += f'                        params_vector.push_back(&default_{pname});\n'
+                            text += f'                    }}\n'
+                        else:
+                            text += f'                    params_vector.push_back(parameter.at("{pname}"));\n'
+                    text += f'                    return create_instance_{base_class.lower()}{f"<{template_args}>" if template_args else ""}(class_name, params_vector);\n'
+                    text += f'                }} catch (...) {{\n'
+                    text += f'                    // Handle exceptions if necessary\n'
+                    text += f'                }}\n'
+                    text += f'            }}\n'
+                text += f'            return nullptr;\n'
+                if count2 == found_classes[base_class].__len__():
+                    text += f'        }}\n'
+            text += f"    }}\n\n"
+            
+            
+            
+            text += f"{template_str} create_instance_{base_class.lower()}(const std::string &class_name, std::vector<void*> parameter) {{\n"
             
             text += f"\n"
             
@@ -320,12 +427,21 @@ def generate():
                 for ctor in subclass_constructors[base_class].get(cls, []):
                     param_count = len(ctor)
                     text += f'            // Constructor with {param_count} parameter(s)\n'
-                    text += f'            // Parameters: {", ".join([ptype + " " + pname for ptype, pname in ctor])}\n'
+                    
+                    # Build parameter documentation
+                    param_docs = []
+                    for ptype, pname, pdefault in ctor:
+                        if pdefault:
+                            param_docs.append(f"{ptype} {pname} = {pdefault}")
+                        else:
+                            param_docs.append(f"{ptype} {pname}")
+                    text += f'            // Parameters: {", ".join(param_docs)}\n'
+                    
                     text += f'            if (parameter.size() == {param_count}) {{\n'
                     text += f'                try {{\n'
                     text += f'                    return new {cls_instantiation}('
                     param_list = []
-                    for i, (ptype, pname) in enumerate(ctor):
+                    for i, (ptype, pname, pdefault) in enumerate(ctor):
                         param_list.append(f'*reinterpret_cast<{ptype}*>(parameter[{i}])')
                     text += ', '.join(param_list)
                     text += f');\n'
