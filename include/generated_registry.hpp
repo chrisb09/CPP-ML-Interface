@@ -34,15 +34,12 @@
 // Maps registry names and aliases to actual class names
 inline std::string resolve_provider_class_name(const std::string& name_or_alias) {
     static const std::unordered_map<std::string, std::string> lookup = {
-        {"MLCouplingProviderAixelerate", "MLCouplingProviderAixelerate"},
         {"Aixelerate", "MLCouplingProviderAixelerate"},
         {"aixelerate", "MLCouplingProviderAixelerate"},
         {"AIxelerate", "MLCouplingProviderAixelerate"},
-        {"MLCouplingProviderPhydll", "MLCouplingProviderPhydll"},
         {"Phydll", "MLCouplingProviderPhydll"},
         {"phydll", "MLCouplingProviderPhydll"},
         {"PhyDLL", "MLCouplingProviderPhydll"},
-        {"MLCouplingProviderSmartsim", "MLCouplingProviderSmartsim"},
         {"Smartsim", "MLCouplingProviderSmartsim"},
         {"smartsim", "MLCouplingProviderSmartsim"},
         {"SmartSim", "MLCouplingProviderSmartsim"},
@@ -59,7 +56,6 @@ inline std::string resolve_provider_class_name(const std::string& name_or_alias)
 // Maps registry names and aliases to actual class names
 inline std::string resolve_normalization_class_name(const std::string& name_or_alias) {
     static const std::unordered_map<std::string, std::string> lookup = {
-        {"MLCouplingMinMaxNormalization", "MLCouplingMinMaxNormalization"},
         {"MinMax", "MLCouplingMinMaxNormalization"},
         {"minmax", "MLCouplingMinMaxNormalization"},
         {"min-max", "MLCouplingMinMaxNormalization"},
@@ -77,7 +73,6 @@ inline std::string resolve_normalization_class_name(const std::string& name_or_a
 // Maps registry names and aliases to actual class names
 inline std::string resolve_data_processor_class_name(const std::string& name_or_alias) {
     static const std::unordered_map<std::string, std::string> lookup = {
-        {"MLCouplingDataProcessorSimple", "MLCouplingDataProcessorSimple"},
         {"Simple", "MLCouplingDataProcessorSimple"},
         {"simple", "MLCouplingDataProcessorSimple"},
     };
@@ -93,10 +88,8 @@ inline std::string resolve_data_processor_class_name(const std::string& name_or_
 // Maps registry names and aliases to actual class names
 inline std::string resolve_behavior_class_name(const std::string& name_or_alias) {
     static const std::unordered_map<std::string, std::string> lookup = {
-        {"MLCouplingBehaviorDefault", "MLCouplingBehaviorDefault"},
         {"Default", "MLCouplingBehaviorDefault"},
         {"default", "MLCouplingBehaviorDefault"},
-        {"MLCouplingBehaviorPeriodic", "MLCouplingBehaviorPeriodic"},
         {"Periodic", "MLCouplingBehaviorPeriodic"},
         {"periodic", "MLCouplingBehaviorPeriodic"},
     };
@@ -112,7 +105,6 @@ inline std::string resolve_behavior_class_name(const std::string& name_or_alias)
 // Maps registry names and aliases to actual class names
 inline std::string resolve_application_class_name(const std::string& name_or_alias) {
     static const std::unordered_map<std::string, std::string> lookup = {
-        {"MLCouplingApplicationTurbulenceClosure", "MLCouplingApplicationTurbulenceClosure"},
         {"TurbulenceClosure", "MLCouplingApplicationTurbulenceClosure"},
         {"turbulence-closure", "MLCouplingApplicationTurbulenceClosure"},
         {"turbulence_closure", "MLCouplingApplicationTurbulenceClosure"},
@@ -124,6 +116,24 @@ inline std::string resolve_application_class_name(const std::string& name_or_ali
         return it->second;
     }
     return name_or_alias; // Return as-is if no mapping found
+}
+
+// Lookup function to resolve category names to base class names
+// Maps category names (e.g., 'provider', 'behavior') to base class names
+inline std::string resolve_category_to_base_class(const std::string& category) {
+    static const std::unordered_map<std::string, std::string> lookup = {
+        {"provider", "MLCouplingProvider"},
+        {"normalization", "MLCouplingNormalization"},
+        {"data_processor", "MLCouplingDataProcessor"},
+        {"behavior", "MLCouplingBehavior"},
+        {"application", "MLCouplingApplication"},
+    };
+    
+    auto it = lookup.find(category);
+    if (it != lookup.end()) {
+        return it->second;
+    }
+    return category; // Return as-is if no mapping found
 }
 
 template<typename In, typename Out>

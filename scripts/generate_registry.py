@@ -371,9 +371,6 @@ def generate():
                     
                 metadata = class_metadata[base_class].get(cls, {})
                 
-                # Add class name mapping to itself (for backward compatibility)
-                f.write(f'        {{"{cls}", "{cls}"}},\n')
-                
                 # Add registry name if it exists
                 if 'registry_name' in metadata:
                     registry_name = metadata['registry_name']
@@ -392,6 +389,25 @@ def generate():
             f.write(f"    }}\n")
             f.write(f"    return name_or_alias; // Return as-is if no mapping found\n")
             f.write(f"}}\n\n")
+        
+        # Generate category to base class name lookup function
+        f.write("// Lookup function to resolve category names to base class names\n")
+        f.write("// Maps category names (e.g., 'provider', 'behavior') to base class names\n")
+        f.write("inline std::string resolve_category_to_base_class(const std::string& category) {\n")
+        f.write("    static const std::unordered_map<std::string, std::string> lookup = {\n")
+        
+        for base_class in base_classes:
+            category = base_class_categories.get(base_class, base_class.lower())
+            f.write(f'        {{"{category}", "{base_class}"}},\n')
+        
+        f.write("    };\n")
+        f.write("    \n")
+        f.write("    auto it = lookup.find(category);\n")
+        f.write("    if (it != lookup.end()) {\n")
+        f.write("        return it->second;\n")
+        f.write("    }\n")
+        f.write("    return category; // Return as-is if no mapping found\n")
+        f.write("}\n\n")
                 
         for base_class in base_classes:
             # Generate template parameters for the factory function
