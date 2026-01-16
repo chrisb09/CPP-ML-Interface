@@ -273,6 +273,24 @@ MLCouplingNormalization<In, Out>* create_instance_mlcouplingnormalization(const 
                 // Handle constructor exceptions if necessary
             }
         }
+        // Constructor with 4 parameter(s)
+        // Parameters: In * input_data, int input_data_size, Out * output_data, int output_data_size
+        if (parameter.size() == 4) {
+            try {
+                return new MLCouplingMinMaxNormalization<In, Out>(*reinterpret_cast<In **>(parameter[0]), *reinterpret_cast<int*>(parameter[1]), *reinterpret_cast<Out **>(parameter[2]), *reinterpret_cast<int*>(parameter[3]));
+            } catch (...) {
+                // Handle constructor exceptions if necessary
+            }
+        }
+        // Constructor with 2 parameter(s)
+        // Parameters: MLCouplingData<In> input_data, MLCouplingData<Out> output_data
+        if (parameter.size() == 2) {
+            try {
+                return new MLCouplingMinMaxNormalization<In, Out>(*reinterpret_cast<MLCouplingData<In>*>(parameter[0]), *reinterpret_cast<MLCouplingData<Out>*>(parameter[1]));
+            } catch (...) {
+                // Handle constructor exceptions if necessary
+            }
+        }
         return nullptr;
     }
 
@@ -300,6 +318,34 @@ MLCouplingNormalization<In, Out>* create_instance_mlcouplingnormalization(const 
                 // Handle exceptions if necessary
             }
         }
+        // Constructor with 4 parameter(s)
+        // Parameters: In * input_data, int input_data_size, Out * output_data, int output_data_size
+        if (parameter.size() == 4) {
+            std::vector<void*> params_vector;
+            try {
+                // Extract parameters from the map
+                params_vector.push_back(parameter.at("input_data"));
+                params_vector.push_back(parameter.at("input_data_size"));
+                params_vector.push_back(parameter.at("output_data"));
+                params_vector.push_back(parameter.at("output_data_size"));
+                return create_instance_mlcouplingnormalization<In, Out>(class_name, params_vector);
+            } catch (...) {
+                // Handle exceptions if necessary
+            }
+        }
+        // Constructor with 2 parameter(s)
+        // Parameters: MLCouplingData<In> input_data, MLCouplingData<Out> output_data
+        if (parameter.size() == 2) {
+            std::vector<void*> params_vector;
+            try {
+                // Extract parameters from the map
+                params_vector.push_back(parameter.at("input_data"));
+                params_vector.push_back(parameter.at("output_data"));
+                return create_instance_mlcouplingnormalization<In, Out>(class_name, params_vector);
+            } catch (...) {
+                // Handle exceptions if necessary
+            }
+        }
         return nullptr;
     }
     return nullptr;
@@ -314,6 +360,15 @@ MLCouplingDataProcessor<In, Out>* create_instance_mlcouplingdataprocessor(const 
         if (parameter.size() == 4) {
             try {
                 return new MLCouplingDataProcessorSimple<In, Out>(*reinterpret_cast<std::vector<In *>*>(parameter[0]), *reinterpret_cast<std::vector<std::vector<int>>*>(parameter[1]), *reinterpret_cast<std::vector<Out *>*>(parameter[2]), *reinterpret_cast<std::vector<std::vector<int>>*>(parameter[3]));
+            } catch (...) {
+                // Handle constructor exceptions if necessary
+            }
+        }
+        // Constructor with 2 parameter(s)
+        // Parameters: MLCouplingData<In> input_data, MLCouplingData<Out> output_data
+        if (parameter.size() == 2) {
+            try {
+                return new MLCouplingDataProcessorSimple<In, Out>(*reinterpret_cast<MLCouplingData<In>*>(parameter[0]), *reinterpret_cast<MLCouplingData<Out>*>(parameter[1]));
             } catch (...) {
                 // Handle constructor exceptions if necessary
             }
@@ -340,6 +395,19 @@ MLCouplingDataProcessor<In, Out>* create_instance_mlcouplingdataprocessor(const 
                 params_vector.push_back(parameter.at("input_data_dimensions"));
                 params_vector.push_back(parameter.at("output_data"));
                 params_vector.push_back(parameter.at("output_data_dimensions"));
+                return create_instance_mlcouplingdataprocessor<In, Out>(class_name, params_vector);
+            } catch (...) {
+                // Handle exceptions if necessary
+            }
+        }
+        // Constructor with 2 parameter(s)
+        // Parameters: MLCouplingData<In> input_data, MLCouplingData<Out> output_data
+        if (parameter.size() == 2) {
+            std::vector<void*> params_vector;
+            try {
+                // Extract parameters from the map
+                params_vector.push_back(parameter.at("input_data"));
+                params_vector.push_back(parameter.at("output_data"));
                 return create_instance_mlcouplingdataprocessor<In, Out>(class_name, params_vector);
             } catch (...) {
                 // Handle exceptions if necessary

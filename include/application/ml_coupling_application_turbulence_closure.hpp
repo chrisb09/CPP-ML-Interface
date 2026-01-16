@@ -14,7 +14,7 @@ class MLCouplingApplicationTurbulenceClosure : public MLCouplingApplication<In, 
 
         MLCouplingData<In> preprocess(MLCouplingData<In> input_data) override {
             // TODO: Implement turbulence closure specific preprocessing here
-            data_processor->normalize_input();
+            this->data_processor->normalize_input(input_data);
             uniform_filtering();
             downsampling();
             return input_data;
@@ -22,7 +22,7 @@ class MLCouplingApplicationTurbulenceClosure : public MLCouplingApplication<In, 
 
         MLCouplingData<Out> postprocess(MLCouplingData<Out> output_data_before_postprocessing) override {
             // TODO: Implement turbulence closure specific postprocessing here
-            data_processor->denormalize_output();
+            this->data_processor->denormalize_output(output_data_before_postprocessing);
             compute_tau_ij();
             return output_data_before_postprocessing;
         }

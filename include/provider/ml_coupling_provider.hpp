@@ -7,7 +7,7 @@ template <typename In, typename Out>
 class MLCouplingProvider {
     public:
 
-        virtual MLCouplingProvider() = default;
+        MLCouplingProvider() = default;
 
         // Essentially for the coupling step: send data to the ML model
         virtual void send_data(MLCouplingData<In> input_data_after_preprocessing) = 0;

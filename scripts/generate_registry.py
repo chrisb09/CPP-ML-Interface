@@ -537,6 +537,11 @@ def generate():
 
                 if is_sub and not node.is_abstract_record() and node.spelling:
                     if node.spelling != base_class:
+                        # Only process classes defined in the current header file (not included files)
+                        node_file = str(node.location.file) if node.location.file else ""
+                        if not (node_file.endswith(h) or h.endswith(node_file)):
+                            continue
+                        
                         # Get template parameters for this subclass
                         subclass_template_params = get_template_parameters(node)
                         if subclass_template_params:

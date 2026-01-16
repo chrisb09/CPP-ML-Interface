@@ -46,18 +46,35 @@ class MLCouplingMinMaxNormalization : public MLCouplingNormalization<In, Out> {
             }
         }
 
-        void normalize_input(In* input_data, int input_data_size) override {
+        MLCouplingMinMaxNormalization(MLCouplingData<In> input_data,
+                                     MLCouplingData<Out> output_data) {
+            // use the previous constructor
+            *this = MLCouplingMinMaxNormalization(input_data.data.data(),
+                                                  input_data.data.size(),
+                                                  output_data.data.data(),
+                                                  output_data.data.size());
+        }
+
+        void normalize_input(In* input_data, int input_data_size) {
             // Min-Max normalization: y = (x - min) / (max - min)
             for (int i = 0; i < input_data_size; ++i) {
                 input_data[i] = (input_data[i] - input_min) / (input_max - input_min);
             }
         }
 
-        void denormalize_output(Out* output_data, int output_data_size) override {
+        void normalize_input(MLCouplingData<In> input_data) override {
+            normalize_input(input_data.data.data(), input_data.data.size());
+        }
+
+        void denormalize_output(Out* output_data, int output_data_size) {
             // Min-Max denormalization: x = y * (max - min) + min
             for (int i = 0; i < output_data_size; ++i) {
                 output_data[i] = output_data[i] * (output_max - output_min) + output_min;
             }
+        }
+
+        void denormalize_output(MLCouplingData<Out> output_data) override {
+            denormalize_output(output_data.data.data(), output_data.data.size());
         }
 
     private:

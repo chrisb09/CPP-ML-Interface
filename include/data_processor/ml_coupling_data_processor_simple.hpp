@@ -7,22 +7,36 @@
 // @registry_name: Simple
 // @registry_aliases: simple
 template <typename In, typename Out>
-class MLCouplingDataProcessorSimple : public MLCouplingDataProcessor<In, Out> {
+class MLCouplingDataProcessorSimple : public MLCouplingDataProcessor<In, Out>
+{
 
-    MLCouplingDataProcessorSimple(std::vector<In*> input_data,
-            std::vector<std::vector<int>> input_data_dimensions,
-            std::vector<Out*> output_data,
-            std::vector<std::vector<int>> output_data_dimensions) {
-        super(input_data,
-              input_data_dimensions,
-              output_data,
-              output_data_dimensions,
-              new MLCouplingMinMaxNormalization<In, Out>(input_data.data(),
-                                                         input_data.size(),
-                                                         output_data.data(),
-                                                         output_data.size());
-            );
+    MLCouplingDataProcessorSimple(
+        std::vector<In *> input_data,
+        std::vector<std::vector<int>> input_data_dimensions,
+        std::vector<Out *> output_data,
+        std::vector<std::vector<int>> output_data_dimensions)
+        : MLCouplingDataProcessor<In, Out>(
+            input_data,
+            input_data_dimensions,
+            output_data,
+            output_data_dimensions,
+            new MLCouplingMinMaxNormalization<In, Out>(input_data.data(),
+            input_data.size(),
+            output_data.data(),
+            output_data.size()))
+    {
     }
 
-
+    MLCouplingDataProcessorSimple(
+        MLCouplingData<In> input_data,
+        MLCouplingData<Out> output_data)
+        : MLCouplingDataProcessor<In, Out>(
+            input_data,
+            output_data,
+            new MLCouplingMinMaxNormalization<In, Out>(input_data.data.data(),
+            input_data.data.size(),
+            output_data.data.data(),
+            output_data.data.size()))
+    {
+    }
 };
