@@ -34,13 +34,23 @@ class MLCoupling
             }
         }
 
-        // Run the ML coupling application logic
-        virtual void infer_ml_model() = 0;
+        void infer_ml_model() {
+            if (application) {
+                application->ml_step();
+            }
+        }
 
-        // Finalize and clean up resources
-        virtual void finalize() = 0;
+        void finalize() {
+            if (provider) {
+                provider->finalize();
+            }
+            if (application) {
+                application->finalize();
+            }
+        }
 
 private:
+    std::unique_ptr<MLCouplingDataProcessor<In, Out>> data_processor;
     std::unique_ptr<MLCouplingProvider<In, Out>> provider;
     std::unique_ptr<MLCouplingApplication<In, Out>> application;
     std::unique_ptr<MLCouplingBehavior> behavior;
