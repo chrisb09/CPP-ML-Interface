@@ -329,7 +329,10 @@ def generate():
         for base_class in base_classes:
             if base_class in base_classes_found:
                 import_path = base_classes_found[base_class]
-                if import_path.startswith("include/"):
+                # Handle both absolute and relative paths
+                if "include/" in import_path:
+                    import_path = import_path[import_path.rfind("include/") + len("include/"):]
+                elif import_path.startswith("include/"):
                     import_path = import_path[len("include/"):]
                 f.write(f'#include "{import_path}" // {base_class} \n')
         
@@ -342,7 +345,10 @@ def generate():
                 else:
                     cls, h = entry
                 import_path = h
-                if import_path.startswith("include/"):
+                # Handle both absolute and relative paths
+                if "include/" in import_path:
+                    import_path = import_path[import_path.rfind("include/") + len("include/"):]
+                elif import_path.startswith("include/"):
                     import_path = import_path[len("include/"):]
                 f.write(f'#include "{import_path}" // {cls} \n')
         
