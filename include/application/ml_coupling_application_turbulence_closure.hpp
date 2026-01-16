@@ -10,7 +10,6 @@
 template <typename In, typename Out>
 class MLCouplingApplicationTurbulenceClosure : public MLCouplingApplication<In, Out> {
     public:
-        virtual ~MLCouplingApplicationTurbulenceClosure() = default;
 
         MLCouplingData<In> preprocess(MLCouplingData<In> input_data) override {
             // TODO: Implement turbulence closure specific preprocessing here

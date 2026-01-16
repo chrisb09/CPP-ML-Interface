@@ -12,13 +12,6 @@ class MLCouplingApplication {
     public:
         MLCouplingApplication(std::unique_ptr<MLCouplingDataProcessor<In, Out>> data_processor)
             : data_processor(std::move(data_processor)) {}
-        virtual ~MLCouplingApplication() = default;
-
-        // Initialize the ML coupling application
-        virtual void init() = 0;
-
-        // Finalize and clean up resources
-        virtual void finalize() = 0;
 
         void step(bool perform_coupling, bool perform_inference) {
             if (!perform_coupling && !perform_inference) {
