@@ -22,8 +22,41 @@
 // Function to create and configure an MLCoupling instance based on a configuration string
 template <typename In, typename Out>
 MLCoupling<In, Out>* create_mlcoupling_from_config(const std::string &config_str) {
-    // TODO: later
-    return nullptr;
+    try {
+        toml::v3::table config = toml::parse(config_str);
+
+        // Let's iterate through the configs "sections" or "categories" or whatever you want to call them (like [provider], [application], etc. but not hardcoded but all that is in the config)
+
+        config.for_each([](const toml::key& key, const toml::v3::node& node) {
+            std::cout << "Section: " << key << std::endl;
+            if (node.is_table()) {
+                const auto& table = *node.as_table();
+                table.for_each([](const toml::key& k, auto&& v) {
+                    std::cout << "  " << k << " = ";
+                    v.visit([](auto&& val) { std::cout << val; });
+                    std::cout << std::endl;
+                });
+            }
+        });
+
+
+        
+        
+        // Wert auslesen (z.B. ein Port für SmartSim)
+        //int64_t port = config["network"]["port"].value_or(6379);
+        
+        // In deine void* Liste für die Factory packen
+        std::vector<void*> params;
+        //params.push_back(&port);
+        
+        // Hier käme dein generierter Factory-Aufruf
+        // auto* provider = create_instance_mlcouplingprovider<double, double>("Smartsim", params);
+
+    } catch (const toml::parse_error& err) {
+        std::cerr << "Parsing failed: " << err << std::endl;
+    }
+
+    return nullptr; // Placeholder return
 }
 
 template <typename In, typename Out>
