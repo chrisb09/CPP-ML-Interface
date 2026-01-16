@@ -12,7 +12,7 @@ skinparam class {
 }
 
 
-class "MLCoupling<In,Out>" <<abstract>> {
+class "MLCoupling<In,Out>" {
     - provider: std::unique_ptr<MLCouplingProvider<In,Out>>
     - application: std::unique_ptr<MLCouplingApplication<In,Out>>
     - behavior: std::unique_ptr<MLCouplingBehavior<In,Out>>
