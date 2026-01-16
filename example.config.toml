@@ -1,3 +1,6 @@
+[general]
+log_level = "info"
+
 [provider]
 # Smartsim default parameters: std::string host = "localhost", int port = 6379, int nodes = 1, int tasks_per_node = 1, int cpus_per_task = 1, int gpus_per_task = 0
 name = "Smartsim"
