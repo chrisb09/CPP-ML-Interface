@@ -11,12 +11,30 @@
 
 #include <string>
 #include <vector>
+#include <fstream>
+#include <stdexcept>
+
+// Include toml++ for parsing TOML configurations
+#include <toml++/toml.h>
 
 #include "ml_coupling.hpp"
 
 // Function to create and configure an MLCoupling instance based on a configuration string
 template <typename In, typename Out>
-MLCoupling<In, Out> create_mlcoupling_from_config(const std::string &config_str);
+MLCoupling<In, Out>* create_mlcoupling_from_config(const std::string &config_str) {
+    // TODO: later
+    return nullptr;
+}
 
 template <typename In, typename Out>
-MLCoupling<In, Out> create_mlcoupling_from_config_file(const std::string &config_file_path);
+MLCoupling<In, Out>* create_mlcoupling_from_config_file(const std::string &config_file_path) {
+    // Open and read the file content
+    std::ifstream file(config_file_path);
+    if (!file.is_open()) {
+        throw std::runtime_error("Could not open config file: " + config_file_path);
+    }
+    std::string config_str((std::istreambuf_iterator<char>(file)),
+                            std::istreambuf_iterator<char>());
+    file.close();
+    return create_mlcoupling_from_config<In, Out>(config_str);
+}
