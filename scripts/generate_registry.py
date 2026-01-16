@@ -430,6 +430,80 @@ def generate():
             
             category = base_class_categories.get(base_class, base_class.lower())
             
+            
+            
+            text += f"{template_str} create_instance_{base_class.lower()}(const std::string &class_name, std::vector<void*> parameter) {{\n"
+            
+            text += f"\n"
+            
+            
+            
+            count1 = 0
+            count2 = 0
+            for entry in found_classes[base_class]:
+                # Handle both old format (cls, h) and new format (cls, h, template_params)
+                if len(entry) == 3:
+                    cls, h, subclass_template_params = entry
+                else:
+                    cls, h = entry
+                    subclass_template_params = []
+                    
+                count2 += 1
+                if cls in base_classes:
+                    continue
+                if cls not in subclass_constructors[base_class]:
+                    continue
+                count1 += 1
+                if count1 == 1:
+                    text += f'        if (class_name == "{cls}") {{\n'
+                else:
+                    text += f'        }} else if (class_name == "{cls}") {{\n'
+                
+                # Use template parameters for the subclass instantiation
+                if subclass_template_params:
+                    subclass_template_args = ", ".join(base_template_params[:len(subclass_template_params)])
+                    cls_instantiation = f"{cls}<{subclass_template_args}>"
+                else:
+                    cls_instantiation = cls
+                
+                for ctor in subclass_constructors[base_class].get(cls, []):
+                    param_count = len(ctor)
+                    text += f'            // Constructor with {param_count} parameter(s)\n'
+                    
+                    # Build parameter documentation
+                    param_docs = []
+                    for ptype, pname, pdefault in ctor:
+                        if pdefault:
+                            param_docs.append(f"{ptype} {pname} = {pdefault}")
+                        else:
+                            param_docs.append(f"{ptype} {pname}")
+                    text += f'            // Parameters: {", ".join(param_docs)}\n'
+                    
+                    text += f'            if (parameter.size() == {param_count}) {{\n'
+                    text += f'                try {{\n'
+                    text += f'                    return new {cls_instantiation}('
+                    param_list = []
+                    for i, (ptype, pname, pdefault) in enumerate(ctor):
+                        param_list.append(f'*reinterpret_cast<{ptype}*>(parameter[{i}])')
+                    text += ', '.join(param_list)
+                    text += f');\n'
+                    text += f'                }} catch (...) {{\n'
+                    text += f'                    // Handle constructor exceptions if necessary\n'
+                    text += f'                }}\n'
+                    text += f'            }}\n'
+                text += f'            return nullptr;\n'
+                if count2 == found_classes[base_class].__len__():
+                    text += f'        }}\n'
+                
+            text += f"\n\n"
+            
+            # otherwise, return nullptr
+            text += f"    return nullptr;\n"
+            
+            text += f"}}\n\n"
+            
+            
+            
             text += f"{template_str} create_instance_{base_class.lower()}(const std::string &class_name, std::unordered_map<std::string,void*> parameter) {{\n"
             text += f"    // Resolve name or alias to actual class name\n"
             text += f"    std::string resolved_class_name = resolve_{category}_class_name(class_name);\n"
@@ -502,79 +576,12 @@ def generate():
                 text += f'            return nullptr;\n'
                 if count2 == found_classes[base_class].__len__():
                     text += f'        }}\n'
+            text += f"    return nullptr;\n"
             text += f"    }}\n\n"
             
             
             
-            text += f"{template_str} create_instance_{base_class.lower()}(const std::string &class_name, std::vector<void*> parameter) {{\n"
             
-            text += f"\n"
-            
-            
-            
-            count1 = 0
-            count2 = 0
-            for entry in found_classes[base_class]:
-                # Handle both old format (cls, h) and new format (cls, h, template_params)
-                if len(entry) == 3:
-                    cls, h, subclass_template_params = entry
-                else:
-                    cls, h = entry
-                    subclass_template_params = []
-                    
-                count2 += 1
-                if cls in base_classes:
-                    continue
-                if cls not in subclass_constructors[base_class]:
-                    continue
-                count1 += 1
-                if count1 == 1:
-                    text += f'        if (class_name == "{cls}") {{\n'
-                else:
-                    text += f'        }} else if (class_name == "{cls}") {{\n'
-                
-                # Use template parameters for the subclass instantiation
-                if subclass_template_params:
-                    subclass_template_args = ", ".join(base_template_params[:len(subclass_template_params)])
-                    cls_instantiation = f"{cls}<{subclass_template_args}>"
-                else:
-                    cls_instantiation = cls
-                
-                for ctor in subclass_constructors[base_class].get(cls, []):
-                    param_count = len(ctor)
-                    text += f'            // Constructor with {param_count} parameter(s)\n'
-                    
-                    # Build parameter documentation
-                    param_docs = []
-                    for ptype, pname, pdefault in ctor:
-                        if pdefault:
-                            param_docs.append(f"{ptype} {pname} = {pdefault}")
-                        else:
-                            param_docs.append(f"{ptype} {pname}")
-                    text += f'            // Parameters: {", ".join(param_docs)}\n'
-                    
-                    text += f'            if (parameter.size() == {param_count}) {{\n'
-                    text += f'                try {{\n'
-                    text += f'                    return new {cls_instantiation}('
-                    param_list = []
-                    for i, (ptype, pname, pdefault) in enumerate(ctor):
-                        param_list.append(f'*reinterpret_cast<{ptype}*>(parameter[{i}])')
-                    text += ', '.join(param_list)
-                    text += f');\n'
-                    text += f'                }} catch (...) {{\n'
-                    text += f'                    // Handle constructor exceptions if necessary\n'
-                    text += f'                }}\n'
-                    text += f'            }}\n'
-                text += f'            return nullptr;\n'
-                if count2 == found_classes[base_class].__len__():
-                    text += f'        }}\n'
-                
-            text += f"\n\n"
-            
-            # otherwise, return nullptr
-            text += f"    return nullptr;\n"
-            
-            text += f"}}\n\n"
             f.write(text)
         
 
