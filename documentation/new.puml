@@ -29,8 +29,16 @@ class "MLCouplingProvider<In,Out>" <<abstract>> {
 }
 
 class "MLCouplingApplication<In,Out>" <<abstract>> {
-    + MLCouplingApplication(std::unique_ptr<MLCouplingDataProcessor<In,Out>> data_processor)
-    # data_processor: std::unique_ptr<MLCouplingDataProcessor<In,Out>>
+    + input_data: MLCouplingData<In>
+    + input_data_after_preprocessing: MLCouplingData<In>
+    + output_data_before_postprocessing: MLCouplingData<Out>
+    + output_data: MLCouplingData<Out>
+    # normalization: std::unique_ptr<MLCouplingNormalization<In,Out>>
+    + MLCouplingApplication(std::vector<In*>, std::vector<std::vector<int>>,
+                            std::vector<Out*>, std::vector<std::vector<int>>,
+                            MLCouplingNormalization<In,Out>*)
+    + MLCouplingApplication(MLCouplingData<In>, MLCouplingData<Out>,
+                            MLCouplingNormalization<In,Out>*)
     + step(bool, bool)
     # preprocess(MLCouplingData<In>): MLCouplingData<In>
     # coupling_step(MLCouplingData<In>)
@@ -58,28 +66,13 @@ class "MLCouplingMinMaxNormalization<In,Out>" {
 }
 
 class "MLCouplingApplicationTurbulenceClosure<In,Out>" {
-    + preprocess(MLCouplingData<In>): MLCouplingData<In>
-    + postprocess(MLCouplingData<Out>): MLCouplingData<Out>
-    + coupling_step(MLCouplingData<In>)
-    + ml_step(MLCouplingData<In>): MLCouplingData<Out>
+    # preprocess(MLCouplingData<In>): MLCouplingData<In>
+    # coupling_step(MLCouplingData<In>)
+    # ml_step(MLCouplingData<In>): MLCouplingData<Out>
+    # postprocess(MLCouplingData<Out>): MLCouplingData<Out>
     - uniform_filtering()
     - downsampling()
     - compute_tau_ij()
-}
-
-class "MLCouplingDataProcessor<In,Out>" {
-    + input_data: MLCouplingData<In>
-    + input_data_after_preprocessing: MLCouplingData<In>
-    + output_data_before_postprocessing: MLCouplingData<Out>
-    + output_data: MLCouplingData<Out>
-    + MLCouplingDataProcessor(std::vector<In*>, std::vector<std::vector<int>>,
-                              std::vector<Out*>, std::vector<std::vector<int>>,
-                              MLCouplingNormalization<In,Out>*)
-    + MLCouplingDataProcessor(MLCouplingData<In>, MLCouplingData<Out>,
-                              MLCouplingNormalization<In,Out>*)
-    # normalize_input(In&)
-    # denormalize_output(Out&)
-    - normalization: std::unique_ptr<MLCouplingNormalization<In,Out>>
 }
 
 class "MLCouplingData<T>" {
@@ -132,9 +125,8 @@ class "MLCouplingProviderSmartsim<In,Out>" {
 "MLCoupling<In,Out>" "1" ||--|| "1" "MLCouplingProvider<In,Out>" : owns
 "MLCoupling<In,Out>" "1" ||--|| "1" "MLCouplingApplication<In,Out>" : owns
 "MLCoupling<In,Out>" "1" ||--o| "0..1" "MLCouplingBehavior" : owns
-"MLCouplingApplication<In,Out>" "1" ||--|| "1" "MLCouplingDataProcessor<In,Out>" : owns
-"MLCouplingDataProcessor<In,Out>" "1" ||--o| "0..1" "MLCouplingNormalization<In,Out>" : owns
-"MLCouplingDataProcessor<In,Out>" "1" o--|| "4" "MLCouplingData<T>" : uses
+"MLCouplingApplication<In,Out>" "1" ||--o| "0..1" "MLCouplingNormalization<In,Out>" : owns
+"MLCouplingApplication<In,Out>" "1" o--|| "4" "MLCouplingData<T>" : uses
 "MLCouplingNormalization<In,Out>" <|-- "MLCouplingMinMaxNormalization<In,Out>"
 
 "MLCouplingApplication<In,Out>" <|-- "MLCouplingApplicationTurbulenceClosure<In,Out>"

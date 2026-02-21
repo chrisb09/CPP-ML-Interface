@@ -3,3 +3,4 @@
 !*/.gitignore
 /test
 /build
+/build_release

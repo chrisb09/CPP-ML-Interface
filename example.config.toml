@@ -3,7 +3,7 @@ log_level = "info"
 
 [provider]
 # Smartsim default parameters: std::string host = "localhost", int port = 6379, int nodes = 1, int tasks_per_node = 1, int cpus_per_task = 1, int gpus_per_task = 0
-name = "Smartsim"
+class = "Smartsim"
 port = 6379
 host = "localhost"
 nodes = 2
@@ -12,17 +12,18 @@ cpus_per_task = 2
 gpus_per_task = 0
 
 [normalization]
-name="minmax"
+class="minmax"
 input_min=-1.0
 input_max=1.0
 output_min=0.0
 output_max=1.0
 
-[dataprocessor]
-name="MLCouplingDataProcessorSimple"
-
 [behavior]
-name="MLCouplingBehaviorDefault"
+class="periodic"
+inference_interval = 50
+coupled_steps_before_inference = 6
+coupled_steps_stride = 1
+step_increment_after_inference = 24
 
 [application]
-name="MLCouplingApplicationTurbulenceClosure"
+class="MLCouplingApplicationTurbulenceClosure"
