@@ -45,7 +45,6 @@ def init_libclang():
                     continue
         raise
 
-
 def get_parse_args():
     """Get clang parse arguments from environment or use defaults."""
     env_args = os.environ.get('CLANG_ARGS')
@@ -267,6 +266,46 @@ def normalize_include_path(path):
     return path
 
 
+def extract_base_class_from_type(param_type, base_classes):
+    """
+    Extract base class name from a parameter type if it matches any known base class.
+    Handles pointers, references, templates, and qualified names.
+    
+    Example: "MLCouplingNormalization<In, Out>*" -> "MLCouplingNormalization"
+    """
+    # Remove pointer/reference/const/volatile qualifiers
+    clean_type = re.sub(r'\s*(const|volatile)\s+', '', param_type)
+    clean_type = re.sub(r'[*&]+\s*$', '', clean_type).strip()
+    
+    # Extract base type name (before template arguments)
+    match = re.match(r'([^<]+)', clean_type)
+    if match:
+        base_type = match.group(1).strip()
+        # Remove namespace qualifiers and get simple name
+        simple_name = base_type.split('::')[-1]
+        
+        # Check if it matches any base class
+        for base_class in base_classes:
+            if simple_name == base_class or base_type == base_class:
+                return base_class
+    
+    return None
+
+
+def _normalize_type_for_display(typ: str) -> str:
+    """Normalize type spacing for human-readable output.
+    Removes spaces before/after pointer stars so `In *` -> `In*`,
+    `MLCouplingData<In> *` -> `MLCouplingData<In>*`, etc.
+    """
+    if not typ:
+        return typ
+    # Remove spaces around '*'
+    typ = re.sub(r"\s*\*\s*", "*", typ)
+    # Collapse multiple spaces
+    typ = re.sub(r"\s+", " ", typ).strip()
+    return typ
+
+
 # =============================================================================
 # Code Generation
 # =============================================================================
@@ -274,7 +313,7 @@ def normalize_include_path(path):
 def write_includes(f, base_classes, base_classes_found, found_classes):
     """Generate #include statements."""
     f.write("#pragma once\n\n")
-    f.write("#include <string>\n#include <vector>\n#include <unordered_map>\n\n")
+    f.write("#include <string>\n#include <vector>\n#include <unordered_map>\n#include <iostream>\n#include <typeinfo>\n\n")
     
     # Base class includes
     for base_class in base_classes:
@@ -292,7 +331,22 @@ def write_includes(f, base_classes, base_classes_found, found_classes):
     
     f.write("\n\n\n")
 
+def write_combined_lookup_function(f, categories):
+    
+    f.write("inline std::string resolve_class_name(const std::string& name_or_alias) {\n")
+    f.write("    // This function checks all categories for a matching name or alias and returns the resolved class name.\n")
+    f.write(f"    std::string resolved;\n")
+    
+    for category in categories:
+        f.write(f"    resolved = resolve_{category}_class_name(name_or_alias);\n")
+        f.write(f"    if (resolved != name_or_alias) {{\n")
+        f.write(f"        return resolved;\n")
+        f.write(f"    }}\n")
 
+    f.write("    return name_or_alias; // Return as-is if no mapping found in any category\n")
+    f.write("}\n\n")
+    
+    
 def write_lookup_functions(f, base_classes, base_class_categories, found_classes, class_metadata):
     """Generate name/alias lookup functions."""
     for base_class in base_classes:
@@ -342,6 +396,164 @@ def write_category_lookup(f, base_classes, base_class_categories):
     f.write("}\n\n")
 
 
+def write_constructor_dependencies(f, base_classes, found_classes, subclass_constructors):
+    """
+    Generate function that returns constructor parameter dependencies.
+    For each subclass, returns list of (base_class_type, param_name) pairs.
+    """
+    f.write("// Get constructor parameter dependencies for a given class\n")
+    f.write("// Returns pairs of (base_class_type, parameter_name) for parameters that are base classes\n")
+    f.write("inline std::vector<std::pair<std::string, std::string>> get_constructor_dependencies(const std::string& class_name) {\n")
+    f.write("    std::vector<std::pair<std::string, std::string>> dependencies;\n\n")
+    
+    first_class = True
+    for base_class in base_classes:
+        for entry in found_classes[base_class]:
+            cls = entry[0]
+            if cls in base_classes:
+                continue
+            
+            if cls not in subclass_constructors[base_class]:
+                continue
+            
+            # Generate if-else chain
+            if first_class:
+                f.write(f'    if (class_name == "{cls}") {{\n')
+                first_class = False
+            else:
+                f.write(f'    }} else if (class_name == "{cls}") {{\n')
+            
+            # Process all constructors (typically just one, but handle multiple)
+            constructors = subclass_constructors[base_class][cls]
+            if constructors and constructors != [[]]:
+                # Use the first constructor with parameters (or first constructor if all are empty)
+                selected_ctor = None
+                for ctor in constructors:
+                    if ctor:  # Non-empty constructor
+                        selected_ctor = ctor
+                        break
+                if not selected_ctor and constructors:
+                    selected_ctor = constructors[0]
+                
+                if selected_ctor:
+                    for param_type, param_name, _ in selected_ctor:
+                        # Check if this parameter type is one of our base classes
+                        matching_base = extract_base_class_from_type(param_type, base_classes)
+                        if matching_base:
+                            f.write(f'        dependencies.push_back({{"{matching_base}", "{param_name}"}});\n')
+    
+    if not first_class:
+        f.write("    }\n\n")
+    
+    f.write("    return dependencies;\n")
+    f.write("}\n\n")
+
+
+def write_constructor_signatures(f, base_classes, found_classes, subclass_constructors):
+    """
+    Generate function that returns human-friendly constructor signatures for a class.
+    This is used to print help when provided arguments do not match any constructor.
+    """
+    f.write("// Get constructor signatures for a given class (for help messages)\n")
+    f.write("inline std::vector<std::string> get_constructor_signatures(const std::string& class_name) {\n")
+    f.write("    std::vector<std::string> signatures;\n\n")
+
+    for base_class in base_classes:
+        for entry in found_classes[base_class]:
+            cls = entry[0]
+            if cls in base_classes:
+                continue
+
+            if cls not in subclass_constructors[base_class]:
+                continue
+
+            f.write(f'    if (class_name == "{cls}") {{\n')
+            ctors = subclass_constructors[base_class][cls]
+            if ctors and ctors != [[]]:
+                for ctor in ctors:
+                    parts = []
+                    for ptype, pname, pdefault in ctor:
+                        display_type = _normalize_type_for_display(ptype)
+                        if pdefault:
+                            parts.append(f'{display_type} {pname} = {pdefault}')
+                        else:
+                            parts.append(f'{display_type} {pname}')
+                    sig = f"{cls}({', '.join(parts)})"
+                    # Escape backslashes and double-quotes conservatively
+                    safe_sig = sig.replace('\\', '\\\\').replace('"', '\\"')
+                    f.write(f'        signatures.push_back("{safe_sig}");\n')
+            else:
+                f.write(f'        signatures.push_back("{cls}()\");\n')
+
+            f.write("        return signatures;\n")
+            f.write("    }\n\n")
+
+    f.write("    return signatures;\n")
+    f.write("}\n\n")
+
+
+def write_print_constructor_help(f):
+    """Generate a small helper that prints constructor signatures to stdout."""
+    f.write("// Print constructor help to console/log\n")
+    f.write("inline void print_constructor_help(const std::string& class_name) {\n")
+    f.write("    auto sigs = get_constructor_signatures(class_name);\n")
+    f.write("    if (sigs.empty()) { std::cout << \"No constructors found for \" << class_name << std::endl; return; }\n")
+    f.write("    std::cout << \"Available constructors for \" << class_name << \":\" << std::endl;\n")
+    f.write("    for (const auto &s : sigs) std::cout << \"  \" << s << std::endl;\n")
+    f.write("}\n\n")
+
+
+def write_class_hierarchy_functions(f, base_classes, found_classes):
+    """
+    Generate functions to query class hierarchy:
+    - get_subclasses(base_class_name): returns all subclasses of a base class
+    - get_superclasses(class_name): returns all superclasses up the hierarchy
+    """
+    # Map: subclass -> base class (for quick lookup)
+    subclass_to_base = {}
+    for base_class in base_classes:
+        for entry in found_classes[base_class]:
+            cls = entry[0]
+            if cls not in base_classes:
+                subclass_to_base[cls] = base_class
+    
+    # Write get_subclasses function
+    f.write("// Get all subclasses of a given base class name\n")
+    f.write("inline std::vector<std::string> get_subclasses(const std::string& base_class_name) {\n")
+    f.write("    std::vector<std::string> subclasses;\n\n")
+    
+    for base_class in base_classes:
+        f.write(f'    if (base_class_name == "{base_class}") {{\n')
+        for entry in found_classes[base_class]:
+            cls = entry[0]
+            if cls not in base_classes:
+                f.write(f'        subclasses.push_back("{cls}");\n')
+        f.write("    }\n\n")
+    
+    f.write("    return subclasses;\n")
+    f.write("}\n\n")
+    
+    # Write get_superclasses function
+    f.write("// Get all superclasses of a given class name (from subclass up to base class)\n")
+    f.write("inline std::vector<std::string> get_superclasses(const std::string& class_name) {\n")
+    f.write("    std::vector<std::string> superclasses;\n")
+    f.write("    static const std::unordered_map<std::string, std::string> hierarchy = {\n")
+    
+    for subclass, base_class in subclass_to_base.items():
+        f.write(f'        {{"{subclass}", "{base_class}"}},\n')
+    
+    f.write("    };\n\n")
+    f.write("    auto it = hierarchy.find(class_name);\n")
+    f.write("    if (it != hierarchy.end()) {\n")
+    f.write("        std::string current = it->second;\n")
+    f.write("        superclasses.push_back(current);\n")
+    f.write("        // Note: Currently only supports single inheritance (one level up).\n")
+    f.write("        // If multi-level hierarchies are needed, extend this recursively.\n")
+    f.write("    }\n")
+    f.write("    return superclasses;\n")
+    f.write("}\n\n")
+
+
 def _get_template_strings(base_class, template_params):
     """Get template declaration and argument strings."""
     if not template_params:
@@ -360,6 +572,86 @@ def _get_class_instantiation(cls, subclass_template_params, base_template_params
     return cls
 
 
+def write_type_identification_functions(f, base_classes, template_parameters, found_classes):
+    """
+    Generate typeid-based runtime type identification functions.
+    For each base class, emits:
+      get_type_name(const Base* obj)   -> std::string
+      get_type_name(const Base& obj)   -> std::string  (delegates to pointer overload)
+    """
+    f.write("// ---------------------------------------------------------------------------\n")
+    f.write("// Runtime type identification via typeid comparison\n")
+    f.write("// Returns the human-readable class name for a given (possibly polymorphic) object.\n")
+    f.write("// ---------------------------------------------------------------------------\n\n")
+
+    for base_class in base_classes:
+        base_template_params = template_parameters.get(base_class, [])
+
+        if base_template_params:
+            template_decl = ", ".join(f"typename {p}" for p in base_template_params)
+            template_args  = ", ".join(base_template_params)
+            ptr_prefix = f"template<{template_decl}>\n"
+            base_ptr  = f"const {base_class}<{template_args}>*"
+            base_ref  = f"const {base_class}<{template_args}>&"
+        else:
+            template_decl = ""
+            template_args  = ""
+            ptr_prefix = ""
+            base_ptr  = f"const {base_class}*"
+            base_ref  = f"const {base_class}&"
+
+        # --- pointer overload ---
+        f.write(f"{ptr_prefix}inline std::string get_type_name({base_ptr} obj) {{\n")
+        f.write("    if (!obj) return \"nullptr\";\n")
+
+        for entry in found_classes[base_class]:
+            cls, _, subclass_tparams = entry
+            if cls in base_classes:
+                continue
+            if subclass_tparams and base_template_params:
+                args = ", ".join(base_template_params[:len(subclass_tparams)])
+                cls_type = f"{cls}<{args}>"
+            else:
+                cls_type = cls
+            f.write(f'    if (typeid(*obj) == typeid({cls_type})) return "{cls}";\n')
+
+        # Fallback: the base class itself (concrete or unknown derived)
+        if base_template_params:
+            base_type = f"{base_class}<{template_args}>"
+        else:
+            base_type = base_class
+        f.write(f'    if (typeid(*obj) == typeid({base_type})) return "{base_class}";\n')
+        f.write('    return "unknown";\n')
+        f.write("}\n\n")
+
+        # --- reference overload (delegates) ---
+        f.write(f"{ptr_prefix}inline std::string get_type_name({base_ref} obj) {{\n")
+        f.write("    return get_type_name(&obj);\n")
+        f.write("}\n\n")
+
+
+def write_config_param_cast_helper(f):
+    """Generate a template helper that casts a typed void* to a target type at runtime."""
+    f.write("// Helper to extract and cast a config parameter based on its runtime type tag.\n")
+    f.write("// Type tags: 0 = no static cast, 1 = int64_t, 2 = double, 3 = std::string (char*), 4 = bool\n")
+    f.write("template<typename T>\n")
+    f.write("T config_param_cast(const std::pair<int, void*>& param) {\n")
+    f.write("    switch (param.first) {\n")
+    f.write("        case 0: return *reinterpret_cast<T*>(param.second); // No static cast, just reinterpret\n")
+    f.write("        case 1: return static_cast<T>(*reinterpret_cast<int64_t*>(param.second));\n")
+    f.write("        case 2: return static_cast<T>(*reinterpret_cast<double*>(param.second));\n")
+    f.write("        case 4: return static_cast<T>(*reinterpret_cast<bool*>(param.second));\n")
+    f.write("        default: throw std::runtime_error(\"Unsupported type tag for numeric cast: \" + std::to_string(param.first));\n")
+    f.write("    }\n")
+    f.write("}\n\n")
+    f.write("// Specialization for std::string\n")
+    f.write("template<>\n")
+    f.write("inline std::string config_param_cast<std::string>(const std::pair<int, void*>& param) {\n")
+    f.write("    if (param.first == 3) return std::string(reinterpret_cast<char*>(param.second));\n")
+    f.write("    throw std::runtime_error(\"Expected string (type tag 3), got: \" + std::to_string(param.first));\n")
+    f.write("}\n\n")
+
+
 def write_factory_functions(f, base_classes, template_parameters, base_class_categories,
                             found_classes, subclass_constructors):
     """Generate factory functions for creating instances."""
@@ -372,57 +664,35 @@ def write_factory_functions(f, base_classes, template_parameters, base_class_cat
         entries = [(cls, h, tparams) for cls, h, tparams in found_classes[base_class]
                    if cls not in base_classes and cls in subclass_constructors[base_class]]
         
-        # Vector-based factory
-        _write_vector_factory(f, base_class, template_str, base_template_params,
-                              entries, subclass_constructors)
-        
         # Map-based factory with name resolution
         _write_map_factory(f, base_class, template_str, template_args, category,
                            base_template_params, entries, subclass_constructors)
 
 
-def _write_vector_factory(f, base_class, template_str, base_template_params,
-                          entries, subclass_constructors):
-    """Generate vector<void*> parameter factory."""
-    f.write(f"{template_str} create_instance_{base_class.lower()}(const std::string &class_name, std::vector<void*> parameter) {{\n\n")
-    
-    for i, (cls, _, subclass_template_params) in enumerate(entries):
-        if i == 0:
-            f.write(f'    if (class_name == "{cls}") {{\n')
-        else:
-            f.write(f'    }} else if (class_name == "{cls}") {{\n')
-        
-        cls_inst = _get_class_instantiation(cls, subclass_template_params, base_template_params)
-        
-        for ctor in subclass_constructors[base_class].get(cls, []):
-            param_count = len(ctor)
-            param_docs = [f"{t} {n} = {d}" if d else f"{t} {n}" for t, n, d in ctor]
-            
-            f.write(f'        // Constructor with {param_count} parameter(s)\n')
-            f.write(f'        // Parameters: {", ".join(param_docs)}\n')
-            f.write(f'        if (parameter.size() == {param_count}) {{\n')
-            f.write(f'            try {{\n')
-            
-            params = ', '.join(f'*reinterpret_cast<{t}*>(parameter[{i}])' for i, (t, _, _) in enumerate(ctor))
-            f.write(f'                return new {cls_inst}({params});\n')
-            
-            f.write(f'            }} catch (...) {{\n')
-            f.write(f'                // Handle constructor exceptions if necessary\n')
-            f.write(f'            }}\n')
-            f.write(f'        }}\n')
-        
-        f.write(f'        return nullptr;\n')
-    
-    if entries:
-        f.write("    }\n")
-    
-    f.write("\n    return nullptr;\n}\n\n")
+def _is_mlcoupling_data_type(param_type):
+    """Check if parameter type is MLCouplingData<...>."""
+    clean_type = re.sub(r'\s*(const|volatile)\s+', '', param_type)
+    clean_type = re.sub(r'[*&]+\s*$', '', clean_type).strip()
+    return clean_type.startswith('MLCouplingData<')
 
+
+def _is_pointer_to_known_class(param_type):
+    """Check if parameter type is a pointer to a known class (not a primitive)."""
+    clean_type = param_type.strip()
+    if not clean_type.endswith('*'):
+        return False
+    # Remove the pointer and check if it's a class-like type (starts with uppercase or MLCoupling)
+    base_type = re.sub(r'[*&]+\s*$', '', clean_type).strip()
+    base_type = re.sub(r'<.*>$', '', base_type).strip()
+    # Primitive types and their variants are not "known classes"
+    primitives = {'int', 'float', 'double', 'bool', 'char', 'int64_t', 'int32_t',
+                  'uint64_t', 'uint32_t', 'size_t', 'std::string'}
+    return base_type not in primitives and not base_type.startswith('std::')
 
 def _write_map_factory(f, base_class, template_str, template_args, category,
                        base_template_params, entries, subclass_constructors):
-    """Generate unordered_map<string, void*> parameter factory with name resolution."""
-    f.write(f"{template_str} create_instance_{base_class.lower()}(const std::string &class_name, std::unordered_map<std::string,void*> parameter) {{\n")
+    """Generate unordered_map<string, pair<int,void*>> parameter factory with name resolution."""
+    f.write(f"{template_str} create_instance_{base_class.lower()}(const std::string &class_name, const std::unordered_map<std::string, std::pair<int, void*>>& parameter) {{\n")
     f.write(f"    // Resolve name or alias to actual class name\n")
     f.write(f"    std::string resolved_class_name = resolve_{category}_class_name(class_name);\n\n")
     
@@ -432,12 +702,14 @@ def _write_map_factory(f, base_class, template_str, template_args, category,
         else:
             f.write(f'    }} else if (resolved_class_name == "{cls}") {{\n')
         
+        cls_inst = _get_class_instantiation(cls, subclass_template_params, base_template_params)
+        
         for ctor in subclass_constructors[base_class].get(cls, []):
             param_count = len(ctor)
             params_with_defaults = sum(1 for _, _, d in ctor if d is not None)
             params_without_defaults = param_count - params_with_defaults
             
-            param_docs = [f"{t} {n} = {d}" if d else f"{t} {n}" for t, n, d in ctor]
+            param_docs = [f"{_normalize_type_for_display(t)} {n} = {d}" if d else f"{_normalize_type_for_display(t)} {n}" for t, n, d in ctor]
             
             f.write(f'        // Constructor with {param_count} parameter(s)\n')
             f.write(f'        // Parameters: {", ".join(param_docs)}\n')
@@ -447,23 +719,39 @@ def _write_map_factory(f, base_class, template_str, template_args, category,
             else:
                 f.write(f'        if (parameter.size() == {param_count}) {{\n')
             
-            f.write(f'            std::vector<void*> params_vector;\n')
             f.write(f'            try {{\n')
-            f.write(f'                // Extract parameters from the map\n')
             
+            # Generate parameter extraction code using config_param_cast
+            param_args = []
+            debug_outputs = []
             for ptype, pname, pdefault in ctor:
-                if pdefault:
-                    f.write(f'                if (parameter.find("{pname}") != parameter.end()) {{\n')
-                    f.write(f'                    params_vector.push_back(parameter.at("{pname}"));\n')
-                    f.write(f'                }} else {{\n')
-                    f.write(f'                    static {ptype} default_{pname} = {pdefault};\n')
-                    f.write(f'                    params_vector.push_back(&default_{pname});\n')
-                    f.write(f'                }}\n')
+                if _is_mlcoupling_data_type(ptype):
+                    # For MLCouplingData, cast directly from void* (composite object, no type tag dispatch)
+                    param_args.append(f'*reinterpret_cast<{ptype}*>(parameter.at("{pname}").second)')
+                    debug_outputs.append(f'"{pname}=" << (*reinterpret_cast<{ptype}*>(parameter.at("{pname}").second))')
+                elif _is_pointer_to_known_class(ptype):
+                    # For pointers to known classes (e.g. MLCouplingNormalization<In,Out>*), cast directly
+                    param_args.append(f'*reinterpret_cast<{ptype}*>(parameter.at("{pname}").second)')
+                    debug_outputs.append(f'"{pname}=" << (*reinterpret_cast<{ptype}*>(parameter.at("{pname}").second))')
+                elif pdefault:
+                    # Parameter with default: check if present, use config_param_cast or default
+                    param_args.append(f'parameter.find("{pname}") != parameter.end() ? config_param_cast<{ptype}>(parameter.at("{pname}")) : ({ptype}){pdefault}')
+                    debug_outputs.append(f'"{pname}=" << (parameter.find("{pname}") != parameter.end() ? config_param_cast<{ptype}>(parameter.at("{pname}")) : ({ptype}){pdefault})')
                 else:
-                    f.write(f'                params_vector.push_back(parameter.at("{pname}"));\n')
+                    # Required parameter: use config_param_cast
+                    param_args.append(f'config_param_cast<{ptype}>(parameter.at("{pname}"))')
+                    debug_outputs.append(f'"{pname}=" << config_param_cast<{ptype}>(parameter.at("{pname}"))')
             
-            template_call = f"<{template_args}>" if template_args else ""
-            f.write(f'                return create_instance_{base_class.lower()}{template_call}(class_name, params_vector);\n')
+            params_str = ', '.join(param_args)
+            
+            # Build debug output statement with proper << chaining
+            debug_line = 'std::cout << "Creating instance of ' + cls + ' with parameters: "'
+            for idx, debug_out in enumerate(debug_outputs):
+                debug_line += " << " + ("\", \"" if idx > 0 else "") + debug_out
+            debug_line += ' << std::endl;'
+            
+            f.write(f'                {debug_line}\n')
+            f.write(f'                return new {cls_inst}({params_str});\n')
             f.write(f'            }} catch (...) {{\n')
             f.write(f'                // Handle exceptions if necessary\n')
             f.write(f'            }}\n')
@@ -567,7 +855,14 @@ def generate():
     with open(output_path, "w") as f:
         write_includes(f, base_classes, base_classes_found, found_classes)
         write_lookup_functions(f, base_classes, base_class_categories, found_classes, class_metadata)
+        write_combined_lookup_function(f, set(base_class_categories.get(bc, bc.lower()) for bc in base_classes))
         write_category_lookup(f, base_classes, base_class_categories)
+        write_constructor_dependencies(f, base_classes, found_classes, subclass_constructors)
+        write_constructor_signatures(f, base_classes, found_classes, subclass_constructors)
+        write_print_constructor_help(f)
+        write_class_hierarchy_functions(f, base_classes, found_classes)
+        write_type_identification_functions(f, base_classes, template_parameters, found_classes)
+        write_config_param_cast_helper(f)
         write_factory_functions(f, base_classes, template_parameters, base_class_categories,
                                 found_classes, subclass_constructors)
 
