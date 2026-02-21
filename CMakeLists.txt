@@ -27,7 +27,7 @@ set(GENERATED_SRC "${CMAKE_CURRENT_SOURCE_DIR}/include/generated_registry.hpp")
 add_custom_command(
     OUTPUT "${GENERATED_SRC}"
     COMMAND python3 "${CMAKE_CURRENT_SOURCE_DIR}/scripts/generate_registry.py" 
-            "${GENERATED_SRC}" "MLCouplingProvider,MLCouplingNormalization,MLCouplingDataProcessor,MLCouplingBehavior,MLCouplingApplication" ${ALL_HEADERS}
+            "${GENERATED_SRC}" "MLCouplingProvider,MLCouplingNormalization,MLCouplingBehavior,MLCouplingApplication" ${ALL_HEADERS}
     DEPENDS ${ALL_HEADERS} "${CMAKE_CURRENT_SOURCE_DIR}/scripts/generate_registry.py"
     COMMENT "Generating registry from headers..."
 )

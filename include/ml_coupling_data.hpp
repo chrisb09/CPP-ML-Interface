@@ -1,6 +1,7 @@
 #pragma once
 
 #include <vector>
+#include <iostream>
 
 
 template <typename T>
@@ -27,3 +28,24 @@ struct MLCouplingData {
 
         MLCouplingData() = default;
 };
+
+// Stream operator overload for MLCouplingData
+template <typename T>
+std::ostream& operator<<(std::ostream& os, const MLCouplingData<T>& coupling_data) {
+    os << "MLCouplingData{data_segments=" << coupling_data.data.size();
+    if (!coupling_data.data_dimensions.empty()) {
+        os << ", dimensions=[";
+        for (size_t i = 0; i < coupling_data.data_dimensions.size(); ++i) {
+            if (i > 0) os << ", ";
+            os << "[";
+            for (size_t j = 0; j < coupling_data.data_dimensions[i].size(); ++j) {
+                if (j > 0) os << ", ";
+                os << coupling_data.data_dimensions[i][j];
+            }
+            os << "]";
+        }
+        os << "]";
+    }
+    os << "}";
+    return os;
+}

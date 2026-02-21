@@ -1,6 +1,7 @@
 #pragma once
 
-#include "../data_processor/ml_coupling_data.hpp"
+#include "../ml_coupling_data.hpp"
+#include <ostream>
 
 // @category: normalization
 template <typename In, typename Out>
@@ -12,4 +13,10 @@ class MLCouplingNormalization {
 
         // Denormalize the output data
         virtual void denormalize_output(MLCouplingData<Out> output_data) = 0;
+
+        // Virtual destructor for polymorphic classes
+        virtual ~MLCouplingNormalization() = default;
+
+        // Print representation
+        virtual void print(std::ostream& os) const = 0;
 };

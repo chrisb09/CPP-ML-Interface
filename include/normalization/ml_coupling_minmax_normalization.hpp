@@ -48,11 +48,35 @@ class MLCouplingMinMaxNormalization : public MLCouplingNormalization<In, Out> {
 
         MLCouplingMinMaxNormalization(MLCouplingData<In> input_data,
                                      MLCouplingData<Out> output_data) {
-            // use the previous constructor
-            *this = MLCouplingMinMaxNormalization(input_data.data.data(),
-                                                  input_data.data.size(),
-                                                  output_data.data.data(),
-                                                  output_data.data.size());
+            // Compute min and max for input data
+            input_min = std::numeric_limits<In>::max();
+            input_max = std::numeric_limits<In>::lowest();
+            for (const auto& data_ptr : input_data.data) {
+                // data is std::vector<In*>, so data_ptr is In*
+                if (data_ptr != nullptr) {
+                    if (*data_ptr < input_min) {
+                        input_min = *data_ptr;
+                    }
+                    if (*data_ptr > input_max) {
+                        input_max = *data_ptr;
+                    }
+                }
+            }
+
+            // Compute min and max for output data
+            output_min = std::numeric_limits<Out>::max();
+            output_max = std::numeric_limits<Out>::lowest();
+            for (const auto& data_ptr : output_data.data) {
+                // data is std::vector<Out*>, so data_ptr is Out*
+                if (data_ptr != nullptr) {
+                    if (*data_ptr < output_min) {
+                        output_min = *data_ptr;
+                    }
+                    if (*data_ptr > output_max) {
+                        output_max = *data_ptr;
+                    }
+                }
+            }
         }
 
         void normalize_input(In* input_data, int input_data_size) {
@@ -63,7 +87,12 @@ class MLCouplingMinMaxNormalization : public MLCouplingNormalization<In, Out> {
         }
 
         void normalize_input(MLCouplingData<In> input_data) override {
-            normalize_input(input_data.data.data(), input_data.data.size());
+            // input_data.data is std::vector<In*>, so we dereference each pointer
+            for (auto& data_ptr : input_data.data) {
+                if (data_ptr != nullptr) {
+                    *data_ptr = (*data_ptr - input_min) / (input_max - input_min);
+                }
+            }
         }
 
         void denormalize_output(Out* output_data, int output_data_size) {
@@ -74,7 +103,20 @@ class MLCouplingMinMaxNormalization : public MLCouplingNormalization<In, Out> {
         }
 
         void denormalize_output(MLCouplingData<Out> output_data) override {
-            denormalize_output(output_data.data.data(), output_data.data.size());
+            // output_data.data is std::vector<Out*>, so we dereference each pointer
+            for (auto& data_ptr : output_data.data) {
+                if (data_ptr != nullptr) {
+                    *data_ptr = *data_ptr * (output_max - output_min) + output_min;
+                }
+            }
+        }
+
+        void print(std::ostream& os) const override {
+            os << "MLCouplingMinMaxNormalization{input_min=" << input_min
+               << ", input_max=" << input_max
+               << ", output_min=" << output_min
+               << ", output_max=" << output_max
+               << "}";
         }
 
     private:
@@ -83,3 +125,9 @@ class MLCouplingMinMaxNormalization : public MLCouplingNormalization<In, Out> {
         Out output_min;
         Out output_max;
 };
+
+template <typename In, typename Out>
+std::ostream& operator<<(std::ostream& os, const MLCouplingNormalization<In, Out>& norm) {
+    norm.print(os);
+    return os;
+}
