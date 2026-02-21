@@ -15,6 +15,8 @@ class MLCoupling
 {
     // I'd see this class as essentially the API that the user
     // would interact with.
+    friend int main(int, char**);
+
     public:
         MLCoupling<In, Out>(
                   MLCouplingProvider<In, Out>* provider,
@@ -22,13 +24,21 @@ class MLCoupling
                   MLCouplingBehavior* behavior = nullptr)
         {
             this->provider.reset(provider);
-            this->provider->init();
             this->application.reset(application);
             if (behavior == nullptr) {
                 // Use default behavior if none provided
                 this->behavior.reset(new MLCouplingBehaviorDefault());
             } else {
                 this->behavior.reset(behavior);
+            }
+        }
+
+        ~MLCoupling() {
+            // Free all allocated parameter memory
+            for (void* ptr : parameters) {
+                if (ptr != nullptr) {
+                    delete ptr;
+                }
             }
         }
 
@@ -40,16 +50,14 @@ class MLCoupling
             }
         }
 
-        ~MLCoupling() {
-            if (provider) {
-                provider->finalize();
-            }
-            if (application) {
-                application->finalize();
-            }
-        }
+protected:
+    void set_parameters(std::vector<void*> params) {
+        parameters = std::move(params);
+    }
 
 private:
+    std::vector<void*> parameters; // Store parameters for provider, application, and behavior, so we can free them in the destructor
+
     std::unique_ptr<MLCouplingProvider<In, Out>> provider;
     std::unique_ptr<MLCouplingApplication<In, Out>> application;
     std::unique_ptr<MLCouplingBehavior> behavior;
