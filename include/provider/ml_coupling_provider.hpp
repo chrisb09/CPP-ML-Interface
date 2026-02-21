@@ -1,6 +1,6 @@
 #pragma once
 
-#include "../data_processor/ml_coupling_data.hpp"
+#include "../ml_coupling_data.hpp"
 
 // @category: provider
 template <typename In, typename Out>

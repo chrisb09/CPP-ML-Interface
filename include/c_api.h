@@ -9,7 +9,7 @@ extern "C" {
     //  1:  double  // real(c_double):       64-bit floating point
     //  2: int32_t  // integer(c_int32_t):   32-bit integer
     // Reines C! Keine "class", keine "templates".
-    void* create_provider(const char* name, int in_selection, int out_selection, void** params, int param_count);
+    void* create_provider(const char* name, int in_selection, int out_selection, char** param_names, void** params, int param_count);
     void destroy_provider(void* handle);
 
 #ifdef __cplusplus
