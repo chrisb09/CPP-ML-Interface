@@ -2,8 +2,10 @@
 
 // @category: behavior
 class MLCouplingBehavior {
-    public:
 
+    friend int main(int, char**);
+
+    public:
         virtual bool should_perform_inference() = 0;
 
         virtual int time_step_delta() = 0;
