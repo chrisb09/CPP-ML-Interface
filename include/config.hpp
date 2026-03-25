@@ -18,6 +18,7 @@
 #include <cstring>
 #include <algorithm>
 #include <functional>
+#include <sstream>
 #include <tuple>
 
 // Include toml++ for parsing TOML configurations
@@ -28,13 +29,13 @@
 #include "normalization/ml_coupling_normalization.hpp"
 #include "generated_registry.hpp"
 #include "ml_coupling.hpp"
+#include "logging.hpp"
 
 inline void print_failed_constructor(std::string class_name, std::unordered_map<std::string, std::pair<int, void*>> params, std::unordered_map<std::string, std::pair<int, void*>>& module_instances) {
     std::string resolved_class_name = resolve_class_name(class_name);
-    std::cerr << "Failed to create instance of class: " << class_name << std::endl;
-    std::cerr << "Resolved class name: " << resolved_class_name << std::endl;
-    std::cerr << "Provided parameters:" << std::endl;
-
+    logging::error("Failed to create instance of class: " + class_name);
+    logging::error("Resolved class name: " + resolved_class_name);
+    logging::error("Provided parameters:");
     // First, collect printable representations for each parameter so we can
     // compute the maximum left-column width and then align the type column.
     struct Entry { std::string left; std::string type_str; };
@@ -43,21 +44,30 @@ inline void print_failed_constructor(std::string class_name, std::unordered_map<
 
     for (const auto& [param_name, param_value] : params) {
         std::string value_str;
-        switch (param_value.first) {
-            case 1: // int64_t
-                value_str = std::to_string(*reinterpret_cast<int64_t*>(param_value.second));
-                break;
-            case 2: // double
-                value_str = std::to_string(*reinterpret_cast<double*>(param_value.second));
-                break;
-            case 3: // std::string
-                value_str = *reinterpret_cast<std::string*>(param_value.second);
-                break;
-            case 4: // bool
-                value_str = (*reinterpret_cast<bool*>(param_value.second) ? "true" : "false");
-                break;
-            default:
-                value_str = "Unknown type";
+        try {
+            switch (param_value.first) {
+                case 1: // int64_t
+                    value_str = std::to_string(*reinterpret_cast<int64_t*>(param_value.second));
+                    break;
+                case 2: // double
+                    value_str = std::to_string(*reinterpret_cast<double*>(param_value.second));
+                    break;
+                case 3: // std::string
+                    value_str = *reinterpret_cast<std::string*>(param_value.second);
+                    break;
+                case 4: // bool
+                    value_str = (*reinterpret_cast<bool*>(param_value.second) ? "true" : "false");
+                    break;
+                default:
+                    value_str = "Unknown type";
+            }
+        } catch (const std::exception& e) {
+            std::string val_type = (param_value.first == 1 ? "int64_t" : (param_value.first == 2 ? "double" : (param_value.first == 3 ? "std::string" : (param_value.first == 4 ? "bool" : "unknown"))));
+            logging::error("Error retrieving value for parameter " + param_name + " which is of type " + val_type + ". This might different than the constructor expected. Error: " + e.what());
+            return;
+        } catch (...) {
+            value_str = "Unknown error retrieving value";
+            return;
         }
 
         std::string type_str = (param_value.first == 1 ? "int64_t" : (param_value.first == 2 ? "double" : (param_value.first == 3 ? "std::string" : (param_value.first == 4 ? "bool" : "unknown"))));
@@ -73,18 +83,16 @@ inline void print_failed_constructor(std::string class_name, std::unordered_map<
 
     // print with aligned type column
     for (const auto &e : entries) {
-        std::cerr << e.left;
         size_t pad = 2; // spaces between value and type column
         if (max_left > e.left.size()) pad += (max_left - e.left.size());
-        std::cerr << std::string(pad, ' ');
-        std::cerr << "(config parsed type: " << e.type_str << ")" << std::endl;
+        logging::error(e.left + std::string(pad, ' ') + "(config parsed type: " + e.type_str + ")");
     }
-    std::cerr << "Available module instances that could be used as parameters:" << std::endl;
+    logging::error("Available module instances that could be used as parameters:");
     for (const auto& [instance_name, instance_value] : module_instances) {
-        std::cerr << "  " << instance_name << "" << std::endl;
+        logging::error("  " + instance_name);
     }
     print_constructor_help(resolved_class_name);
-    std::cerr << std::endl << "Note: The config parsing uses types that may be automatically cast to fit the constructor parameters. For example, all integer values in the config are parsed as int64_t, but if the constructor expects an int, it will be cast accordingly. If there is a type mismatch that cannot be resolved, the constructor will fail." << std::endl;
+    logging::error("Note: The config parsing uses types that may be automatically cast to fit the constructor parameters. For example, all integer values in the config are parsed as int64_t, but if the constructor expects an int, it will be cast accordingly. If there is a type mismatch that cannot be resolved, the constructor will fail.");
 }
 
 template <typename In, typename Out>
@@ -108,18 +116,22 @@ inline void* create_mlcoupling_object(
             }
         }
         if (!found_dependency) {
-            std::cerr << "Error: Dependency " << dependency_name << " of type " << dependency_type << " required by module " << module_classname << " is not a recognized class name." << std::endl;
-            std::cerr << "Searched for class names: ";
+            logging::error("Dependency " + dependency_name + " of type " + dependency_type + " required by module " + module_classname + " is not a recognized class name.");
+            std::string searched = "Searched for class names:";
             for (const auto& class_name : possible_class_names) {
-                std::cerr << class_name << " ";            }
-            std::cerr << std::endl;
+                searched += " " + class_name;
+            }
+            logging::error(searched);
             return nullptr;
         }
     }
 
-    std::cout << "Creating module instance of class: " << module_classname << " with " << module_params.size() << " parameters" << std::endl;
+    logging::info("Creating module instance of class: " + module_classname + " with " + std::to_string(module_params.size()) + " parameters");
     return create_instance_function(module_classname, module_params);
-}// Function to create and configure an MLCoupling instance based on a configuration string
+}
+
+
+// Function to create and configure an MLCoupling instance based on a configuration string
 template <typename In, typename Out>
 MLCoupling<In, Out>* create_mlcoupling_from_config(const std::string &config_str, MLCouplingData<In> input_data, MLCouplingData<Out> output_data) {
     try {
@@ -154,15 +166,15 @@ MLCoupling<In, Out>* create_mlcoupling_from_config(const std::string &config_str
         */
 
         config.for_each([&sections, &type_params, &sections_temp_ids](const toml::key& key, const toml::v3::node& node) {
-            std::cout << "Section: " << key << std::endl;
+            logging::debug("Section: " + std::string(key.str()));
             if (node.is_table()) {
                 std::string key_str = std::string(key.str());
                 sections[key_str] = {};
                 const auto& table = *node.as_table();
                 table.for_each([&sections, &key_str, &type_params, &sections_temp_ids](const toml::key& k, auto&& v) {
-                    std::cout << "  " << k << " = ";
-                    v.visit([](auto&& val) { std::cout << val; });
-                    std::cout << std::endl;
+                    std::ostringstream val_stream;
+                    v.visit([&val_stream](auto&& val) { val_stream << val; });
+                    logging::debug("  " + std::string(k.str()) + " = " + val_stream.str() + " " + typeid(v).name());
                     // Extract raw C++ types from TOML values
                     // as<T>() returns pointer to wrapper, dereference to get the actual value via get()
                     std::string key = std::string(k.str());
@@ -231,7 +243,7 @@ MLCoupling<In, Out>* create_mlcoupling_from_config(const std::string &config_str
         std::string application_class_name;
 
         for (const auto &[section, values] : sections_temp_ids) {
-            std::cout << "Section: " << section << std::endl;
+            logging::debug("Section: " + section);
             std::unordered_map<std::string, std::pair<int, void*>> *params_map = nullptr;
             if (section == "normalization") {
                 params_map = &normalization_params;
@@ -245,7 +257,7 @@ MLCoupling<In, Out>* create_mlcoupling_from_config(const std::string &config_str
             for (const auto &[key, id_pair] : values) {
                 int type_index = id_pair.first;
                 int index_in_type = id_pair.second;
-                std::cout << "  Key: " << key << " -> Type index: " << type_index << ", Index in type: " << index_in_type;
+                std::string message = "  Key: " + key + " -> Type index: " + std::to_string(type_index) + ", Index in type: " + std::to_string(index_in_type);
                 bool cont = false;
                 if (key == "class") {
                     if (type_index == 3) { // string
@@ -264,35 +276,37 @@ MLCoupling<In, Out>* create_mlcoupling_from_config(const std::string &config_str
                     }
                 }
                 if (cont) {
-                    std::cout << std::endl;
+                    logging::debug(message);
                     continue;
                 }
                 // Print the value based on type
                 if (type_index == 0) {
-                    std::cout << " -> Value: " << "different type (0)";
+                    message += " -> Value: different type (0)";
                 } else
                 if (type_index == 1) {
-                    std::cout << " -> Value: " << int64_t_array[index_in_type];
+                    message += " -> Value: " + std::to_string(int64_t_array[index_in_type]);
                     if (params_map) {
                         (*params_map)[key] = std::pair<int, void*>(1, &int64_t_array[index_in_type]);
                     }
                 } else if (type_index == 2) {
-                    std::cout << " -> Value: " << double_array[index_in_type];
+                    message += " -> Value: " + std::to_string(double_array[index_in_type]);
                     if (params_map) {
                         (*params_map)[key] = std::pair<int, void*>(2, &double_array[index_in_type]);
                     }
                 } else if (type_index == 3) {
-                    std::cout << " -> Value: " << (string_array + string_array_offsets[index_in_type]);
+                    message += " -> Value: ";
+                    message += (string_array + string_array_offsets[index_in_type]);
                     if (params_map) {
                         (*params_map)[key] = std::pair<int, void*>(3, string_array + string_array_offsets[index_in_type]);
                     }
                 } else if (type_index == 4) {
-                    std::cout << " -> Value: " << bool_array[index_in_type];
+                    message += " -> Value: ";
+                    message += (bool_array[index_in_type] ? "true" : "false");
                     if (params_map) {
                         (*params_map)[key] = std::pair<int, void*>(4, &bool_array[index_in_type]);
                     }
                 }
-                std::cout << std::endl;
+                logging::debug(message);
             }
         }
 
@@ -309,7 +323,7 @@ MLCoupling<In, Out>* create_mlcoupling_from_config(const std::string &config_str
             if (normalization) {
                 module_instances[resolve_normalization_class_name(normalization_class_name)] = std::make_pair(-1, static_cast<void*>(normalization));
             } else {
-                std::cerr << "Error: Failed to create normalization instance of class: " << normalization_class_name << std::endl;
+                logging::error("Failed to create normalization instance of class: " + normalization_class_name);
                 print_failed_constructor(normalization_class_name, normalization_params, module_instances);
                 exit(1);
             }
@@ -317,29 +331,35 @@ MLCoupling<In, Out>* create_mlcoupling_from_config(const std::string &config_str
             In dummy_double_1 = 0.5;
             std::vector<int> dummy_dimensions = std::vector<int>{2};
             MLCouplingData<In> dummy_input_data = MLCouplingData<In>(std::vector<In*>{&dummy_double_0, &dummy_double_1}, std::vector<std::vector<int>>{dummy_dimensions});
-            std::cout << "Normalization: " << *normalization << std::endl;
-            std::cout << "Dummy value before normalization: " << dummy_double_0 << ", " << dummy_double_1 << std::endl;
+            std::ostringstream norm_stream;
+            norm_stream << *normalization;
+            logging::debug("Normalization: " + norm_stream.str());
+            std::ostringstream before_stream;
+            before_stream << dummy_double_0 << ", " << dummy_double_1;
+            logging::debug("Dummy value before normalization: " + before_stream.str());
             normalization->normalize_input(dummy_input_data);
-            std::cout << "Dummy value after normalization: " << dummy_double_0 << ", " << dummy_double_1 << std::endl;
+            std::ostringstream after_stream;
+            after_stream << dummy_double_0 << ", " << dummy_double_1;
+            logging::debug("Dummy value after normalization: " + after_stream.str());
         }
 
         if (provider_class_name.empty()) {
-            std::cerr << "Error: No provider class specified in configuration." << std::endl;
+            logging::error("No provider class specified in configuration.");
             return nullptr;
         } else {
             provider = static_cast<MLCouplingProvider<In, Out>*>(create_mlcoupling_object<In, Out>(provider_class_name, provider_params, module_instances, create_instance_mlcouplingprovider<In, Out>));
             if (provider) {
                 module_instances[resolve_provider_class_name(provider_class_name)] = std::make_pair(-1, static_cast<void*>(provider));
             } else {
-                std::cerr << "Error: Failed to create provider instance of class: " << provider_class_name << std::endl;
+                logging::error("Failed to create provider instance of class: " + provider_class_name);
                 print_failed_constructor(provider_class_name, provider_params, module_instances);
                 exit(1);
             }
         }
 
         if (behavior_class_name.empty()) {
-            std::cerr << "Error: No behavior class specified in configuration." << std::endl;
-            std::cout << "Proceeding without behavior (defaulting to always perform inference every step)." << std::endl;
+            logging::warning("No behavior class specified in configuration.");
+            logging::info("Proceeding without behavior (defaulting to always perform inference every step).");
             behavior = new MLCouplingBehaviorDefault();
             module_instances[resolve_behavior_class_name("MLCouplingBehaviorDefault")] = std::make_pair(-1, static_cast<void*>(behavior));
         } else {
@@ -347,14 +367,14 @@ MLCoupling<In, Out>* create_mlcoupling_from_config(const std::string &config_str
             if (behavior) {
                 module_instances[resolve_behavior_class_name(behavior_class_name)] = std::make_pair(-1, static_cast<void*>(behavior));
             } else {
-                std::cerr << "Error: Failed to create behavior instance of class: " << behavior_class_name << std::endl;
+                logging::error("Failed to create behavior instance of class: " + behavior_class_name);
                 print_failed_constructor(behavior_class_name, behavior_params, module_instances);
                 exit(1);
             }
         }
 
         if (application_class_name.empty()) {
-            std::cerr << "Error: No application class specified in configuration." << std::endl;
+            logging::error("No application class specified in configuration.");
             exit(1);
         } else {
             application_params["input_data"] = std::make_pair(0, static_cast<void*>(&input_data));
@@ -363,30 +383,40 @@ MLCoupling<In, Out>* create_mlcoupling_from_config(const std::string &config_str
             if (application) {
                 module_instances[resolve_application_class_name(application_class_name)] = std::make_pair(0, static_cast<void*>(application));
             } else {
-                std::cerr << "Error: Failed to create application instance of class: " << application_class_name << std::endl;
+                logging::error("Failed to create application instance of class: " + application_class_name);
                 print_failed_constructor(application_class_name, application_params, module_instances);
                 return nullptr;
             }
         }
 
         if (normalization) {
-            std::cout << "Created normalization instance: " << *normalization << " of type " << get_type_name(*normalization) << std::endl;
+            std::ostringstream normalization_stream;
+            normalization_stream << *normalization;
+            logging::info("Created normalization instance: " + normalization_stream.str() + " of type " + get_type_name(*normalization));
         }
         if (provider) {
-            std::cout << "Created provider instance at " << provider << " of type " << get_type_name(*provider) << std::endl;
+            std::ostringstream provider_ptr_stream;
+            provider_ptr_stream << provider;
+            logging::info("Created provider instance at " + provider_ptr_stream.str() + " of type " + get_type_name(*provider));
         }
         if (behavior) {
-            std::cout << "Created behavior instance at " << behavior << " of type " << get_type_name(*behavior) << std::endl;
+            std::ostringstream behavior_ptr_stream;
+            behavior_ptr_stream << behavior;
+            logging::info("Created behavior instance at " + behavior_ptr_stream.str() + " of type " + get_type_name(*behavior));
         }
         if (application) {
-            std::cout << "Created application instance at " << application << " of type " << get_type_name(*application) << std::endl;
+            std::ostringstream application_ptr_stream;
+            application_ptr_stream << application;
+            logging::info("Created application instance at " + application_ptr_stream.str() + " of type " + get_type_name(*application));
         }
 
         return new MLCoupling<In, Out>(provider, application, behavior);
 
     } catch (const toml::parse_error& err) {
-        std::cerr << "Parsing failed: " << err << std::endl;
-        std::cerr << "Please check the configuration format and try again." << std::endl;
+        std::ostringstream err_stream;
+        err_stream << err;
+        logging::error("Parsing failed: " + err_stream.str());
+        logging::error("Please check the configuration format and try again.");
         exit(1);
     }
 

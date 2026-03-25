@@ -46,6 +46,17 @@ int main(int argc, char** argv) {
             i++;
             continue;
         }
+        if (std::string(argv[i]) == "--debug") {
+            logging::set_level(logging::Level::DEBUG);
+            continue;
+        }
+        if (std::string(argv[i]) == "--log-level" && i + 1 < argc) {
+            std::string level_str = argv[i + 1];
+            std::transform(level_str.begin(), level_str.end(), level_str.begin(), ::tolower);
+            logging::set_level(logging::get_level(level_str));
+            i++;
+            continue;
+        }
         if (std::string(argv[i]) == "--help") {
             help_flag = true;
             something_specified = true;
@@ -57,6 +68,8 @@ int main(int argc, char** argv) {
         std::cout << "Manual Test Application Help:" << std::endl;
         std::cout << "--config-file <path> : Specify the path to the configuration file to create MLCoupling instance." << std::endl;
         std::cout << "--behavior <steps>   : Simulate the behavior of the created MLCoupling instance for a given number of steps." << std::endl;
+        std::cout << "--debug              : Enable debug logging for detailed output." << std::endl;
+        std::cout << "--log-level <level>    : Set the logging level (e.g., debug, info, warning, error)." << std::endl;
         std::cout << "--help               : Show this help message." << std::endl;
         return 0;
     }
