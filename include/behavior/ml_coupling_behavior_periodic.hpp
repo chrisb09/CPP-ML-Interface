@@ -1,22 +1,58 @@
 #pragma once
 
+#include <functional>
+#include <stdexcept>
+
 #include "ml_coupling_behavior.hpp"
+
+inline bool allow_inference_at_all_steps(int step) {
+    (void)step;
+    return false;
+}
 
 // @registry_name: Periodic
 // @registry_aliases: periodic
 class MLCouplingBehaviorPeriodic : public MLCouplingBehavior {
     public:
-        MLCouplingBehaviorPeriodic(int inference_interval, int coupled_steps_before_inference, int coupled_steps_stride, int step_increment_after_inference)
-        {
-            this->inference_interval = inference_interval;
-            this->coupled_steps_before_inference = coupled_steps_before_inference;
-            this->coupled_steps_stride = coupled_steps_stride;
-            this->step_increment_after_inference = step_increment_after_inference;
+
+        /**
+         * @brief Constructs an MLCouplingBehaviorPeriodic object with specified inference and coupling parameters.
+         *
+         * @param inference_interval Interval (in steps) between ML inference operations.
+         * @param coupled_steps_before_inference Number of coupled steps to perform before each inference.
+         * @param coupled_steps_stride Stride (step size) for coupled steps between inferences.
+         * @param step_increment_after_inference Step increment to apply after each inference operation.
+         */
+        MLCouplingBehaviorPeriodic(
+            int inference_interval,
+            int coupled_steps_before_inference,
+            int coupled_steps_stride,
+            int step_increment_after_inference,
+            std::function<bool(int)> prohibit_inference = allow_inference_at_all_steps)
+        : inference_interval(inference_interval), coupled_steps_before_inference(coupled_steps_before_inference), coupled_steps_stride(coupled_steps_stride), step_increment_after_inference(step_increment_after_inference), prohibit_inference(prohibit_inference) {
+//: inference_interval(inference_interval), coupled_steps_before_inference(coupled_steps_before_inference), coupled_steps_stride(coupled_steps_stride), step_increment_after_inference(step_increment_after_inference) {
+            // Validate input parameters
+            if (inference_interval <= 0) {
+                throw std::invalid_argument("Inference interval must be greater than 0.");
+            }
+            if (coupled_steps_before_inference < 0) {
+                throw std::invalid_argument("Number of coupled steps before inference cannot be negative.");
+            }
+            if (coupled_steps_stride <= 0) {
+                throw std::invalid_argument("Coupled steps stride must be greater than 0.");
+            }
+            if (step_increment_after_inference < 0) {
+                throw std::invalid_argument("Step increment after inference cannot be negative.");
+            }
         }
 
         bool should_perform_inference() override {
             // Determine if we are at an inference step
             step_count++;
+
+            if (prohibit_inference(step_count)) {
+                return false;
+            }
 
             // Check if we have enough prior coupled steps to perform inference
             if (step_count % inference_interval == 0) {
@@ -63,6 +99,9 @@ class MLCouplingBehaviorPeriodic : public MLCouplingBehavior {
         int coupled_steps_stride;
         // How many steps to increment after inference
         int step_increment_after_inference;
+        // Optional function to determine if inference should be prohibited at a given step
+        // It's purpose is to allow us to replicate the desired behavior in which steps that would save the current state can't be simulated with the ML model, so inference should be prohibited at those steps, although this in practice only makes sense if step_increment_after_inference is >= 1, otherwise we'd still have a normal simulation step every step anyway
+        std::function<bool(int)> prohibit_inference;
 
         // If we require 5 steps before inference, and have a stride of 24,
         // then when we call the inference at step i*N (where N is inference_interval),
