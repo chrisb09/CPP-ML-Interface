@@ -15,3 +15,5 @@ The python dependencies can be installed via pip:
 ```bash
 pip install -r requirements.txt
 ```
+
+`./build.sh` also runs registry parser regression tests automatically.

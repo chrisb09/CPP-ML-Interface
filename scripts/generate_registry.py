@@ -155,10 +155,64 @@ def _extract_default_value(param_node):
             try:
                 tokens = list(child.get_tokens())
                 if tokens:
-                    return ' '.join(t.spelling for t in tokens)
+                    value = ' '.join(t.spelling for t in tokens).strip()
+                    if value and value != "=":
+                        return value
             except Exception:
                 pass
             break
+
+    # Fallback for complex/unexposed defaults: parse from full parameter tokens.
+    # This handles cases where libclang exposes only "=" as an unexposed expression.
+    try:
+        param_tokens = [t.spelling for t in param_node.get_tokens()]
+        value = _extract_default_from_param_tokens(param_tokens)
+        if value:
+            return value
+    except Exception:
+        pass
+
+    return None
+
+
+def _extract_default_from_param_tokens(param_tokens):
+    """Extract default expression RHS from full parameter token sequence."""
+    if not param_tokens or '=' not in param_tokens:
+        return None
+
+    eq_idx = param_tokens.index('=')
+    rhs_tokens = []
+    paren = bracket = brace = angle = 0
+
+    for tok in param_tokens[eq_idx + 1:]:
+        # Stop at parameter separators / end-of-parameter-list at top-level.
+        if tok == ',' and paren == bracket == brace == angle == 0:
+            break
+        if tok == ')' and paren == bracket == brace == angle == 0:
+            break
+
+        rhs_tokens.append(tok)
+
+        if tok == '(':
+            paren += 1
+        elif tok == ')':
+            paren = max(0, paren - 1)
+        elif tok == '[':
+            bracket += 1
+        elif tok == ']':
+            bracket = max(0, bracket - 1)
+        elif tok == '{':
+            brace += 1
+        elif tok == '}':
+            brace = max(0, brace - 1)
+        elif tok == '<' and paren == 0 and bracket == 0 and brace == 0:
+            angle += 1
+        elif tok == '>' and paren == 0 and bracket == 0 and brace == 0:
+            angle = max(0, angle - 1)
+
+    value = ' '.join(rhs_tokens).strip()
+    if value and value != "=":
+        return value
     return None
 
 
@@ -689,6 +743,24 @@ def _is_pointer_to_known_class(param_type):
                   'uint64_t', 'uint32_t', 'size_t', 'std::string'}
     return base_type not in primitives and not base_type.startswith('std::')
 
+
+def _can_use_config_param_cast(param_type):
+    """Return True if parameter type is supported by config_param_cast<T>."""
+    clean_type = re.sub(r'\s*(const|volatile)\s+', '', param_type)
+    clean_type = re.sub(r'[*&]+\s*$', '', clean_type).strip()
+
+    supported = {
+        'bool', 'char',
+        'short', 'unsigned short',
+        'int', 'unsigned int',
+        'long', 'unsigned long',
+        'long long', 'unsigned long long',
+        'int32_t', 'uint32_t', 'int64_t', 'uint64_t', 'size_t',
+        'float', 'double',
+        'std::string', 'string',
+    }
+    return clean_type in supported
+
 def _write_map_factory(f, base_class, template_str, template_args, category,
                        base_template_params, entries, subclass_constructors):
     """Generate unordered_map<string, pair<int,void*>> parameter factory with name resolution."""
@@ -733,14 +805,23 @@ def _write_map_factory(f, base_class, template_str, template_args, category,
                     # For pointers to known classes (e.g. MLCouplingNormalization<In,Out>*), cast directly
                     param_args.append(f'*reinterpret_cast<{ptype}*>(parameter.at("{pname}").second)')
                     debug_outputs.append(f'"{pname}=" << (*reinterpret_cast<{ptype}*>(parameter.at("{pname}").second))')
+                elif _can_use_config_param_cast(ptype):
+                    if pdefault:
+                        # Parameter with default: check if present, use config_param_cast or default
+                        param_args.append(f'parameter.find("{pname}") != parameter.end() ? config_param_cast<{ptype}>(parameter.at("{pname}")) : ({ptype}){pdefault}')
+                        debug_outputs.append(f'"{pname}=" << (parameter.find("{pname}") != parameter.end() ? config_param_cast<{ptype}>(parameter.at("{pname}")) : ({ptype}){pdefault})')
+                    else:
+                        # Required parameter: use config_param_cast
+                        param_args.append(f'config_param_cast<{ptype}>(parameter.at("{pname}"))')
+                        debug_outputs.append(f'"{pname}=" << config_param_cast<{ptype}>(parameter.at("{pname}"))')
                 elif pdefault:
-                    # Parameter with default: check if present, use config_param_cast or default
-                    param_args.append(f'parameter.find("{pname}") != parameter.end() ? config_param_cast<{ptype}>(parameter.at("{pname}")) : ({ptype}){pdefault}')
-                    debug_outputs.append(f'"{pname}=" << (parameter.find("{pname}") != parameter.end() ? config_param_cast<{ptype}>(parameter.at("{pname}")) : ({ptype}){pdefault})')
+                    # Opaque/non-primitive parameter with default: pass via typed pointer, fallback to default expression
+                    param_args.append(f'parameter.find("{pname}") != parameter.end() ? *reinterpret_cast<{ptype}*>(parameter.at("{pname}").second) : ({ptype}){pdefault}')
+                    debug_outputs.append(f'"{pname}=<" << (parameter.find("{pname}") != parameter.end() ? "provided" : "default") << ">"')
                 else:
-                    # Required parameter: use config_param_cast
-                    param_args.append(f'config_param_cast<{ptype}>(parameter.at("{pname}"))')
-                    debug_outputs.append(f'"{pname}=" << config_param_cast<{ptype}>(parameter.at("{pname}"))')
+                    # Opaque/non-primitive required parameter: pass via typed pointer
+                    param_args.append(f'*reinterpret_cast<{ptype}*>(parameter.at("{pname}").second)')
+                    debug_outputs.append(f'"{pname}=<provided>"')
             
             params_str = ', '.join(param_args)
             

@@ -32,8 +32,18 @@ add_custom_command(
     COMMENT "Generating registry from headers..."
 )
 
+# Python regression tests for registry default-value parsing
+add_custom_target(registry_parser_tests
+    COMMAND python3 -m unittest "${CMAKE_CURRENT_SOURCE_DIR}/scripts/test_generate_registry_defaults.py"
+    WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
+    DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/scripts/generate_registry.py"
+            "${CMAKE_CURRENT_SOURCE_DIR}/scripts/test_generate_registry_defaults.py"
+    COMMENT "Running registry parser regression tests..."
+)
+
 # Custom Target damit die generierte Datei gebaut wird
 add_custom_target(generate_registry DEPENDS "${GENERATED_SRC}")
+add_dependencies(generate_registry registry_parser_tests)
 
 # 4.1 SHARED Library mit tatsächlichen Quelldateien
 file(GLOB_RECURSE LIB_SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/src/*.cpp")
