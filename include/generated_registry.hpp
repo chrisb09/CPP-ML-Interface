@@ -104,19 +104,19 @@ inline std::string resolve_application_class_name(const std::string& name_or_ali
 inline std::string resolve_class_name(const std::string& name_or_alias) {
     // This function checks all categories for a matching name or alias and returns the resolved class name.
     std::string resolved;
-    resolved = resolve_application_class_name(name_or_alias);
-    if (resolved != name_or_alias) {
-        return resolved;
-    }
-    resolved = resolve_behavior_class_name(name_or_alias);
-    if (resolved != name_or_alias) {
-        return resolved;
-    }
     resolved = resolve_provider_class_name(name_or_alias);
     if (resolved != name_or_alias) {
         return resolved;
     }
+    resolved = resolve_application_class_name(name_or_alias);
+    if (resolved != name_or_alias) {
+        return resolved;
+    }
     resolved = resolve_normalization_class_name(name_or_alias);
+    if (resolved != name_or_alias) {
+        return resolved;
+    }
+    resolved = resolve_behavior_class_name(name_or_alias);
     if (resolved != name_or_alias) {
         return resolved;
     }
@@ -189,7 +189,7 @@ inline std::vector<std::string> get_constructor_signatures(const std::string& cl
     }
 
     if (class_name == "MLCouplingBehaviorPeriodic") {
-        signatures.push_back("MLCouplingBehaviorPeriodic(int inference_interval, int coupled_steps_before_inference, int coupled_steps_stride, int step_increment_after_inference)");
+        signatures.push_back("MLCouplingBehaviorPeriodic(int inference_interval, int coupled_steps_before_inference, int coupled_steps_stride, int step_increment_after_inference, std::function<bool (int)> prohibit_inference = allow_inference_at_all_steps)");
         return signatures;
     }
 
@@ -391,8 +391,8 @@ MLCouplingNormalization<In, Out>* create_instance_mlcouplingnormalization(const 
         // Parameters: In input_min, In input_max, Out output_min, Out output_max
         if (parameter.size() == 4) {
             try {
-                std::cout << "Creating instance of MLCouplingMinMaxNormalization with parameters: " << "input_min=" << config_param_cast<In>(parameter.at("input_min")) << ", ""input_max=" << config_param_cast<In>(parameter.at("input_max")) << ", ""output_min=" << config_param_cast<Out>(parameter.at("output_min")) << ", ""output_max=" << config_param_cast<Out>(parameter.at("output_max")) << std::endl;
-                return new MLCouplingMinMaxNormalization<In, Out>(config_param_cast<In>(parameter.at("input_min")), config_param_cast<In>(parameter.at("input_max")), config_param_cast<Out>(parameter.at("output_min")), config_param_cast<Out>(parameter.at("output_max")));
+                std::cout << "Creating instance of MLCouplingMinMaxNormalization with parameters: " << "input_min=<provided>" << ", ""input_max=<provided>" << ", ""output_min=<provided>" << ", ""output_max=<provided>" << std::endl;
+                return new MLCouplingMinMaxNormalization<In, Out>(*reinterpret_cast<In*>(parameter.at("input_min").second), *reinterpret_cast<In*>(parameter.at("input_max").second), *reinterpret_cast<Out*>(parameter.at("output_min").second), *reinterpret_cast<Out*>(parameter.at("output_max").second));
             } catch (...) {
                 // Handle exceptions if necessary
             }
@@ -439,12 +439,12 @@ MLCouplingBehavior* create_instance_mlcouplingbehavior(const std::string &class_
         }
         return nullptr;
     } else if (resolved_class_name == "MLCouplingBehaviorPeriodic") {
-        // Constructor with 4 parameter(s)
-        // Parameters: int inference_interval, int coupled_steps_before_inference, int coupled_steps_stride, int step_increment_after_inference
-        if (parameter.size() == 4) {
+        // Constructor with 5 parameter(s)
+        // Parameters: int inference_interval, int coupled_steps_before_inference, int coupled_steps_stride, int step_increment_after_inference, std::function<bool (int)> prohibit_inference = allow_inference_at_all_steps
+        if (parameter.size() >= 4 && parameter.size() <= 5) {
             try {
-                std::cout << "Creating instance of MLCouplingBehaviorPeriodic with parameters: " << "inference_interval=" << config_param_cast<int>(parameter.at("inference_interval")) << ", ""coupled_steps_before_inference=" << config_param_cast<int>(parameter.at("coupled_steps_before_inference")) << ", ""coupled_steps_stride=" << config_param_cast<int>(parameter.at("coupled_steps_stride")) << ", ""step_increment_after_inference=" << config_param_cast<int>(parameter.at("step_increment_after_inference")) << std::endl;
-                return new MLCouplingBehaviorPeriodic(config_param_cast<int>(parameter.at("inference_interval")), config_param_cast<int>(parameter.at("coupled_steps_before_inference")), config_param_cast<int>(parameter.at("coupled_steps_stride")), config_param_cast<int>(parameter.at("step_increment_after_inference")));
+                std::cout << "Creating instance of MLCouplingBehaviorPeriodic with parameters: " << "inference_interval=" << config_param_cast<int>(parameter.at("inference_interval")) << ", ""coupled_steps_before_inference=" << config_param_cast<int>(parameter.at("coupled_steps_before_inference")) << ", ""coupled_steps_stride=" << config_param_cast<int>(parameter.at("coupled_steps_stride")) << ", ""step_increment_after_inference=" << config_param_cast<int>(parameter.at("step_increment_after_inference")) << ", ""prohibit_inference=<" << (parameter.find("prohibit_inference") != parameter.end() ? "provided" : "default") << ">" << std::endl;
+                return new MLCouplingBehaviorPeriodic(config_param_cast<int>(parameter.at("inference_interval")), config_param_cast<int>(parameter.at("coupled_steps_before_inference")), config_param_cast<int>(parameter.at("coupled_steps_stride")), config_param_cast<int>(parameter.at("step_increment_after_inference")), parameter.find("prohibit_inference") != parameter.end() ? *reinterpret_cast<std::function<bool (int)>*>(parameter.at("prohibit_inference").second) : (std::function<bool (int)>)allow_inference_at_all_steps);
             } catch (...) {
                 // Handle exceptions if necessary
             }
