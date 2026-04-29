@@ -12,7 +12,7 @@ option(CPPML_RUN_REGISTRY_TESTS "Run Python registry parser unittests during bui
 
 option(WITH_SMARTSIM "Enable SmartSim provider (requires SmartSim dependencies)" ON)
 option(WITH_AIX "Enable AIXelerator provider (requires AIXelerator dependencies)" ON)
-option(AIX_USE_PREBUILT "Link against a prebuilt AIxelerator library instead of building from source" OFF)
+option(AIX_USE_PREBUILT "Link against a prebuilt AIxelerator library instead of building from source" ON)
 option(WITH_PHYDLL "Enable using phyDLL for physics coupling (requires phyDLL dependencies)" OFF)
 
 option(WITH_TORCH "Enable Torch support in AIxelerator (only applies if building AIxelerator from source or using a prebuilt with Torch support)" ON)
@@ -23,8 +23,8 @@ option(FORCE_AIX_REBUILD "Force rebuilding AIxelerator from source even if a pre
 # Set Variables
 set(EXECUTABLE_NAME "cpp_ml_interface_executable")
 set(LIBRARY_NAME "cpp_ml_interface_library")
-set(SMARTREDIS_DIR "../SmartRedis")
-set(AIXELERATOR_DIR "../AIxeleratorService")
+set(SMARTREDIS_DIR "${CMAKE_CURRENT_SOURCE_DIR}/extern/SmartRedis")
+set(AIXELERATOR_DIR "${CMAKE_CURRENT_SOURCE_DIR}/extern/AIxeleratorService")
 set(AIXELERATOR_PREBUILT_INSTALL_PREFIX "${AIXELERATOR_DIR}/INSTALL-SCOREP" CACHE PATH "Install prefix used for prebuilt AIxelerator")
 set(AIXELERATOR_PREBUILT_LIB_DIR "${AIXELERATOR_PREBUILT_INSTALL_PREFIX}/lib" CACHE PATH "Library directory containing prebuilt AIxelerator .so")
 set(AIXELERATOR_CMAKE_ARGS "-DWITH_TORCH=ON" CACHE STRING "Additional CMake args used when auto-building prebuilt AIxelerator")
