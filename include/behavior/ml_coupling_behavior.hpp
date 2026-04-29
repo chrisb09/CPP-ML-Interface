@@ -18,4 +18,6 @@ class MLCouplingBehavior {
         // which has access to the application properties
         virtual bool should_send_data() = 0;
 
+        virtual ~MLCouplingBehavior() = default;
+
 };

@@ -1,19 +1,43 @@
 #pragma once
 
-#include "../ml_coupling_data.hpp"
+#include "../data/ml_coupling_data.hpp"
+
+# ifdef MPI_FOUND
+#include <mpi.h>
+# endif
 
 // @category: provider
 template <typename In, typename Out>
 class MLCouplingProvider {
     public:
 
-        MLCouplingProvider() = default;
+        int rank = -1;
 
-        // Essentially for the coupling step: send data to the ML model
-        virtual void send_data(MLCouplingData<In> input_data_after_preprocessing) = 0;
+        MLCouplingProvider() {
+            # ifdef MPI_FOUND
+            // check if MPI is initialized and get the rank if it is, otherwise set rank to -1
+            int flag;
+            MPI_Initialized(&flag);
+            if (flag) {
+                MPI_Comm_rank(MPI_COMM_WORLD, &rank);
+            }
+            # endif
+        }
+
+        // Manually set the rank if needed, for example if MPI is initialized after the provider is created, or if we use something other than MPI for parallelism
+
+        MLCouplingProvider(int rank) {
+            this->rank = rank;
+        }
+
+        void set_rank(int rank) {
+            this->rank = rank;
+        }
 
         // Perform inference with the ML model and get the output data
-        virtual MLCouplingData<Out> inference(MLCouplingData<In> input_data_after_preprocessing) = 0;
+        virtual void inference(MLCouplingData<In> input_data_after_preprocessing, MLCouplingData<Out>& output_data_before_postprocessing) = 0;
+
+        virtual ~MLCouplingProvider() = default;
 
         // Later, we might add a train() method here as well
 

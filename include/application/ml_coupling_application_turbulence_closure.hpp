@@ -1,6 +1,6 @@
 #pragma once
 
-#include "../ml_coupling_data.hpp"
+#include "../data/ml_coupling_data.hpp"
 
 #include "ml_coupling_application.hpp"
 
@@ -15,7 +15,20 @@ class MLCouplingApplicationTurbulenceClosure : public MLCouplingApplication<In, 
             MLCouplingData<In> input_data,
             MLCouplingData<Out> output_data,
             MLCouplingNormalization<In, Out>* normalization)
-            : MLCouplingApplication<In, Out>(input_data, output_data, normalization) {
+            : MLCouplingApplication<In, Out>(std::move(input_data), std::move(output_data), normalization) {
+        }
+
+        MLCouplingApplicationTurbulenceClosure(
+            MLCouplingData<In> input_data,
+            MLCouplingData<In> input_data_after_preprocessing,
+            MLCouplingData<Out> output_data_before_postprocessing,
+            MLCouplingData<Out> output_data,
+            MLCouplingNormalization<In, Out>* normalization)
+            : MLCouplingApplication<In, Out>(std::move(input_data),
+                                             std::move(input_data_after_preprocessing),
+                                             std::move(output_data_before_postprocessing),
+                                             std::move(output_data),
+                                             normalization) {
         }
 
     protected:

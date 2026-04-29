@@ -1,6 +1,6 @@
 #pragma once
 
-#include "../ml_coupling_data.hpp"
+#include "../data/ml_coupling_data.hpp"
 #include <ostream>
 
 // @category: normalization
@@ -20,3 +20,9 @@ class MLCouplingNormalization {
         // Print representation
         virtual void print(std::ostream& os) const = 0;
 };
+
+template <typename In, typename Out>
+std::ostream& operator<<(std::ostream& os, const MLCouplingNormalization<In, Out>& norm) {
+    norm.print(os);
+    return os;
+}

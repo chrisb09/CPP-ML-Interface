@@ -20,16 +20,19 @@
 #include <functional>
 #include <sstream>
 #include <tuple>
+#include <optional>
 
 // Include toml++ for parsing TOML configurations
 #include <toml++/toml.h>
+
+#include "config_overrides.hpp"
 
 #include "application/ml_coupling_application.hpp"
 #include "behavior/ml_coupling_behavior.hpp"
 #include "normalization/ml_coupling_normalization.hpp"
 #include "generated_registry.hpp"
-#include "ml_coupling.hpp"
 #include "logging.hpp"
+
 
 inline void print_failed_constructor(std::string class_name, std::unordered_map<std::string, std::pair<int, void*>> params, std::unordered_map<std::string, std::pair<int, void*>>& module_instances) {
     std::string resolved_class_name = resolve_class_name(class_name);
@@ -53,16 +56,26 @@ inline void print_failed_constructor(std::string class_name, std::unordered_map<
                     value_str = std::to_string(*reinterpret_cast<double*>(param_value.second));
                     break;
                 case 3: // std::string
-                    value_str = *reinterpret_cast<std::string*>(param_value.second);
+                    value_str = std::string(reinterpret_cast<char*>(param_value.second));
                     break;
                 case 4: // bool
                     value_str = (*reinterpret_cast<bool*>(param_value.second) ? "true" : "false");
                     break;
+                case 5: { // std::vector<std::string>
+                    const auto& values = *reinterpret_cast<std::vector<std::string>*>(param_value.second);
+                    value_str = "[";
+                    for (size_t i = 0; i < values.size(); ++i) {
+                        if (i > 0) value_str += ", ";
+                        value_str += values[i];
+                    }
+                    value_str += "]";
+                    break;
+                }
                 default:
                     value_str = "Unknown type";
             }
         } catch (const std::exception& e) {
-            std::string val_type = (param_value.first == 1 ? "int64_t" : (param_value.first == 2 ? "double" : (param_value.first == 3 ? "std::string" : (param_value.first == 4 ? "bool" : "unknown"))));
+            std::string val_type = (param_value.first == 1 ? "int64_t" : (param_value.first == 2 ? "double" : (param_value.first == 3 ? "std::string" : (param_value.first == 4 ? "bool" : (param_value.first == 5 ? "std::vector<std::string>" : "unknown")))));
             logging::error("Error retrieving value for parameter " + param_name + " which is of type " + val_type + ". This might different than the constructor expected. Error: " + e.what());
             return;
         } catch (...) {
@@ -70,7 +83,7 @@ inline void print_failed_constructor(std::string class_name, std::unordered_map<
             return;
         }
 
-        std::string type_str = (param_value.first == 1 ? "int64_t" : (param_value.first == 2 ? "double" : (param_value.first == 3 ? "std::string" : (param_value.first == 4 ? "bool" : "unknown"))));
+        std::string type_str = (param_value.first == 1 ? "int64_t" : (param_value.first == 2 ? "double" : (param_value.first == 3 ? "std::string" : (param_value.first == 4 ? "bool" : (param_value.first == 5 ? "std::vector<std::string>" : "unknown")))));
         std::string left = "  " + param_name + " = " + value_str;
         entries.push_back({left, type_str});
     }
@@ -130,10 +143,83 @@ inline void* create_mlcoupling_object(
     return create_instance_function(module_classname, module_params);
 }
 
+struct ConfigCastModeGuard {
+    ConfigCastMode previous_mode;
+
+    explicit ConfigCastModeGuard(ConfigCastMode new_mode)
+        : previous_mode(get_config_cast_mode()) {
+        set_config_cast_mode(new_mode);
+    }
+
+    ~ConfigCastModeGuard() {
+        set_config_cast_mode(previous_mode);
+    }
+};
+
+inline std::optional<std::pair<std::string, std::string>> split_dotted_override_key(const std::string& dotted_key) {
+    const auto dot_pos = dotted_key.find('.');
+    if (dot_pos == std::string::npos || dot_pos == 0 || dot_pos == dotted_key.size() - 1) {
+        return std::nullopt;
+    }
+    return std::make_pair(dotted_key.substr(0, dot_pos), dotted_key.substr(dot_pos + 1));
+}
+
+inline ConfigSectionOverrides normalize_config_overrides(const ConfigOverrides& overrides) {
+    ConfigSectionOverrides normalized = overrides.sections;
+
+    for (const auto& [dotted_key, value] : overrides.dotted) {
+        auto split_key = split_dotted_override_key(dotted_key);
+        if (!split_key.has_value()) {
+            logging::warning("Ignoring invalid dotted override key: '" + dotted_key + "'. Expected format 'section.key'.");
+            continue;
+        }
+        const auto& [section, key] = *split_key;
+        normalized[section][key] = value;
+    }
+
+    return normalized;
+}
+
+inline void upsert_override_value(
+    const std::string& section,
+    const std::string& key,
+    const ConfigOverrideValue& value,
+    std::vector<std::vector<std::any>>& type_params,
+    std::unordered_map<std::string, std::unordered_map<std::string, std::pair<int, int>>>& sections_temp_ids) {
+
+    std::visit([&](const auto& typed_value) {
+        using ValueType = std::decay_t<decltype(typed_value)>;
+        if constexpr (std::is_same_v<ValueType, int64_t>) {
+            type_params[0].push_back(std::any(typed_value));
+            sections_temp_ids[section][key] = std::make_pair(1, static_cast<int>(type_params[0].size() - 1));
+        } else if constexpr (std::is_same_v<ValueType, double>) {
+            type_params[1].push_back(std::any(typed_value));
+            sections_temp_ids[section][key] = std::make_pair(2, static_cast<int>(type_params[1].size() - 1));
+        } else if constexpr (std::is_same_v<ValueType, std::string>) {
+            type_params[2].push_back(std::any(typed_value));
+            sections_temp_ids[section][key] = std::make_pair(3, static_cast<int>(type_params[2].size() - 1));
+        } else if constexpr (std::is_same_v<ValueType, bool>) {
+            type_params[3].push_back(std::any(typed_value));
+            sections_temp_ids[section][key] = std::make_pair(4, static_cast<int>(type_params[3].size() - 1));
+        } else if constexpr (std::is_same_v<ValueType, std::vector<std::string>>) {
+            type_params[4].push_back(std::any(typed_value));
+            sections_temp_ids[section][key] = std::make_pair(5, static_cast<int>(type_params[4].size() - 1));
+        }
+    }, value);
+}
+
 
 // Function to create and configure an MLCoupling instance based on a configuration string
 template <typename In, typename Out>
-MLCoupling<In, Out>* create_mlcoupling_from_config(const std::string &config_str, MLCouplingData<In> input_data, MLCouplingData<Out> output_data) {
+MLCoupling<In, Out>* create_mlcoupling_from_config_impl(const std::string &config_str,
+                                                        MLCouplingData<In> input_data,
+                                                        MLCouplingData<Out> output_data,
+                                                        MLCouplingData<In> input_data_after_preprocessing,
+                                                        MLCouplingData<Out> output_data_before_postprocessing,
+                                                        bool allow_two_buffer_application_fallback,
+                                                        ConfigCastMode cast_mode,
+                                                        const ConfigOverrides& overrides) {
+    ConfigCastModeGuard cast_mode_guard(cast_mode);
     try {
         toml::v3::table config = toml::parse(config_str);
 
@@ -146,11 +232,13 @@ MLCoupling<In, Out>* create_mlcoupling_from_config(const std::string &config_str
         std::vector<double> double_params;
         std::vector<std::string> string_params;
         std::vector<bool> bool_params;
+        std::vector<std::vector<std::string>> vector_string_params;
 
         std::vector<std::vector<std::any>> type_params;
-        type_params.reserve(4);
+        type_params.reserve(5);
         type_params.push_back(std::vector<std::any>());
         //type_params.push_back(int_params);
+        type_params.push_back(std::vector<std::any>());
         type_params.push_back(std::vector<std::any>());
         type_params.push_back(std::vector<std::any>());
         type_params.push_back(std::vector<std::any>());
@@ -163,6 +251,7 @@ MLCoupling<In, Out>* create_mlcoupling_from_config(const std::string &config_str
         * 2: double
         * 3: std::string
         * 4: bool
+        * 5: std::vector<std::string>
         */
 
         config.for_each([&sections, &type_params, &sections_temp_ids](const toml::key& key, const toml::v3::node& node) {
@@ -194,10 +283,39 @@ MLCoupling<In, Out>* create_mlcoupling_from_config(const std::string &config_str
                         sections[key_str][key] = std::any(v.template as<bool>()->get());
                         type_params[3].push_back(sections[key_str][key]);
                         sections_temp_ids[key_str][key] = std::make_pair(4, type_params[3].size() - 1);
+                    } else if (v.is_array()) {
+                        const auto* arr = v.as_array();
+                        if (arr) {
+                            bool all_strings = true;
+                            std::vector<std::string> values;
+                            values.reserve(arr->size());
+                            for (const auto& elem : *arr) {
+                                if (!elem.is_string()) {
+                                    all_strings = false;
+                                    break;
+                                }
+                                values.push_back(std::string(elem.as_string()->get()));
+                            }
+                            if (all_strings) {
+                                sections[key_str][key] = std::any(values);
+                                type_params[4].push_back(sections[key_str][key]);
+                                sections_temp_ids[key_str][key] = std::make_pair(5, type_params[4].size() - 1);
+                            } else {
+                                logging::warning("Array parameter '" + key + "' in section '" + key_str + "' is not a homogeneous string array and will be ignored.");
+                            }
+                        }
                     }
                 });
             }
         });
+
+        const ConfigSectionOverrides normalized_overrides = normalize_config_overrides(overrides);
+        for (const auto& [section, values] : normalized_overrides) {
+            for (const auto& [key, value] : values) {
+                upsert_override_value(section, key, value, type_params, sections_temp_ids);
+                logging::debug("Applied config override: " + section + "." + key);
+            }
+        }
         
         int64_t* int64_t_array = new int64_t[type_params[0].size()];
         double* double_array = new double[type_params[1].size()];
@@ -213,6 +331,7 @@ MLCoupling<In, Out>* create_mlcoupling_from_config(const std::string &config_str
         // Allocate as char array for string storage
         char* string_array = new char[string_array_size];
         bool* bool_array = new bool[type_params[3].size()];
+        std::vector<std::vector<std::string>> vector_string_array(type_params[4].size());
 
         for (size_t i = 0; i < type_params[0].size(); ++i) {
             int64_t_array[i] = std::any_cast<int64_t>(type_params[0][i]);
@@ -230,6 +349,10 @@ MLCoupling<In, Out>* create_mlcoupling_from_config(const std::string &config_str
         
         for (size_t i = 0; i < type_params[3].size(); ++i) {
             bool_array[i] = std::any_cast<bool>(type_params[3][i]);
+        }
+
+        for (size_t i = 0; i < type_params[4].size(); ++i) {
+            vector_string_array[i] = std::any_cast<std::vector<std::string>>(type_params[4][i]);
         }
 
         std::unordered_map<std::string, std::pair<int, void*>> normalization_params;
@@ -305,6 +428,16 @@ MLCoupling<In, Out>* create_mlcoupling_from_config(const std::string &config_str
                     if (params_map) {
                         (*params_map)[key] = std::pair<int, void*>(4, &bool_array[index_in_type]);
                     }
+                } else if (type_index == 5) {
+                    message += " -> Value: [";
+                    for (size_t idx = 0; idx < vector_string_array[index_in_type].size(); ++idx) {
+                        if (idx > 0) message += ", ";
+                        message += vector_string_array[index_in_type][idx];
+                    }
+                    message += "]";
+                    if (params_map) {
+                        (*params_map)[key] = std::pair<int, void*>(5, &vector_string_array[index_in_type]);
+                    }
                 }
                 logging::debug(message);
             }
@@ -327,19 +460,21 @@ MLCoupling<In, Out>* create_mlcoupling_from_config(const std::string &config_str
                 print_failed_constructor(normalization_class_name, normalization_params, module_instances);
                 exit(1);
             }
-            In dummy_double_0 = -0.5; // Just a dummy variable to demonstrate passing parameters
-            In dummy_double_1 = 0.5;
+            In dummy_values[2] = {static_cast<In>(-0.5), static_cast<In>(0.5)};
             std::vector<int> dummy_dimensions = std::vector<int>{2};
-            MLCouplingData<In> dummy_input_data = MLCouplingData<In>(std::vector<In*>{&dummy_double_0, &dummy_double_1}, std::vector<std::vector<int>>{dummy_dimensions});
+            MLCouplingData<In> dummy_input_data =
+                MLCouplingData<In>(std::vector<MLCouplingTensor<In>>{
+                    MLCouplingTensor<In>::wrap_flat(dummy_values, dummy_dimensions)
+                });
             std::ostringstream norm_stream;
             norm_stream << *normalization;
             logging::debug("Normalization: " + norm_stream.str());
             std::ostringstream before_stream;
-            before_stream << dummy_double_0 << ", " << dummy_double_1;
+            before_stream << dummy_values[0] << ", " << dummy_values[1];
             logging::debug("Dummy value before normalization: " + before_stream.str());
             normalization->normalize_input(dummy_input_data);
             std::ostringstream after_stream;
-            after_stream << dummy_double_0 << ", " << dummy_double_1;
+            after_stream << dummy_values[0] << ", " << dummy_values[1];
             logging::debug("Dummy value after normalization: " + after_stream.str());
         }
 
@@ -379,7 +514,14 @@ MLCoupling<In, Out>* create_mlcoupling_from_config(const std::string &config_str
         } else {
             application_params["input_data"] = std::make_pair(0, static_cast<void*>(&input_data));
             application_params["output_data"] = std::make_pair(0, static_cast<void*>(&output_data));
+            application_params["input_data_after_preprocessing"] = std::make_pair(0, static_cast<void*>(&input_data_after_preprocessing));
+            application_params["output_data_before_postprocessing"] = std::make_pair(0, static_cast<void*>(&output_data_before_postprocessing));
             application = static_cast<MLCouplingApplication<In, Out>*>(create_mlcoupling_object<In, Out>(application_class_name, application_params, module_instances, create_instance_mlcouplingapplication<In, Out>));
+            if (application == nullptr && allow_two_buffer_application_fallback) {
+                application_params.erase("input_data_after_preprocessing");
+                application_params.erase("output_data_before_postprocessing");
+                application = static_cast<MLCouplingApplication<In, Out>*>(create_mlcoupling_object<In, Out>(application_class_name, application_params, module_instances, create_instance_mlcouplingapplication<In, Out>));
+            }
             if (application) {
                 module_instances[resolve_application_class_name(application_class_name)] = std::make_pair(0, static_cast<void*>(application));
             } else {
@@ -424,7 +566,195 @@ MLCoupling<In, Out>* create_mlcoupling_from_config(const std::string &config_str
 }
 
 template <typename In, typename Out>
+MLCoupling<In, Out>* create_mlcoupling_from_config(const std::string &config_str, MLCouplingData<In> input_data, MLCouplingData<Out> output_data) {
+    return create_mlcoupling_from_config(config_str, std::move(input_data), std::move(output_data), ConfigCastMode::Relaxed);
+}
+
+template <typename In, typename Out>
+MLCoupling<In, Out>* create_mlcoupling_from_config(const std::string &config_str,
+                                                   MLCouplingData<In> input_data,
+                                                   MLCouplingData<Out> output_data,
+                                                   ConfigCastMode cast_mode) {
+    MLCouplingData<In> input_data_after_preprocessing = input_data;
+    MLCouplingData<Out> output_data_before_postprocessing = output_data;
+    return create_mlcoupling_from_config_impl<In, Out>(config_str,
+                                                       std::move(input_data),
+                                                       std::move(output_data),
+                                                       std::move(input_data_after_preprocessing),
+                                                       std::move(output_data_before_postprocessing),
+                                                       true,
+                                                       cast_mode,
+                                                       ConfigOverrides{});
+}
+
+template <typename In, typename Out>
+MLCoupling<In, Out>* create_mlcoupling_from_config(const std::string &config_str,
+                                                   MLCouplingData<In> input_data,
+                                                   MLCouplingData<Out> output_data,
+                                                   const ConfigOverrides& overrides) {
+    return create_mlcoupling_from_config(config_str,
+                                         std::move(input_data),
+                                         std::move(output_data),
+                                         ConfigCastMode::Relaxed,
+                                         overrides);
+}
+
+template <typename In, typename Out>
+MLCoupling<In, Out>* create_mlcoupling_from_config(const std::string &config_str,
+                                                   MLCouplingData<In> input_data,
+                                                   MLCouplingData<Out> output_data,
+                                                   ConfigCastMode cast_mode,
+                                                   const ConfigOverrides& overrides) {
+    MLCouplingData<In> input_data_after_preprocessing = input_data;
+    MLCouplingData<Out> output_data_before_postprocessing = output_data;
+    return create_mlcoupling_from_config_impl<In, Out>(config_str,
+                                                       std::move(input_data),
+                                                       std::move(output_data),
+                                                       std::move(input_data_after_preprocessing),
+                                                       std::move(output_data_before_postprocessing),
+                                                       true,
+                                                       cast_mode,
+                                                       overrides);
+}
+
+template <typename In, typename Out>
+MLCoupling<In, Out>* create_mlcoupling_from_config(const std::string &config_str,
+                                                   MLCouplingData<In> input_data,
+                                                   MLCouplingData<Out> output_data,
+                                                   MLCouplingData<In> input_data_after_preprocessing,
+                                                   MLCouplingData<Out> output_data_before_postprocessing) {
+    return create_mlcoupling_from_config(config_str,
+                                         std::move(input_data),
+                                         std::move(output_data),
+                                         std::move(input_data_after_preprocessing),
+                                         std::move(output_data_before_postprocessing),
+                                         ConfigCastMode::Relaxed);
+}
+
+template <typename In, typename Out>
+MLCoupling<In, Out>* create_mlcoupling_from_config(const std::string &config_str,
+                                                   MLCouplingData<In> input_data,
+                                                   MLCouplingData<Out> output_data,
+                                                   MLCouplingData<In> input_data_after_preprocessing,
+                                                   MLCouplingData<Out> output_data_before_postprocessing,
+                                                   ConfigCastMode cast_mode) {
+    return create_mlcoupling_from_config(config_str,
+                                         std::move(input_data),
+                                         std::move(output_data),
+                                         std::move(input_data_after_preprocessing),
+                                         std::move(output_data_before_postprocessing),
+                                         cast_mode,
+                                         ConfigOverrides{});
+}
+
+template <typename In, typename Out>
+MLCoupling<In, Out>* create_mlcoupling_from_config(const std::string &config_str,
+                                                   MLCouplingData<In> input_data,
+                                                   MLCouplingData<Out> output_data,
+                                                   MLCouplingData<In> input_data_after_preprocessing,
+                                                   MLCouplingData<Out> output_data_before_postprocessing,
+                                                   ConfigCastMode cast_mode,
+                                                   const ConfigOverrides& overrides) {
+    return create_mlcoupling_from_config_impl<In, Out>(config_str,
+                                                       std::move(input_data),
+                                                       std::move(output_data),
+                                                       std::move(input_data_after_preprocessing),
+                                                       std::move(output_data_before_postprocessing),
+                                                       false,
+                                                       cast_mode,
+                                                       overrides);
+}
+
+template <typename In, typename Out>
 MLCoupling<In, Out>* create_mlcoupling_from_config_file(const std::string &config_file_path, MLCouplingData<In> input_data, MLCouplingData<Out> output_data) {
+    return create_mlcoupling_from_config_file<In, Out>(config_file_path,
+                                                       std::move(input_data),
+                                                       std::move(output_data),
+                                                       ConfigCastMode::Relaxed);
+}
+
+template <typename In, typename Out>
+MLCoupling<In, Out>* create_mlcoupling_from_config_file(const std::string &config_file_path,
+                                                        MLCouplingData<In> input_data,
+                                                        MLCouplingData<Out> output_data,
+                                                        ConfigCastMode cast_mode) {
+    MLCouplingData<In> input_data_after_preprocessing = input_data;
+    MLCouplingData<Out> output_data_before_postprocessing = output_data;
+    return create_mlcoupling_from_config_file<In, Out>(config_file_path,
+                                                       std::move(input_data),
+                                                       std::move(output_data),
+                                                       std::move(input_data_after_preprocessing),
+                                                       std::move(output_data_before_postprocessing),
+                                                       cast_mode);
+}
+
+template <typename In, typename Out>
+MLCoupling<In, Out>* create_mlcoupling_from_config_file(const std::string &config_file_path,
+                                                        MLCouplingData<In> input_data,
+                                                        MLCouplingData<Out> output_data,
+                                                        const ConfigOverrides& overrides) {
+    return create_mlcoupling_from_config_file<In, Out>(config_file_path,
+                                                       std::move(input_data),
+                                                       std::move(output_data),
+                                                       ConfigCastMode::Relaxed,
+                                                       overrides);
+}
+
+template <typename In, typename Out>
+MLCoupling<In, Out>* create_mlcoupling_from_config_file(const std::string &config_file_path,
+                                                        MLCouplingData<In> input_data,
+                                                        MLCouplingData<Out> output_data,
+                                                        ConfigCastMode cast_mode,
+                                                        const ConfigOverrides& overrides) {
+    MLCouplingData<In> input_data_after_preprocessing = input_data;
+    MLCouplingData<Out> output_data_before_postprocessing = output_data;
+    return create_mlcoupling_from_config_file<In, Out>(config_file_path,
+                                                       std::move(input_data),
+                                                       std::move(output_data),
+                                                       std::move(input_data_after_preprocessing),
+                                                       std::move(output_data_before_postprocessing),
+                                                       cast_mode,
+                                                       overrides);
+}
+
+template <typename In, typename Out>
+MLCoupling<In, Out>* create_mlcoupling_from_config_file(const std::string &config_file_path,
+                                                        MLCouplingData<In> input_data,
+                                                        MLCouplingData<Out> output_data,
+                                                        MLCouplingData<In> input_data_after_preprocessing,
+                                                        MLCouplingData<Out> output_data_before_postprocessing) {
+    return create_mlcoupling_from_config_file<In, Out>(config_file_path,
+                                                       std::move(input_data),
+                                                       std::move(output_data),
+                                                       std::move(input_data_after_preprocessing),
+                                                       std::move(output_data_before_postprocessing),
+                                                       ConfigCastMode::Relaxed);
+}
+
+template <typename In, typename Out>
+MLCoupling<In, Out>* create_mlcoupling_from_config_file(const std::string &config_file_path,
+                                                        MLCouplingData<In> input_data,
+                                                        MLCouplingData<Out> output_data,
+                                                        MLCouplingData<In> input_data_after_preprocessing,
+                                                        MLCouplingData<Out> output_data_before_postprocessing,
+                                                        ConfigCastMode cast_mode) {
+    return create_mlcoupling_from_config_file<In, Out>(config_file_path,
+                                                       std::move(input_data),
+                                                       std::move(output_data),
+                                                       std::move(input_data_after_preprocessing),
+                                                       std::move(output_data_before_postprocessing),
+                                                       cast_mode,
+                                                       ConfigOverrides{});
+}
+
+template <typename In, typename Out>
+MLCoupling<In, Out>* create_mlcoupling_from_config_file(const std::string &config_file_path,
+                                                        MLCouplingData<In> input_data,
+                                                        MLCouplingData<Out> output_data,
+                                                        MLCouplingData<In> input_data_after_preprocessing,
+                                                        MLCouplingData<Out> output_data_before_postprocessing,
+                                                        ConfigCastMode cast_mode,
+                                                        const ConfigOverrides& overrides) {
     // Open and read the file content
     std::ifstream file(config_file_path);
     if (!file.is_open()) {
@@ -433,5 +763,11 @@ MLCoupling<In, Out>* create_mlcoupling_from_config_file(const std::string &confi
     std::string config_str((std::istreambuf_iterator<char>(file)),
                             std::istreambuf_iterator<char>());
     file.close();
-    return create_mlcoupling_from_config<In, Out>(config_str, input_data, output_data);
+    return create_mlcoupling_from_config<In, Out>(config_str,
+                                                  std::move(input_data),
+                                                  std::move(output_data),
+                                                  std::move(input_data_after_preprocessing),
+                                                  std::move(output_data_before_postprocessing),
+                                                  cast_mode,
+                                                  overrides);
 }

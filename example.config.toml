@@ -2,14 +2,12 @@
 log_level = "info"
 
 [provider]
-# Smartsim default parameters: std::string host = "localhost", int port = 6379, int nodes = 1, int tasks_per_node = 1, int cpus_per_task = 1, int gpus_per_task = 0
 class = "Smartsim"
-port = 6379
-host = "localhost"
-nodes = 2
-tasks_per_node = 4
-cpus_per_task = 2
-gpus_per_task = 0
+device = "CPU"
+model_backend = "TORCH"
+model_path = "/hpcwork/ro092286/smartsim/mini_app/train_models/best_model_field_jit_watercnn.pt"
+model_name = "watercnn"
+
 
 [normalization]
 class="minmax"

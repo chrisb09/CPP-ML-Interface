@@ -1,0 +1,7 @@
+[submodule "extern/AIxeleratorService"]
+	path = extern/AIxeleratorService
+	url = git@github.com:chrisb09/AIxeleratorService.git
+[submodule "extern/SmartRedis"]
+	path = extern/SmartRedis
+	url = https://github.com/CrayLabs/SmartRedis.git
+	branch = develop

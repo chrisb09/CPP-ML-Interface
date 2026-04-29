@@ -1,6 +1,8 @@
 #pragma once
 
 #include <type_traits>
+#include <numeric>
+#include <functional>
 
 #include "ml_coupling_normalization.hpp"
 
@@ -51,14 +53,15 @@ class MLCouplingMinMaxNormalization : public MLCouplingNormalization<In, Out> {
             // Compute min and max for input data
             input_min = std::numeric_limits<In>::max();
             input_max = std::numeric_limits<In>::lowest();
-            for (const auto& data_ptr : input_data.data) {
-                // data is std::vector<In*>, so data_ptr is In*
-                if (data_ptr != nullptr) {
-                    if (*data_ptr < input_min) {
-                        input_min = *data_ptr;
+            for (size_t tensor_idx = 0; tensor_idx < input_data.size(); ++tensor_idx) {
+                const auto& tensor = input_data[tensor_idx];
+                for (size_t i = 0; i < tensor.numel(); ++i) {
+                    const In value = tensor.at_linear(i);
+                    if (value < input_min) {
+                        input_min = value;
                     }
-                    if (*data_ptr > input_max) {
-                        input_max = *data_ptr;
+                    if (value > input_max) {
+                        input_max = value;
                     }
                 }
             }
@@ -66,14 +69,15 @@ class MLCouplingMinMaxNormalization : public MLCouplingNormalization<In, Out> {
             // Compute min and max for output data
             output_min = std::numeric_limits<Out>::max();
             output_max = std::numeric_limits<Out>::lowest();
-            for (const auto& data_ptr : output_data.data) {
-                // data is std::vector<Out*>, so data_ptr is Out*
-                if (data_ptr != nullptr) {
-                    if (*data_ptr < output_min) {
-                        output_min = *data_ptr;
+            for (size_t tensor_idx = 0; tensor_idx < output_data.size(); ++tensor_idx) {
+                const auto& tensor = output_data[tensor_idx];
+                for (size_t i = 0; i < tensor.numel(); ++i) {
+                    const Out value = tensor.at_linear(i);
+                    if (value < output_min) {
+                        output_min = value;
                     }
-                    if (*data_ptr > output_max) {
-                        output_max = *data_ptr;
+                    if (value > output_max) {
+                        output_max = value;
                     }
                 }
             }
@@ -87,10 +91,11 @@ class MLCouplingMinMaxNormalization : public MLCouplingNormalization<In, Out> {
         }
 
         void normalize_input(MLCouplingData<In> input_data) override {
-            // input_data.data is std::vector<In*>, so we dereference each pointer
-            for (auto& data_ptr : input_data.data) {
-                if (data_ptr != nullptr) {
-                    *data_ptr = (*data_ptr - input_min) / (input_max - input_min);
+            for (size_t tensor_idx = 0; tensor_idx < input_data.size(); ++tensor_idx) {
+                auto& tensor = input_data[tensor_idx];
+                for (size_t i = 0; i < tensor.numel(); ++i) {
+                    const In value = tensor.at_linear(i);
+                    tensor.set_linear(i, (value - input_min) / (input_max - input_min));
                 }
             }
         }
@@ -103,10 +108,11 @@ class MLCouplingMinMaxNormalization : public MLCouplingNormalization<In, Out> {
         }
 
         void denormalize_output(MLCouplingData<Out> output_data) override {
-            // output_data.data is std::vector<Out*>, so we dereference each pointer
-            for (auto& data_ptr : output_data.data) {
-                if (data_ptr != nullptr) {
-                    *data_ptr = *data_ptr * (output_max - output_min) + output_min;
+            for (size_t tensor_idx = 0; tensor_idx < output_data.size(); ++tensor_idx) {
+                auto& tensor = output_data[tensor_idx];
+                for (size_t i = 0; i < tensor.numel(); ++i) {
+                    const Out value = tensor.at_linear(i);
+                    tensor.set_linear(i, value * (output_max - output_min) + output_min);
                 }
             }
         }
@@ -125,9 +131,3 @@ class MLCouplingMinMaxNormalization : public MLCouplingNormalization<In, Out> {
         Out output_min;
         Out output_max;
 };
-
-template <typename In, typename Out>
-std::ostream& operator<<(std::ostream& os, const MLCouplingNormalization<In, Out>& norm) {
-    norm.print(os);
-    return os;
-}

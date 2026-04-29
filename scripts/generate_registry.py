@@ -11,10 +11,14 @@ Usage:
 
 import sys
 import os
-import clang.cindex
 import errno
 import shlex
 import re
+
+try:
+    import clang.cindex
+except ModuleNotFoundError:
+    clang = None
 
 
 # =============================================================================
@@ -23,6 +27,11 @@ import re
 
 def init_libclang():
     """Initialize libclang, trying multiple common paths if needed."""
+    if clang is None:
+        raise ModuleNotFoundError(
+            "The Python 'clang' module is required to generate the registry. "
+            "Install it or run the generator in the project environment."
+        )
     try:
         return clang.cindex.Index.create()
     except clang.cindex.LibclangError:
@@ -113,28 +122,149 @@ def get_class_constructors(node, class_name):
     Returns: list of constructors, each as [(param_type, param_name, default_value), ...]
     """
     constructors = []
+    any_constructor_seen = False
+    header_path = str(node.location.file) if node.location and node.location.file else None
     
     for child in node.get_children():
         if child.kind != clang.cindex.CursorKind.CONSTRUCTOR: # type: ignore
             continue
+
+        any_constructor_seen = True
+
+        source_access = None
+        if header_path and child.location and child.location.line:
+            source_access = _get_member_access_from_source(node, header_path, child.location.line)
+
+        if source_access is not None:
+            if source_access != "public":
+                continue
+        else:
+            access = getattr(child, 'access_specifier', None)
+            if access != clang.cindex.AccessSpecifier.PUBLIC: # type: ignore
+                continue
         
         params = []
         for param in child.get_children():
             if param.kind != clang.cindex.CursorKind.PARM_DECL: # type: ignore
                 continue
             
-            param_type = param.type.spelling if param.type else "unknown"
             param_name = param.spelling or "unnamed"
+            param_type = _extract_param_type(param, param_name)
             default_value = _extract_default_value(param)
             params.append((param_type, param_name, default_value))
         
         constructors.append(params)
     
-    if not constructors:
+    if not constructors and not any_constructor_seen:
         constructors.append([])  # Default constructor
     
     _print_constructors(class_name, constructors)
     return constructors
+
+
+def _get_member_access_from_source(class_node, header_path, member_line):
+    """Best-effort source-based access resolution for a member line within a class body.
+    Returns 'public'/'private'/'protected' or None if it cannot be determined.
+    """
+    try:
+        with open(header_path, 'r') as f:
+            lines = f.readlines()
+    except Exception:
+        return None
+
+    if not class_node.location or not class_node.location.line:
+        return None
+
+    start_idx = max(0, class_node.location.line - 1)
+    class_name = class_node.spelling
+
+    class_decl_pattern = rf"\b(class|struct)\s+{re.escape(class_name)}\b"
+    decl_idx = None
+    for i in range(start_idx, min(len(lines), start_idx + 60)):
+        if re.search(class_decl_pattern, lines[i]):
+            decl_idx = i
+            break
+    if decl_idx is None:
+        decl_idx = start_idx
+
+    open_idx = None
+    for i in range(decl_idx, len(lines)):
+        if '{' in lines[i]:
+            open_idx = i
+            break
+        if ';' in lines[i]:
+            return None
+    if open_idx is None:
+        return None
+
+    decl_text = ''.join(lines[decl_idx:open_idx + 1])
+    default_access = 'public' if re.search(rf"\bstruct\s+{re.escape(class_name)}\b", decl_text) else 'private'
+
+    depth = 0
+    access = default_access
+
+    for line_idx in range(open_idx, len(lines)):
+        line = lines[line_idx]
+
+        if depth == 1:
+            m = re.match(r'\s*(public|private|protected)\s*:\s*$', line)
+            if m:
+                access = m.group(1)
+
+        for ch in line:
+            if ch == '{':
+                depth += 1
+            elif ch == '}':
+                depth -= 1
+                if depth <= 0:
+                    return None
+
+        if depth == 1 and (line_idx + 1) == member_line:
+            return access
+
+    return None
+
+
+def _extract_param_type(param_node, param_name):
+    """Recover the declared parameter type, preferring source tokens over clang spelling."""
+    try:
+        param_tokens = [t.spelling for t in param_node.get_tokens()]
+        reconstructed = _extract_param_type_from_tokens(param_tokens, param_name)
+        if reconstructed:
+            return reconstructed
+    except Exception:
+        pass
+
+    return param_node.type.spelling if param_node.type else "unknown"
+
+
+def _extract_param_type_from_tokens(param_tokens, param_name):
+    """Extract the parameter type from full parameter tokens."""
+    if not param_tokens or not param_name:
+        return None
+
+    cutoff = len(param_tokens)
+    if '=' in param_tokens:
+        cutoff = param_tokens.index('=')
+
+    type_tokens = param_tokens[:cutoff]
+    for idx in range(len(type_tokens) - 1, -1, -1):
+        if type_tokens[idx] == param_name:
+            type_tokens = type_tokens[:idx]
+            break
+
+    value = ' '.join(type_tokens).strip()
+    if not value:
+        return None
+
+    value = re.sub(r'\s*::\s*', '::', value)
+    value = re.sub(r'\s*<\s*', '<', value)
+    value = re.sub(r'\s*>\s*', '>', value)
+    value = re.sub(r'\s*,\s*', ', ', value)
+    value = re.sub(r'\s*&\s*', '&', value)
+    value = re.sub(r'\s*\*\s*', '*', value)
+    value = re.sub(r'\s+', ' ', value).strip()
+    return value or None
 
 
 def _extract_default_value(param_node):
@@ -155,7 +285,7 @@ def _extract_default_value(param_node):
             try:
                 tokens = list(child.get_tokens())
                 if tokens:
-                    value = ' '.join(t.spelling for t in tokens).strip()
+                    value = _normalize_default_value_text(' '.join(t.spelling for t in tokens))
                     if value and value != "=":
                         return value
             except Exception:
@@ -166,7 +296,7 @@ def _extract_default_value(param_node):
     # This handles cases where libclang exposes only "=" as an unexposed expression.
     try:
         param_tokens = [t.spelling for t in param_node.get_tokens()]
-        value = _extract_default_from_param_tokens(param_tokens)
+        value = _normalize_default_value_text(_extract_default_from_param_tokens(param_tokens))
         if value:
             return value
     except Exception:
@@ -175,16 +305,30 @@ def _extract_default_value(param_node):
     return None
 
 
+def _normalize_default_value_text(value):
+    """Normalize extracted default expressions to valid RHS-only code."""
+    if value is None:
+        return None
+
+    value = value.strip()
+    value = re.sub(r'^(?:=\s*)+', '', value)
+    return value or None
+
+
 def _extract_default_from_param_tokens(param_tokens):
     """Extract default expression RHS from full parameter token sequence."""
     if not param_tokens or '=' not in param_tokens:
         return None
 
     eq_idx = param_tokens.index('=')
+    start_idx = eq_idx + 1
+    while start_idx < len(param_tokens) and param_tokens[start_idx] == '=':
+        start_idx += 1
+
     rhs_tokens = []
     paren = bracket = brace = angle = 0
 
-    for tok in param_tokens[eq_idx + 1:]:
+    for tok in param_tokens[start_idx:]:
         # Stop at parameter separators / end-of-parameter-list at top-level.
         if tok == ',' and paren == bracket == brace == angle == 0:
             break
@@ -210,7 +354,7 @@ def _extract_default_from_param_tokens(param_tokens):
         elif tok == '>' and paren == 0 and bracket == 0 and brace == 0:
             angle = max(0, angle - 1)
 
-    value = ' '.join(rhs_tokens).strip()
+    value = _normalize_default_value_text(' '.join(rhs_tokens))
     if value and value != "=":
         return value
     return None
@@ -236,8 +380,16 @@ def _print_constructors(class_name, constructors):
 # Inheritance Detection
 # =============================================================================
 
-def is_subclass_of(node, base_name):
-    """Check if node directly inherits from base_name using AST."""
+def is_subclass_of(node, base_name, seen=None):
+    """Check if node inherits from base_name using AST, following intermediate bases."""
+    if seen is None:
+        seen = set()
+
+    node_id = node.hash if hasattr(node, 'hash') else id(node)
+    if node_id in seen:
+        return False
+    seen.add(node_id)
+
     for child in node.get_children():
         if child.kind != clang.cindex.CursorKind.CXX_BASE_SPECIFIER: # type: ignore
             continue
@@ -262,6 +414,13 @@ def is_subclass_of(node, base_name):
             simple = name.split('::')[-1]
             if simple == base_name or name == base_name:
                 return True
+
+        try:
+            decl = child.type.get_declaration()
+            if decl and decl.spelling and is_subclass_of(decl, base_name, seen):
+                return True
+        except Exception:
+            pass
     return False
 
 
@@ -275,6 +434,60 @@ def text_inherits(header_path, node_name, base_name):
     
     pattern = rf"class\s+{re.escape(node_name)}[^{{]*:\s*[^{{;]*\b{re.escape(base_name)}\b"
     return re.search(pattern, txt, flags=re.MULTILINE | re.DOTALL) is not None
+
+
+def class_body_contains_pure_virtual(node, header_path):
+    """Return True if the class body text contains an explicit pure-virtual declaration."""
+    if not node.location or not node.location.line:
+        return False
+
+    try:
+        with open(header_path, 'r') as f:
+            lines = f.readlines()
+    except Exception:
+        return False
+
+    start_line = max(0, node.location.line - 1)
+    text = ''.join(lines[start_line:])
+    class_match = re.search(
+        rf"\b(class|struct)\s+{re.escape(node.spelling)}\b.*?\{{",
+        text,
+        flags=re.MULTILINE | re.DOTALL,
+    )
+    if not class_match:
+        return False
+
+    body_start = class_match.end()
+    depth = 1
+    idx = body_start
+    while idx < len(text) and depth > 0:
+        if text[idx] == '{':
+            depth += 1
+        elif text[idx] == '}':
+            depth -= 1
+        idx += 1
+
+    body = text[body_start:idx - 1] if depth == 0 else text[body_start:]
+    pure_virtual_pattern = (
+        r"\bvirtual\b[\s\S]*?\)\s*"
+        r"(?:const\s*)?"
+        r"(?:noexcept(?:\s*\([^)]*\))?\s*)?"
+        r"(?:override\s*)?"
+        r"(?:final\s*)?"
+        r"=\s*0\s*;"
+    )
+    return re.search(pure_virtual_pattern, body, flags=re.MULTILINE) is not None
+
+
+def is_effectively_abstract(node, header_path):
+    """Best-effort abstract-class detection, including template classes."""
+    try:
+        if node.is_abstract_record():
+            return True
+    except Exception:
+        pass
+
+    return class_body_contains_pure_virtual(node, header_path)
 
 
 def is_base_class_declaration(node, class_name, current_file):
@@ -360,6 +573,13 @@ def _normalize_type_for_display(typ: str) -> str:
     return typ
 
 
+def _strip_cvref(param_type: str) -> str:
+    """Strip top-level const/volatile and reference qualifiers from a type string."""
+    clean_type = re.sub(r'\s*(const|volatile)\s+', '', param_type)
+    clean_type = re.sub(r'([*&]+)\s*$', '', clean_type).strip()
+    return re.sub(r"\s+", " ", clean_type).strip()
+
+
 # =============================================================================
 # Code Generation
 # =============================================================================
@@ -367,7 +587,7 @@ def _normalize_type_for_display(typ: str) -> str:
 def write_includes(f, base_classes, base_classes_found, found_classes):
     """Generate #include statements."""
     f.write("#pragma once\n\n")
-    f.write("#include <string>\n#include <vector>\n#include <unordered_map>\n#include <iostream>\n#include <typeinfo>\n\n")
+    f.write("#include <string>\n#include <vector>\n#include <unordered_map>\n#include <iostream>\n#include <typeinfo>\n#include <type_traits>\n#include <limits>\n#include <cmath>\n#include <algorithm>\n#include <cctype>\n\n")
     
     # Base class includes
     for base_class in base_classes:
@@ -686,23 +906,156 @@ def write_type_identification_functions(f, base_classes, template_parameters, fo
 
 def write_config_param_cast_helper(f):
     """Generate a template helper that casts a typed void* to a target type at runtime."""
+    f.write("enum class ConfigCastMode : int { Strict, Relaxed };\n\n")
+    f.write("inline ConfigCastMode& config_cast_mode_storage() {\n")
+    f.write("    static ConfigCastMode mode = ConfigCastMode::Relaxed;\n")
+    f.write("    return mode;\n")
+    f.write("}\n\n")
+    f.write("inline void set_config_cast_mode(ConfigCastMode mode) {\n")
+    f.write("    config_cast_mode_storage() = mode;\n")
+    f.write("}\n\n")
+    f.write("inline ConfigCastMode get_config_cast_mode() {\n")
+    f.write("    return config_cast_mode_storage();\n")
+    f.write("}\n\n")
+    f.write("inline std::string config_cast_to_lower(std::string value) {\n")
+    f.write("    std::transform(value.begin(), value.end(), value.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });\n")
+    f.write("    return value;\n")
+    f.write("}\n\n")
+    f.write("inline bool config_try_parse_bool(const std::string& value, bool& out) {\n")
+    f.write("    auto lower = config_cast_to_lower(value);\n")
+    f.write("    if (lower == \"true\" || lower == \"1\") { out = true; return true; }\n")
+    f.write("    if (lower == \"false\" || lower == \"0\") { out = false; return true; }\n")
+    f.write("    return false;\n")
+    f.write("}\n\n")
+    f.write("template<typename T>\n")
+    f.write("inline T config_cast_from_int64(int64_t value, ConfigCastMode mode) {\n")
+    f.write("    if constexpr (std::is_same_v<T, bool>) {\n")
+    f.write("        if (mode == ConfigCastMode::Strict && value != 0 && value != 1) {\n")
+    f.write("            throw std::runtime_error(\"Strict cast failed: int64_t to bool requires 0 or 1.\");\n")
+    f.write("        }\n")
+    f.write("        return value != 0;\n")
+    f.write("    } else if constexpr (std::is_integral_v<T>) {\n")
+    f.write("        if (value < static_cast<int64_t>(std::numeric_limits<T>::min()) || value > static_cast<int64_t>(std::numeric_limits<T>::max())) {\n")
+    f.write("            throw std::runtime_error(\"Cast failed: int64_t value out of range for target integral type.\");\n")
+    f.write("        }\n")
+    f.write("        return static_cast<T>(value);\n")
+    f.write("    } else if constexpr (std::is_floating_point_v<T>) {\n")
+    f.write("        return static_cast<T>(value);\n")
+    f.write("    } else if constexpr (std::is_same_v<T, std::string>) {\n")
+    f.write("        if (mode == ConfigCastMode::Strict) {\n")
+    f.write("            throw std::runtime_error(\"Strict cast failed: int64_t to string is not allowed.\");\n")
+    f.write("        }\n")
+    f.write("        return std::to_string(value);\n")
+    f.write("    }\n")
+    f.write("    throw std::runtime_error(\"Unsupported target type for int64_t config cast.\");\n")
+    f.write("}\n\n")
+    f.write("template<typename T>\n")
+    f.write("inline T config_cast_from_double(double value, ConfigCastMode mode) {\n")
+    f.write("    if constexpr (std::is_same_v<T, bool>) {\n")
+    f.write("        if (mode == ConfigCastMode::Strict && value != 0.0 && value != 1.0) {\n")
+    f.write("            throw std::runtime_error(\"Strict cast failed: double to bool requires 0.0 or 1.0.\");\n")
+    f.write("        }\n")
+    f.write("        return value != 0.0;\n")
+    f.write("    } else if constexpr (std::is_integral_v<T>) {\n")
+    f.write("        if (mode == ConfigCastMode::Strict && std::floor(value) != value) {\n")
+    f.write("            throw std::runtime_error(\"Strict cast failed: double to integral requires an integer-valued source.\");\n")
+    f.write("        }\n")
+    f.write("        if (value < static_cast<double>(std::numeric_limits<T>::min()) || value > static_cast<double>(std::numeric_limits<T>::max())) {\n")
+    f.write("            throw std::runtime_error(\"Cast failed: double value out of range for target integral type.\");\n")
+    f.write("        }\n")
+    f.write("        return static_cast<T>(value);\n")
+    f.write("    } else if constexpr (std::is_floating_point_v<T>) {\n")
+    f.write("        if constexpr (std::is_same_v<T, float>) {\n")
+    f.write("            if (mode == ConfigCastMode::Strict && (value < -std::numeric_limits<float>::max() || value > std::numeric_limits<float>::max())) {\n")
+    f.write("                throw std::runtime_error(\"Strict cast failed: double out of range for float.\");\n")
+    f.write("            }\n")
+    f.write("        }\n")
+    f.write("        return static_cast<T>(value);\n")
+    f.write("    } else if constexpr (std::is_same_v<T, std::string>) {\n")
+    f.write("        if (mode == ConfigCastMode::Strict) {\n")
+    f.write("            throw std::runtime_error(\"Strict cast failed: double to string is not allowed.\");\n")
+    f.write("        }\n")
+    f.write("        return std::to_string(value);\n")
+    f.write("    }\n")
+    f.write("    throw std::runtime_error(\"Unsupported target type for double config cast.\");\n")
+    f.write("}\n\n")
+    f.write("template<typename T>\n")
+    f.write("inline T config_cast_from_bool(bool value, ConfigCastMode mode) {\n")
+    f.write("    if constexpr (std::is_same_v<T, bool>) {\n")
+    f.write("        return value;\n")
+    f.write("    } else if constexpr (std::is_integral_v<T> || std::is_floating_point_v<T>) {\n")
+    f.write("        if (mode == ConfigCastMode::Strict) {\n")
+    f.write("            throw std::runtime_error(\"Strict cast failed: bool to numeric is not allowed.\");\n")
+    f.write("        }\n")
+    f.write("        return static_cast<T>(value ? 1 : 0);\n")
+    f.write("    } else if constexpr (std::is_same_v<T, std::string>) {\n")
+    f.write("        if (mode == ConfigCastMode::Strict) {\n")
+    f.write("            throw std::runtime_error(\"Strict cast failed: bool to string is not allowed.\");\n")
+    f.write("        }\n")
+    f.write("        return value ? std::string(\"true\") : std::string(\"false\");\n")
+    f.write("    }\n")
+    f.write("    throw std::runtime_error(\"Unsupported target type for bool config cast.\");\n")
+    f.write("}\n\n")
+    f.write("template<typename T>\n")
+    f.write("inline T config_cast_from_string(const std::string& value, ConfigCastMode mode) {\n")
+    f.write("    if constexpr (std::is_same_v<T, std::string>) {\n")
+    f.write("        return value;\n")
+    f.write("    }\n")
+    f.write("\n")
+    f.write("    if (mode == ConfigCastMode::Strict) {\n")
+    f.write("        throw std::runtime_error(\"Strict cast failed: string source only supports std::string target.\");\n")
+    f.write("    }\n")
+    f.write("\n")
+    f.write("    if constexpr (std::is_same_v<T, bool>) {\n")
+    f.write("        bool parsed = false;\n")
+    f.write("        if (!config_try_parse_bool(value, parsed)) {\n")
+    f.write("            throw std::runtime_error(\"Relaxed cast failed: could not parse string as bool: \" + value);\n")
+    f.write("        }\n")
+    f.write("        return parsed;\n")
+    f.write("    }\n")
+    f.write("\n")
+    f.write("    if constexpr (std::is_integral_v<T>) {\n")
+    f.write("        size_t pos = 0;\n")
+    f.write("        long long parsed = std::stoll(value, &pos);\n")
+    f.write("        if (pos != value.size()) {\n")
+    f.write("            throw std::runtime_error(\"Relaxed cast failed: trailing characters in integral string: \" + value);\n")
+    f.write("        }\n")
+    f.write("        if (parsed < static_cast<long long>(std::numeric_limits<T>::min()) || parsed > static_cast<long long>(std::numeric_limits<T>::max())) {\n")
+    f.write("            throw std::runtime_error(\"Relaxed cast failed: parsed integer out of target range.\");\n")
+    f.write("        }\n")
+    f.write("        return static_cast<T>(parsed);\n")
+    f.write("    }\n")
+    f.write("\n")
+    f.write("    if constexpr (std::is_floating_point_v<T>) {\n")
+    f.write("        size_t pos = 0;\n")
+    f.write("        double parsed = std::stod(value, &pos);\n")
+    f.write("        if (pos != value.size()) {\n")
+    f.write("            throw std::runtime_error(\"Relaxed cast failed: trailing characters in floating string: \" + value);\n")
+    f.write("        }\n")
+    f.write("        return static_cast<T>(parsed);\n")
+    f.write("    }\n")
+    f.write("\n")
+    f.write("    throw std::runtime_error(\"Unsupported target type for string config cast.\");\n")
+    f.write("}\n\n")
     f.write("// Helper to extract and cast a config parameter based on its runtime type tag.\n")
     f.write("// Type tags: 0 = no static cast, 1 = int64_t, 2 = double, 3 = std::string (char*), 4 = bool\n")
     f.write("template<typename T>\n")
     f.write("T config_param_cast(const std::pair<int, void*>& param) {\n")
+    f.write("    const auto mode = get_config_cast_mode();\n")
     f.write("    switch (param.first) {\n")
-    f.write("        case 0: return *reinterpret_cast<T*>(param.second); // No static cast, just reinterpret\n")
-    f.write("        case 1: return static_cast<T>(*reinterpret_cast<int64_t*>(param.second));\n")
-    f.write("        case 2: return static_cast<T>(*reinterpret_cast<double*>(param.second));\n")
-    f.write("        case 4: return static_cast<T>(*reinterpret_cast<bool*>(param.second));\n")
-    f.write("        default: throw std::runtime_error(\"Unsupported type tag for numeric cast: \" + std::to_string(param.first));\n")
+    f.write("        case 0:\n")
+    f.write("            return *reinterpret_cast<T*>(param.second); // No static cast, just reinterpret\n")
+    f.write("        case 1:\n")
+    f.write("            return config_cast_from_int64<T>(*reinterpret_cast<int64_t*>(param.second), mode);\n")
+    f.write("        case 2:\n")
+    f.write("            return config_cast_from_double<T>(*reinterpret_cast<double*>(param.second), mode);\n")
+    f.write("        case 3:\n")
+    f.write("            return config_cast_from_string<T>(std::string(reinterpret_cast<char*>(param.second)), mode);\n")
+    f.write("        case 4:\n")
+    f.write("            return config_cast_from_bool<T>(*reinterpret_cast<bool*>(param.second), mode);\n")
+    f.write("        default:\n")
+    f.write("            throw std::runtime_error(\"Unsupported type tag for config cast: \" + std::to_string(param.first));\n")
     f.write("    }\n")
-    f.write("}\n\n")
-    f.write("// Specialization for std::string\n")
-    f.write("template<>\n")
-    f.write("inline std::string config_param_cast<std::string>(const std::pair<int, void*>& param) {\n")
-    f.write("    if (param.first == 3) return std::string(reinterpret_cast<char*>(param.second));\n")
-    f.write("    throw std::runtime_error(\"Expected string (type tag 3), got: \" + std::to_string(param.first));\n")
     f.write("}\n\n")
 
 
@@ -744,10 +1097,14 @@ def _is_pointer_to_known_class(param_type):
     return base_type not in primitives and not base_type.startswith('std::')
 
 
+def _is_reference_type(param_type):
+    """Check if parameter type is an lvalue/rvalue reference."""
+    return param_type.strip().endswith('&')
+
+
 def _can_use_config_param_cast(param_type):
     """Return True if parameter type is supported by config_param_cast<T>."""
-    clean_type = re.sub(r'\s*(const|volatile)\s+', '', param_type)
-    clean_type = re.sub(r'[*&]+\s*$', '', clean_type).strip()
+    clean_type = _strip_cvref(param_type)
 
     supported = {
         'bool', 'char',
@@ -797,30 +1154,33 @@ def _write_map_factory(f, base_class, template_str, template_args, category,
             param_args = []
             debug_outputs = []
             for ptype, pname, pdefault in ctor:
+                storage_type = _strip_cvref(ptype)
                 if _is_mlcoupling_data_type(ptype):
                     # For MLCouplingData, cast directly from void* (composite object, no type tag dispatch)
-                    param_args.append(f'*reinterpret_cast<{ptype}*>(parameter.at("{pname}").second)')
-                    debug_outputs.append(f'"{pname}=" << (*reinterpret_cast<{ptype}*>(parameter.at("{pname}").second))')
+                    param_args.append(f'*reinterpret_cast<{storage_type}*>(parameter.at("{pname}").second)')
+                    debug_outputs.append(f'"{pname}=" << (*reinterpret_cast<{storage_type}*>(parameter.at("{pname}").second))')
                 elif _is_pointer_to_known_class(ptype):
-                    # For pointers to known classes (e.g. MLCouplingNormalization<In,Out>*), cast directly
-                    param_args.append(f'*reinterpret_cast<{ptype}*>(parameter.at("{pname}").second)')
-                    debug_outputs.append(f'"{pname}=" << (*reinterpret_cast<{ptype}*>(parameter.at("{pname}").second))')
+                    # For pointers to known classes (e.g. MLCouplingNormalization<In,Out>*),
+                    # the config already stores the raw object pointer in parameter.second.
+                    param_args.append(f'reinterpret_cast<{ptype}>(parameter.at("{pname}").second)')
+                    debug_outputs.append(f'"{pname}=" << reinterpret_cast<{ptype}>(parameter.at("{pname}").second)')
                 elif _can_use_config_param_cast(ptype):
+                    cast_type = storage_type
                     if pdefault:
                         # Parameter with default: check if present, use config_param_cast or default
-                        param_args.append(f'parameter.find("{pname}") != parameter.end() ? config_param_cast<{ptype}>(parameter.at("{pname}")) : ({ptype}){pdefault}')
-                        debug_outputs.append(f'"{pname}=" << (parameter.find("{pname}") != parameter.end() ? config_param_cast<{ptype}>(parameter.at("{pname}")) : ({ptype}){pdefault})')
+                        param_args.append(f'parameter.find("{pname}") != parameter.end() ? config_param_cast<{cast_type}>(parameter.at("{pname}")) : ({cast_type}){pdefault}')
+                        debug_outputs.append(f'"{pname}=" << (parameter.find("{pname}") != parameter.end() ? config_param_cast<{cast_type}>(parameter.at("{pname}")) : ({cast_type}){pdefault})')
                     else:
                         # Required parameter: use config_param_cast
-                        param_args.append(f'config_param_cast<{ptype}>(parameter.at("{pname}"))')
-                        debug_outputs.append(f'"{pname}=" << config_param_cast<{ptype}>(parameter.at("{pname}"))')
+                        param_args.append(f'config_param_cast<{cast_type}>(parameter.at("{pname}"))')
+                        debug_outputs.append(f'"{pname}=" << config_param_cast<{cast_type}>(parameter.at("{pname}"))')
                 elif pdefault:
                     # Opaque/non-primitive parameter with default: pass via typed pointer, fallback to default expression
-                    param_args.append(f'parameter.find("{pname}") != parameter.end() ? *reinterpret_cast<{ptype}*>(parameter.at("{pname}").second) : ({ptype}){pdefault}')
+                    param_args.append(f'parameter.find("{pname}") != parameter.end() ? *reinterpret_cast<{storage_type}*>(parameter.at("{pname}").second) : ({storage_type}){pdefault}')
                     debug_outputs.append(f'"{pname}=<" << (parameter.find("{pname}") != parameter.end() ? "provided" : "default") << ">"')
                 else:
                     # Opaque/non-primitive required parameter: pass via typed pointer
-                    param_args.append(f'*reinterpret_cast<{ptype}*>(parameter.at("{pname}").second)')
+                    param_args.append(f'*reinterpret_cast<{storage_type}*>(parameter.at("{pname}").second)')
                     debug_outputs.append(f'"{pname}=<provided>"')
             
             params_str = ', '.join(param_args)
@@ -904,7 +1264,7 @@ def generate():
                 if not is_sub and node.spelling:
                     is_sub = text_inherits(h, node.spelling, base_class)
 
-                if is_sub and not node.is_abstract_record() and node.spelling:
+                if is_sub and node.spelling and not is_effectively_abstract(node, h):
                     if node.spelling != base_class:
                         # Only process classes defined in the current header file (not included files)
                         node_file = str(node.location.file) if node.location.file else ""

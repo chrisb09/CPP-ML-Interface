@@ -64,6 +64,13 @@ class TestDefaultTokenExtraction(unittest.TestCase):
         value = generate_registry._extract_default_from_param_tokens(tokens)
         self.assertEqual(value, "std :: map < int , std :: vector < int > > { }")
 
+    def test_duplicate_equals_tokens_are_ignored(self):
+        tokens = [
+            "std", "::", "string", "host", "=", "=", "\"localhost\"", ",", "next_param"
+        ]
+        value = generate_registry._extract_default_from_param_tokens(tokens)
+        self.assertEqual(value, "\"localhost\"")
+
 
 if __name__ == "__main__":
     unittest.main()

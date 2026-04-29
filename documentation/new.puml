@@ -13,6 +13,7 @@ skinparam class {
 
 
 class "MLCoupling<In,Out>" {
+    - parameters: std::vector<void*>
     - provider: std::unique_ptr<MLCouplingProvider<In,Out>>
     - application: std::unique_ptr<MLCouplingApplication<In,Out>>
     - behavior: std::unique_ptr<MLCouplingBehavior>
@@ -20,12 +21,20 @@ class "MLCoupling<In,Out>" {
                  MLCouplingApplication<In,Out>*, MLCouplingBehavior* = nullptr)
     + ~MLCoupling()
     + ml_step()
+    # set_parameters(std::vector<void*>)
 }
 
 class "MLCouplingProvider<In,Out>" <<abstract>> {
+    + rank: int
     + MLCouplingProvider()
-    + send_data(MLCouplingData<In>)
+    + MLCouplingProvider(int)
+    + set_rank(int)
     + inference(MLCouplingData<In>): MLCouplingData<Out>
+}
+
+class "MLCouplingProviderFlexible<In,Out>" <<abstract>> {
+    + MLCouplingProviderFlexible()
+    + send_data(MLCouplingData<In>)
 }
 
 class "MLCouplingApplication<In,Out>" <<abstract>> {
@@ -49,6 +58,8 @@ class "MLCouplingApplication<In,Out>" <<abstract>> {
 class "MLCouplingNormalization<In,Out>" <<abstract>> {
     + normalize_input(MLCouplingData<In>)
     + denormalize_output(MLCouplingData<Out>)
+    + print(std::ostream&)
+    + ~MLCouplingNormalization()
 }
 
 class "MLCouplingMinMaxNormalization<In,Out>" {
@@ -100,6 +111,9 @@ class "MLCouplingBehaviorPeriodic" {
     - coupled_steps_before_inference: int
     - coupled_steps_stride: int
     - step_increment_after_inference: int
+    - prohibit_inference: std::function<bool(int)>
+    + MLCouplingBehaviorPeriodic(int, int, int, int,
+                                 std::function<bool(int)> = allow_inference_at_all_steps)
     + should_perform_inference(): bool
     + time_step_delta(): int
     + should_send_data(): bool
@@ -111,14 +125,46 @@ class "MLCouplingProviderPhydll<In,Out>" {
 }
 
 class "MLCouplingProviderAixelerate<In,Out>" {
-    + send_data(MLCouplingData<In>)
     + inference(MLCouplingData<In>): MLCouplingData<Out>
 }
 
 class "MLCouplingProviderSmartsim<In,Out>" {
-    + MLCouplingProviderSmartsim(std::string, int, int, int, int, int)
+    - device: std::string
+    - model_backend: std::string
+    - num_gpus: int
+    - first_gpu: int
+    - batch_size: int
+    - min_batch_size: int
+    - min_batch_timeout: int
+    + MLCouplingProviderSmartsim(std::string, std::string, std::string,
+                                 std::string = "model", std::string = "localhost",
+                                 int = 6379, int = 1, int = 0, int = 0,
+                                 int = 0, int = 0, int = 0,
+                                 std::vector<std::string> = {}, std::vector<std::string> = {})
+    + validate_parameter(...)
     + send_data(MLCouplingData<In>)
     + inference(MLCouplingData<In>): MLCouplingData<Out>
+}
+
+class "MLCouplingTensor<T>" {
+    + MLCouplingTensor(T*, std::vector<int>)
+}
+
+class "MLCouplingMatrix<T>" {
+    + MLCouplingMatrix(T*, std::vector<int>)
+    + MLCouplingMatrix(T*, int, int)
+    + MLCouplingMatrix(std::vector<std::vector<T>>)
+}
+
+class "MLCouplingVector<T>" {
+    + MLCouplingVector(T*, std::vector<int>)
+    + MLCouplingVector(T*, int)
+    + MLCouplingVector(std::vector<T>)
+}
+
+class "MLCouplingScalar<T>" {
+    + MLCouplingScalar(T*)
+    + MLCouplingScalar(T)
 }
 
 ' Relationships
@@ -133,8 +179,14 @@ class "MLCouplingProviderSmartsim<In,Out>" {
 "MLCouplingBehavior" <|-- "MLCouplingBehaviorDefault"
 "MLCouplingBehavior" <|-- "MLCouplingBehaviorPeriodic"
 
-"MLCouplingProvider<In,Out>" <|-- "MLCouplingProviderPhydll<In,Out>"
+"MLCouplingProvider<In,Out>" <|-- "MLCouplingProviderFlexible<In,Out>"
+"MLCouplingProviderFlexible<In,Out>" <|-- "MLCouplingProviderPhydll<In,Out>"
 "MLCouplingProvider<In,Out>" <|-- "MLCouplingProviderAixelerate<In,Out>"
-"MLCouplingProvider<In,Out>" <|-- "MLCouplingProviderSmartsim<In,Out>"
+"MLCouplingProviderFlexible<In,Out>" <|-- "MLCouplingProviderSmartsim<In,Out>"
+
+"MLCouplingData<T>" <|-- "MLCouplingTensor<T>"
+"MLCouplingTensor<T>" <|-- "MLCouplingMatrix<T>"
+"MLCouplingMatrix<T>" <|-- "MLCouplingVector<T>"
+"MLCouplingVector<T>" <|-- "MLCouplingScalar<T>"
 
 @enduml
