@@ -48,3 +48,7 @@ target_link_libraries(${PROJECT_NAME} PRIVATE cpp_ml_interface_headers)
 ```
 
 An actually working example project: [terrain solver](https://github.com/chrisb09/terrain_solver/blob/master/solver_cpp/CMakeLists.txt)
+
+## Diagram
+
+![MLCoupling UML](documentation/CPP_NEW_ML_Interface.svg)
