@@ -21,6 +21,7 @@ class "MLCoupling<In,Out>" {
                  MLCouplingApplication<In,Out>*, MLCouplingBehavior* = nullptr)
     + ~MLCoupling()
     + ml_step()
+    + create_mlcoupling_from_config(...) <<static>>
     # set_parameters(std::vector<void*>)
 }
 
@@ -29,7 +30,7 @@ class "MLCouplingProvider<In,Out>" <<abstract>> {
     + MLCouplingProvider()
     + MLCouplingProvider(int)
     + set_rank(int)
-    + inference(MLCouplingData<In>): MLCouplingData<Out>
+    + inference(MLCouplingData<In>, MLCouplingData<Out>&)
 }
 
 class "MLCouplingProviderFlexible<In,Out>" <<abstract>> {
@@ -47,6 +48,9 @@ class "MLCouplingApplication<In,Out>" <<abstract>> {
                             std::vector<Out*>, std::vector<std::vector<int>>,
                             MLCouplingNormalization<In,Out>*)
     + MLCouplingApplication(MLCouplingData<In>, MLCouplingData<Out>,
+                            MLCouplingNormalization<In,Out>*)
+    + MLCouplingApplication(MLCouplingData<In>, MLCouplingData<In>,
+                            MLCouplingData<Out>, MLCouplingData<Out>,
                             MLCouplingNormalization<In,Out>*)
     + step(bool, bool)
     # preprocess(MLCouplingData<In>): MLCouplingData<In>
@@ -74,6 +78,7 @@ class "MLCouplingMinMaxNormalization<In,Out>" {
     + normalize_input(MLCouplingData<In>)
     + denormalize_output(Out*, int)
     + denormalize_output(MLCouplingData<Out>)
+    + print(std::ostream&)
 }
 
 class "MLCouplingApplicationTurbulenceClosure<In,Out>" {
@@ -84,13 +89,6 @@ class "MLCouplingApplicationTurbulenceClosure<In,Out>" {
     - uniform_filtering()
     - downsampling()
     - compute_tau_ij()
-}
-
-class "MLCouplingData<T>" {
-    + data: std::vector<T*>
-    + data_dimensions: std::vector<std::vector<int>>
-    + MLCouplingData(const std::vector<T*>&, const std::vector<std::vector<int>>&)
-    + MLCouplingData()
 }
 
 class "MLCouplingBehavior" <<abstract>> {
@@ -121,16 +119,24 @@ class "MLCouplingBehaviorPeriodic" {
 
 class "MLCouplingProviderPhydll<In,Out>" {
     + send_data(MLCouplingData<In>)
-    + inference(MLCouplingData<In>): MLCouplingData<Out>
+    + inference(MLCouplingData<In>, MLCouplingData<Out>&)
 }
 
-class "MLCouplingProviderAixelerate<In,Out>" {
-    + inference(MLCouplingData<In>): MLCouplingData<Out>
+class "MLCouplingProviderAixelerator<In,Out>" {
+    - model_file: std::string
+    - batchsize: int
+    - app_comm: MPI_Comm
+    - enable_hybrid: bool
+    - host_fraction: std::optional<float>
+    + MLCouplingProviderAixelerator(std::string, int = 1, MPI_Comm = MPI_COMM_WORLD,
+                                    bool = false, std::optional<float> = std::nullopt)
+    + inference(MLCouplingData<In>, MLCouplingData<Out>&)
 }
 
 class "MLCouplingProviderSmartsim<In,Out>" {
     - device: std::string
     - model_backend: std::string
+    - model_name: std::string
     - num_gpus: int
     - first_gpu: int
     - batch_size: int
@@ -141,30 +147,91 @@ class "MLCouplingProviderSmartsim<In,Out>" {
                                  int = 6379, int = 1, int = 0, int = 0,
                                  int = 0, int = 0, int = 0,
                                  std::vector<std::string> = {}, std::vector<std::string> = {})
+    + MLCouplingProviderSmartsim(std::string, std::string, std::string_view,
+                                 std::string = "model", std::string = "localhost",
+                                 int = 6379, int = 1, int = 0, int = 0,
+                                 int = 0, int = 0, int = 0,
+                                 std::vector<std::string> = {}, std::vector<std::string> = {})
     + validate_parameter(...)
     + send_data(MLCouplingData<In>)
-    + inference(MLCouplingData<In>): MLCouplingData<Out>
+    + inference(MLCouplingData<In>, MLCouplingData<Out>&)
 }
 
 class "MLCouplingTensor<T>" {
-    + MLCouplingTensor(T*, std::vector<int>)
+    - root: void*
+    - dimensions: std::vector<int>
+    - layout: MLCouplingMemoryLayout
+    - ownership: MLCouplingOwnership
+    + MLCouplingTensor()
+    + MLCouplingTensor(void*, std::vector<int>, MLCouplingMemoryLayout,
+                       MLCouplingOwnership = MLCouplingOwnershipExternal)
+    + wrap_flat(T*, std::vector<int>, MLCouplingMemoryLayout = MLCouplingMemLayoutContiguous,
+                MLCouplingOwnership = MLCouplingOwnershipExternal)
+    + wrap_nested(void*, std::vector<int>, MLCouplingMemoryLayout = MLCouplingMemLayoutNested,
+                  MLCouplingOwnership = MLCouplingOwnershipExternal)
+    + from_flat_copy(std::vector<T>, std::vector<int>,
+                     MLCouplingMemoryLayout = MLCouplingMemLayoutContiguous)
+    + dimensions(): const std::vector<int>&
+    + layout(): MLCouplingMemoryLayout
+    + ownership(): MLCouplingOwnership
+    + root(): void*
+    + numel(): size_t
+    + data_type(): MLCouplingDataType
+    + flatten(MLCouplingMemoryLayout): MLCouplingTensor<T>
+    + unflatten(MLCouplingMemoryLayout): MLCouplingTensor<T>
 }
 
 class "MLCouplingMatrix<T>" {
-    + MLCouplingMatrix(T*, std::vector<int>)
     + MLCouplingMatrix(T*, int, int)
     + MLCouplingMatrix(std::vector<std::vector<T>>)
 }
 
 class "MLCouplingVector<T>" {
-    + MLCouplingVector(T*, std::vector<int>)
     + MLCouplingVector(T*, int)
     + MLCouplingVector(std::vector<T>)
 }
 
 class "MLCouplingScalar<T>" {
-    + MLCouplingScalar(T*)
     + MLCouplingScalar(T)
+    + MLCouplingScalar(T*)
+}
+
+class "MLCouplingData<T>" {
+    - tensors: std::vector<MLCouplingTensor<T>>
+    + MLCouplingData()
+    + MLCouplingData(std::vector<MLCouplingTensor<T>>)
+    + add_tensor(MLCouplingTensor<T>)
+    + size(): size_t
+    + empty(): bool
+    + operator[](size_t): MLCouplingTensor<T>&
+    + flatten_all(MLCouplingMemoryLayout = MLCouplingMemLayoutContiguous): MLCouplingData<T>
+    + deep_copy(): MLCouplingData<T>
+    + get_flat_data(): std::vector<T>
+}
+
+enum "MLCouplingOwnership" {
+    MLCouplingOwnershipExternal
+    MLCouplingOwnershipOwned
+}
+
+enum "MLCouplingMemoryLayout" {
+    MLCouplingMemLayoutInvalid
+    MLCouplingMemLayoutNested
+    MLCouplingMemLayoutContiguous
+    MLCouplingMemLayoutFortranNested
+    MLCouplingMemLayoutFortranContiguous
+}
+
+enum "MLCouplingDataType" {
+    MLCouplingDataTypeInvalid
+    MLCouplingDataTypeDouble
+    MLCouplingDataTypeFloat
+    MLCouplingDataTypeInt8
+    MLCouplingDataTypeInt16
+    MLCouplingDataTypeInt32
+    MLCouplingDataTypeInt64
+    MLCouplingDataTypeUint8
+    MLCouplingDataTypeUint16
 }
 
 ' Relationships
@@ -181,12 +248,12 @@ class "MLCouplingScalar<T>" {
 
 "MLCouplingProvider<In,Out>" <|-- "MLCouplingProviderFlexible<In,Out>"
 "MLCouplingProviderFlexible<In,Out>" <|-- "MLCouplingProviderPhydll<In,Out>"
-"MLCouplingProvider<In,Out>" <|-- "MLCouplingProviderAixelerate<In,Out>"
+"MLCouplingProvider<In,Out>" <|-- "MLCouplingProviderAixelerator<In,Out>"
 "MLCouplingProviderFlexible<In,Out>" <|-- "MLCouplingProviderSmartsim<In,Out>"
 
-"MLCouplingData<T>" <|-- "MLCouplingTensor<T>"
+"MLCouplingData<T>" "1" o--|| "0..*" "MLCouplingTensor<T>" : owns
 "MLCouplingTensor<T>" <|-- "MLCouplingMatrix<T>"
-"MLCouplingMatrix<T>" <|-- "MLCouplingVector<T>"
-"MLCouplingVector<T>" <|-- "MLCouplingScalar<T>"
+"MLCouplingTensor<T>" <|-- "MLCouplingVector<T>"
+"MLCouplingTensor<T>" <|-- "MLCouplingScalar<T>"
 
 @enduml
