@@ -207,6 +207,9 @@ for device in $devices; do
         echo "SmartSim is already fully built with all backends."
     fi
 
+
+    pip install -r requirements.txt
+
     runtime_lib_dir="$python_env/runtime_libs"
     mkdir -p "$runtime_lib_dir"
     if [ -f "$RUNTIME_LIBSTDCPP_SOURCE" ]; then
@@ -307,14 +310,14 @@ if [ -d "${SMARTREDIS_DIR}" ]; then
     fi
 
     # Check if the existing SmartRedis directory is at the correct commit
-    current_commit=$(git -C "${SMARTREDIS_DIR}" rev-parse HEAD)
-    if [ "$current_commit" != "$smartsim_commit" ]; then
-        echo "Current commit is $current_commit, expected $smartsim_commit. Attempting to reset to the correct commit..."
-        git -C "${SMARTREDIS_DIR}" reset --hard $smartsim_commit || { echo "Failed to reset to commit $smartsim_commit. Please check the SmartRedis directory."; exit 1; }
-        compile=true
-    else
-        echo "Already at the correct commit: $current_commit"
-    fi
+#    current_commit=$(git -C "${SMARTREDIS_DIR}" rev-parse HEAD)
+#    if [ "$current_commit" != "$smartsim_commit" ]; then
+#        echo "Current commit is $current_commit, expected $smartsim_commit. Attempting to reset to the correct commit..."
+#        git -C "${SMARTREDIS_DIR}" reset --hard $smartsim_commit || { echo "Failed to reset to commit $smartsim_commit. Please check the SmartRedis directory."; exit 1; }
+#        compile=true
+#    else
+#        echo "Already at the correct commit: $current_commit"
+#    fi
 else
     echo "Cloning SmartRedis repository (${smartsim_branch} branch, commit ${echo $smartsim_commit | head -c 8})..."
 

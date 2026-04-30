@@ -101,6 +101,11 @@ add_dependencies(${LIBRARY_NAME} generate_registry)
 
 target_include_directories(${LIBRARY_NAME} PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/include")
 
+# Header-only interface target for consumers that do not link the .so
+add_library(cpp_ml_interface_headers INTERFACE)
+target_include_directories(cpp_ml_interface_headers INTERFACE "${CMAKE_CURRENT_SOURCE_DIR}/include")
+target_link_libraries(cpp_ml_interface_headers INTERFACE tomlplusplus::tomlplusplus)
+
 
 # Manually set SmartRedis include and library paths
 if(WITH_SMARTSIM)
@@ -109,10 +114,13 @@ if(WITH_SMARTSIM)
     target_include_directories(${LIBRARY_NAME} PUBLIC ${SMARTREDIS_DIR}/install/include)
     target_link_directories(${LIBRARY_NAME} PRIVATE ${SMARTREDIS_DIR}/install/lib64)
     target_link_libraries(${LIBRARY_NAME} PRIVATE smartredis)
+    target_include_directories(cpp_ml_interface_headers INTERFACE ${SMARTREDIS_DIR}/include ${SMARTREDIS_DIR}/install/include)
 endif()
 
 if(WITH_AIX)
     target_compile_definitions(${LIBRARY_NAME} PUBLIC WITH_AIX)
+
+    target_include_directories(cpp_ml_interface_headers INTERFACE ${AIXELERATOR_DIR}/src)
 
     message(STATUS "AIXelerator support enabled.")
     message(STATUS "AIxelerator backend flags: WITH_TORCH=${WITH_TORCH}, WITH_TENSORFLOW=${WITH_TENSORFLOW}, WITH_ONNX=${WITH_ONNX}")
@@ -145,13 +153,15 @@ if(WITH_AIX)
             set(_aixelerator_cmake_args "${AIXELERATOR_CMAKE_ARGS}")
             separate_arguments(_aixelerator_cmake_args NATIVE_COMMAND "${_aixelerator_cmake_args}")
 
+            message(STATUS "Configuring AIxelerator prebuilt bootstrap build in ${AIXELERATOR_PREBUILT_BUILD_DIR}...")
             execute_process(
-                message(STATUS "Configuring AIxelerator prebuilt bootstrap build in ${AIXELERATOR_PREBUILT_BUILD_DIR}...")
                 COMMAND ${CMAKE_COMMAND}
                     -S ${AIXELERATOR_DIR}
                     -B ${AIXELERATOR_PREBUILT_BUILD_DIR}
                     -DCMAKE_BUILD_TYPE=${CMAKE_BUILD_TYPE}
                     -DCMAKE_INSTALL_PREFIX=${AIXELERATOR_PREBUILT_INSTALL_PREFIX}
+                    -DUSE_PYTHON_TORCH_CMAKE_PREFIX=${USE_PYTHON_TORCH_CMAKE_PREFIX}
+                    -DTORCH_VERSION=${TORCH_VERSION}
                     ${_aixelerator_cmake_args}
                 RESULT_VARIABLE AIXELERATOR_CONFIGURE_RESULT
             )

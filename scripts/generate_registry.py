@@ -35,14 +35,22 @@ def init_libclang():
     try:
         return clang.cindex.Index.create()
     except clang.cindex.LibclangError:
-        candidates = [
-            os.environ.get('LIBCLANG_PATH'),
-            '/usr/lib/llvm-18/lib/libclang.so.1',
-            '/usr/lib/x86_64-linux-gnu/libclang-18.so.18',
-            '/usr/lib/x86_64-linux-gnu/libclang-18.so.1',
-            '/usr/lib/llvm-15/lib/libclang.so.1',
-            '/usr/lib/llvm-11/lib/libclang.so.1',
-        ]
+        env_path = os.environ.get('LIBCLANG_PATH')
+        candidates = []
+        if env_path is not None and env_path != "":
+            for dirpath, _, filenames in os.walk(env_path):
+                for f in filenames:
+                    if f.startswith("libclang.so"):
+                        candidates.append(os.path.join(dirpath, f))
+        else:
+            candidates = [
+                os.environ.get('LIBCLANG_PATH'),
+                '/usr/lib/llvm-18/lib/libclang.so.1',
+                '/usr/lib/x86_64-linux-gnu/libclang-18.so.18',
+                '/usr/lib/x86_64-linux-gnu/libclang-18.so.1',
+                '/usr/lib/llvm-15/lib/libclang.so.1',
+                '/usr/lib/llvm-11/lib/libclang.so.1',
+            ]
         for path in candidates:
             if not path or not os.path.exists(path):
                 continue

@@ -1,2 +1,2 @@
-clang==16.0.6   # For compile-time reflection equivalent (only C++26 has actual compile-time reflection, but this is the closest we can get for C++17)
-numpy==2.0.2    # For AIX
+clang==15.0.7   # For compile-time reflection equivalent (only C++26 has actual compile-time reflection, but this is the closest we can get for C++17)
+numpy

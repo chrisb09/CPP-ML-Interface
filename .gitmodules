@@ -3,5 +3,5 @@
 	url = git@github.com:chrisb09/AIxeleratorService.git
 [submodule "extern/SmartRedis"]
 	path = extern/SmartRedis
-	url = https://github.com/CrayLabs/SmartRedis.git
+	url = git@github.com:chrisb09/SmartRedis.git
 	branch = develop

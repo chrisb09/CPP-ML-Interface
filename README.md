@@ -29,3 +29,29 @@ The CMakeLists.txt file includes two targets, one to actually compile a `libcpp_
 ```
 
 `build.sh` actually does two builds, one normal and one with -O3 optimizations, which are placed in `build/` and `build_release/` respectively.
+
+
+## Including in Your Own Project
+
+WIP
+
+these are untested notes:
+
+
+```cmake
+# Path to the prebuilt CPP-ML-Interface .so
+# Probably not really needed unless we use the c api
+set(CPPML_SO "/path/to/CPP-ML-Interface/build/libcpp_ml_interface_library.so")
+
+# Path to the CPP-ML-Interface headers
+set(CPPML_INCLUDE_DIR "/path/to/CPP-ML-Interface/include")
+
+add_library(cppml_interface SHARED IMPORTED)
+set_target_properties(cppml_interface PROPERTIES
+    IMPORTED_LOCATION "${CPPML_SO}"
+    INTERFACE_INCLUDE_DIRECTORIES "${CPPML_INCLUDE_DIR}"
+)
+
+# Link it into your terrain_solver
+target_link_libraries(${PROJECT_NAME} PRIVATE cppml_interface)
+```
