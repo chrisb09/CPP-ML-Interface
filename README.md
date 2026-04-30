@@ -39,19 +39,12 @@ these are untested notes:
 
 
 ```cmake
-# Path to the prebuilt CPP-ML-Interface .so
-# Probably not really needed unless we use the c api
-set(CPPML_SO "/path/to/CPP-ML-Interface/build/libcpp_ml_interface_library.so")
+set(CPPML_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../../CPP-ML-Interface")
+add_subdirectory("${CPPML_DIR}" "${CMAKE_CURRENT_BINARY_DIR}/cpp-ml-interface-build" EXCLUDE_FROM_ALL)
 
-# Path to the CPP-ML-Interface headers
-set(CPPML_INCLUDE_DIR "/path/to/CPP-ML-Interface/include")
 
-add_library(cppml_interface SHARED IMPORTED)
-set_target_properties(cppml_interface PROPERTIES
-    IMPORTED_LOCATION "${CPPML_SO}"
-    INTERFACE_INCLUDE_DIRECTORIES "${CPPML_INCLUDE_DIR}"
-)
-
-# Link it into your terrain_solver
-target_link_libraries(${PROJECT_NAME} PRIVATE cppml_interface)
+# Link against the CPP-ML-Interface headers (no .so required)
+target_link_libraries(${PROJECT_NAME} PRIVATE cpp_ml_interface_headers)
 ```
+
+An actually working example project: [terrain solver](https://github.com/chrisb09/terrain_solver/blob/master/solver_cpp/CMakeLists.txt)
