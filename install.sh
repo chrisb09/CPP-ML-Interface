@@ -84,10 +84,10 @@ for device in $devices; do
             echo "Excluding backend: $backend"
             backend_opts="$backend_opts --skip-$backend"
         fi
-        if [ "$device" = "cuda-12" ] && [ "$backend" = "torch" ]; then
-            echo "Excluding torch backend for device $device to avoid CUDA 12.4 compatibility issues with PyTorch. We will install it separately using pip after the smartsim build."
-            backend_opts="$backend_opts --skip-torch"
-        fi
+#        if [ "$device" = "cuda-12" ] && [ "$backend" = "torch" ]; then
+#            echo "Excluding torch backend for device $device to avoid CUDA 12.4 compatibility issues with PyTorch. We will install it separately using pip after the smartsim build."
+#            backend_opts="$backend_opts --skip-torch"
+#        fi
     done
 
     # Force GCC for Redis build to avoid Clang linker plugin issues
@@ -99,7 +99,7 @@ for device in $devices; do
 
     echo "SmartSim build command: $smartsim_build_cmd"
 
-    python_env="$RUNTIME_ROOT/smartsim_$device/"
+    python_env="$RUNTIME_ROOT/smartsim_$device"
 
     echo "Install location: $python_env"
 
@@ -193,7 +193,7 @@ for device in $devices; do
         if [ "$device" = "cuda-12" ]; then
             echo "Running custom command for device $device..."
             echo "Installing PyTorch for CUDA 12.4..."
-            #pip uninstall torch torchvision torchaudio -y && \
+            pip uninstall torch torchvision torchaudio -y && \
             pip install torch==2.4.0 torchvision==0.19.0 torchaudio==2.4.0 --index-url https://download.pytorch.org/whl/cu124 && \
             echo "PyTorch installation for CUDA 12.4 complete." && \
             smart info

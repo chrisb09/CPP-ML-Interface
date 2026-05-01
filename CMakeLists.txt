@@ -9,6 +9,7 @@ include(CTest)
 
 # Options
 option(CPPML_RUN_REGISTRY_TESTS "Run Python registry parser unittests during build" OFF)
+option(CPPML_DISABLE_REGISTRY_GEN "Disable registry generation (use externally generated registry)" OFF)
 
 option(WITH_SMARTSIM "Enable SmartSim provider (requires SmartSim dependencies)" ON)
 option(WITH_AIX "Enable AIXelerator provider (requires AIXelerator dependencies)" ON)
@@ -66,26 +67,28 @@ file(GLOB_RECURSE ALL_HEADERS "${CMAKE_CURRENT_SOURCE_DIR}/include/**/*.hpp")
 # 2. Pfad für die generierte Datei definieren
 set(GENERATED_SRC "${CMAKE_CURRENT_SOURCE_DIR}/include/generated_registry.hpp")
 
-# 3. Custom Command für Code-Generierung
-add_custom_target(generate_registry
-    COMMAND python3 "${CMAKE_CURRENT_SOURCE_DIR}/scripts/generate_registry.py" 
-            "${GENERATED_SRC}" "MLCouplingProvider,MLCouplingNormalization,MLCouplingBehavior,MLCouplingApplication" ${ALL_HEADERS}
-    DEPENDS ${ALL_HEADERS} "${CMAKE_CURRENT_SOURCE_DIR}/scripts/generate_registry.py"
-    COMMENT "Generating registry from headers..."
-)
-
-# Python regression tests for registry parser (optional)
-if(CPPML_RUN_REGISTRY_TESTS)
-    add_custom_target(registry_parser_tests
-        COMMAND python3 -m unittest scripts.test_generate_registry_defaults scripts.test_generate_registry_abstract_detection scripts.test_generate_registry_constructor_visibility
-        WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
-        DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/scripts/generate_registry.py"
-                "${CMAKE_CURRENT_SOURCE_DIR}/scripts/test_generate_registry_defaults.py"
-                "${CMAKE_CURRENT_SOURCE_DIR}/scripts/test_generate_registry_abstract_detection.py"
-                "${CMAKE_CURRENT_SOURCE_DIR}/scripts/test_generate_registry_constructor_visibility.py"
-        COMMENT "Running registry parser regression tests..."
+if(NOT CPPML_DISABLE_REGISTRY_GEN)
+    # 3. Custom Command für Code-Generierung
+    add_custom_target(generate_registry
+        COMMAND python3 "${CMAKE_CURRENT_SOURCE_DIR}/scripts/generate_registry.py" 
+                "${GENERATED_SRC}" "MLCouplingProvider,MLCouplingNormalization,MLCouplingBehavior,MLCouplingApplication" ${ALL_HEADERS}
+        DEPENDS ${ALL_HEADERS} "${CMAKE_CURRENT_SOURCE_DIR}/scripts/generate_registry.py"
+        COMMENT "Generating registry from headers..."
     )
-    add_dependencies(generate_registry registry_parser_tests)
+
+    # Python regression tests for registry parser (optional)
+    if(CPPML_RUN_REGISTRY_TESTS)
+        add_custom_target(registry_parser_tests
+            COMMAND python3 -m unittest scripts.test_generate_registry_defaults scripts.test_generate_registry_abstract_detection scripts.test_generate_registry_constructor_visibility
+            WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
+            DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/scripts/generate_registry.py"
+                    "${CMAKE_CURRENT_SOURCE_DIR}/scripts/test_generate_registry_defaults.py"
+                    "${CMAKE_CURRENT_SOURCE_DIR}/scripts/test_generate_registry_abstract_detection.py"
+                    "${CMAKE_CURRENT_SOURCE_DIR}/scripts/test_generate_registry_constructor_visibility.py"
+            COMMENT "Running registry parser regression tests..."
+        )
+        add_dependencies(generate_registry registry_parser_tests)
+    endif()
 endif()
 
 # 4.1 SHARED Library mit tatsächlichen Quelldateien
@@ -96,15 +99,17 @@ add_library(${LIBRARY_NAME} SHARED
     ${LIB_SOURCES}
 )
 
-# Abhängigkeit zur Code-Generierung
-add_dependencies(${LIBRARY_NAME} generate_registry)
+if(NOT CPPML_DISABLE_REGISTRY_GEN)
+    # Abhängigkeit zur Code-Generierung
+    add_dependencies(${LIBRARY_NAME} generate_registry)
+endif()
 
 target_include_directories(${LIBRARY_NAME} PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/include")
 
 # Header-only interface target for consumers that do not link the .so
 add_library(cpp_ml_interface_headers INTERFACE)
 target_include_directories(cpp_ml_interface_headers INTERFACE "${CMAKE_CURRENT_SOURCE_DIR}/include")
-target_link_libraries(cpp_ml_interface_headers INTERFACE tomlplusplus::tomlplusplus)
+# target_link_libraries(cpp_ml_interface_headers INTERFACE tomlplusplus::tomlplusplus)
 
 
 # Manually set SmartRedis include and library paths
@@ -231,6 +236,7 @@ endif()
 if (MPI_FOUND)
     target_link_libraries(${LIBRARY_NAME} PUBLIC MPI::MPI_CXX)
     target_link_libraries(${EXECUTABLE_NAME} PRIVATE MPI::MPI_CXX)
+    target_link_libraries(cpp_ml_interface_headers INTERFACE MPI::MPI_CXX)
 endif()
 
 if(BUILD_TESTING)
