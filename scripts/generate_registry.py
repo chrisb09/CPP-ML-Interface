@@ -124,6 +124,44 @@ def get_class_metadata(node, header_path):
         return {}
 
 
+def _extract_params_from_constructor_tokens(constructor_node):
+    try:
+        tokens = [t.spelling for t in constructor_node.get_tokens()]
+        if '(' not in tokens:
+            return []
+        start_idx = tokens.index('(') + 1
+        
+        paren_depth = 1
+        end_idx = start_idx
+        while end_idx < len(tokens):
+            if tokens[end_idx] == '(': paren_depth += 1
+            elif tokens[end_idx] == ')': 
+                paren_depth -= 1
+                if paren_depth == 0: break
+            end_idx += 1
+            
+        if paren_depth != 0: return []
+        
+        param_tokens_list = []
+        current_param = []
+        depth = 0
+        for tok in tokens[start_idx:end_idx]:
+            if tok in ('(', '[', '<', '{'): depth += 1
+            elif tok in (')', ']', '>', '}'): depth -= 1
+            
+            if tok == ',' and depth == 0:
+                param_tokens_list.append(current_param)
+                current_param = []
+            else:
+                current_param.append(tok)
+                
+        if current_param:
+            param_tokens_list.append(current_param)
+            
+        return param_tokens_list
+    except Exception:
+        return []
+
 def get_class_constructors(node, class_name):
     """
     Extract constructor information from a class node.
@@ -152,13 +190,27 @@ def get_class_constructors(node, class_name):
                 continue
         
         params = []
-        for param in child.get_children():
-            if param.kind != clang.cindex.CursorKind.PARM_DECL: # type: ignore
-                continue
-            
+        param_nodes = [p for p in child.get_children() if p.kind == clang.cindex.CursorKind.PARM_DECL]
+        ctor_param_tokens = _extract_params_from_constructor_tokens(child)
+        
+        for i, param in enumerate(param_nodes):
             param_name = param.spelling or "unnamed"
-            param_type = _extract_param_type(param, param_name)
-            default_value = _extract_default_value(param)
+            
+            default_value = None
+            if i < len(ctor_param_tokens):
+                ptoks = ctor_param_tokens[i]
+                type_from_toks = _extract_param_type_from_tokens(ptoks, param_name)
+                param_type = type_from_toks if type_from_toks else _extract_param_type(param, param_name)
+                
+                def_from_toks = _extract_default_from_param_tokens(ptoks)
+                if def_from_toks:
+                    default_value = _normalize_default_value_text(def_from_toks)
+            else:
+                param_type = _extract_param_type(param, param_name)
+            
+            if not default_value:
+                default_value = _extract_default_value(param)
+                
             params.append((param_type, param_name, default_value))
         
         constructors.append(params)
@@ -320,6 +372,7 @@ def _normalize_default_value_text(value):
 
     value = value.strip()
     value = re.sub(r'^(?:=\s*)+', '', value)
+    value = re.sub(r'\s*::\s*', '::', value)
     return value or None
 
 
