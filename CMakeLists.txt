@@ -109,7 +109,7 @@ target_include_directories(${LIBRARY_NAME} PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/i
 # Header-only interface target for consumers that do not link the .so
 add_library(cpp_ml_interface_headers INTERFACE)
 target_include_directories(cpp_ml_interface_headers INTERFACE "${CMAKE_CURRENT_SOURCE_DIR}/include")
-# target_link_libraries(cpp_ml_interface_headers INTERFACE tomlplusplus::tomlplusplus)
+target_link_libraries(cpp_ml_interface_headers INTERFACE tomlplusplus::tomlplusplus)
 
 
 # Manually set SmartRedis include and library paths
