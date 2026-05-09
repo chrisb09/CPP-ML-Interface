@@ -68,13 +68,94 @@ using MLCouplingSupportedTypes = std::variant<
     TypeTag<uint16_t>
 >;
 
-template <typename T>
-inline constexpr MLCouplingDataType to_ml_coupling_data_type();
-
 inline MLCouplingSupportedTypes ml_coupling_data_type_to_supported_type(MLCouplingDataType type);
 
 inline MLCouplingSupportedTypes get_type_tag(int selection) {
     return ml_coupling_data_type_to_supported_type(static_cast<MLCouplingDataType>(selection));
+}
+
+// Define a mapping from C++ types to MLCouplingDataType
+
+template <typename T>
+inline constexpr MLCouplingDataType to_ml_coupling_data_type()
+{
+    using DecayedType = std::remove_cv_t<std::remove_reference_t<T>>;
+
+    if constexpr (std::is_same_v<DecayedType, double>)
+    {
+        return MLCouplingDataTypeDouble;
+    }
+    else if constexpr (std::is_same_v<DecayedType, float>)
+    {
+        return MLCouplingDataTypeFloat;
+    }
+    else
+    {
+        constexpr bool is_supported_integer_alias =
+            std::is_same_v<DecayedType, signed char> ||
+            std::is_same_v<DecayedType, unsigned char> ||
+            std::is_same_v<DecayedType, char> ||
+            std::is_same_v<DecayedType, short> ||
+            std::is_same_v<DecayedType, unsigned short> ||
+            std::is_same_v<DecayedType, int> ||
+            std::is_same_v<DecayedType, unsigned int> ||
+            std::is_same_v<DecayedType, long> ||
+            std::is_same_v<DecayedType, unsigned long> ||
+            std::is_same_v<DecayedType, long long> ||
+            std::is_same_v<DecayedType, unsigned long long> ||
+            std::is_same_v<DecayedType, int8_t> ||
+            std::is_same_v<DecayedType, int16_t> ||
+            std::is_same_v<DecayedType, int32_t> ||
+            std::is_same_v<DecayedType, int64_t> ||
+            std::is_same_v<DecayedType, uint8_t> ||
+            std::is_same_v<DecayedType, uint16_t>;
+
+        if constexpr (is_supported_integer_alias)
+        {
+            if constexpr (std::is_signed_v<DecayedType>)
+            {
+                if constexpr (sizeof(DecayedType) == sizeof(int8_t))
+                {
+                    return MLCouplingDataTypeInt8;
+                }
+                else if constexpr (sizeof(DecayedType) == sizeof(int16_t))
+                {
+                    return MLCouplingDataTypeInt16;
+                }
+                else if constexpr (sizeof(DecayedType) == sizeof(int32_t))
+                {
+                    return MLCouplingDataTypeInt32;
+                }
+                else if constexpr (sizeof(DecayedType) == sizeof(int64_t))
+                {
+                    return MLCouplingDataTypeInt64;
+                }
+                else
+                {
+                    return MLCouplingDataTypeInvalid;
+                }
+            }
+            else
+            {
+                if constexpr (sizeof(DecayedType) == sizeof(uint8_t))
+                {
+                    return MLCouplingDataTypeUint8;
+                }
+                else if constexpr (sizeof(DecayedType) == sizeof(uint16_t))
+                {
+                    return MLCouplingDataTypeUint16;
+                }
+                else
+                {
+                    return MLCouplingDataTypeInvalid;
+                }
+            }
+        }
+        else
+        {
+            return MLCouplingDataTypeInvalid;
+        }
+    }
 }
 
 inline MLCouplingDataType to_ml_coupling_data_type(const MLCouplingSupportedTypes& type_tag)
@@ -164,90 +245,6 @@ inline MLCouplingDataType to_ml_coupling_data_type(SRTensorType type)
     }
 }
 #endif
-
-// Define a mapping from C++ types to MLCouplingDataType
-
-template <typename T>
-inline constexpr MLCouplingDataType to_ml_coupling_data_type()
-{
-    using DecayedType = std::remove_cv_t<std::remove_reference_t<T>>;
-
-    if constexpr (std::is_same_v<DecayedType, double>)
-    {
-        return MLCouplingDataTypeDouble;
-    }
-    else if constexpr (std::is_same_v<DecayedType, float>)
-    {
-        return MLCouplingDataTypeFloat;
-    }
-    else
-    {
-        constexpr bool is_supported_integer_alias =
-            std::is_same_v<DecayedType, signed char> ||
-            std::is_same_v<DecayedType, unsigned char> ||
-            std::is_same_v<DecayedType, char> ||
-            std::is_same_v<DecayedType, short> ||
-            std::is_same_v<DecayedType, unsigned short> ||
-            std::is_same_v<DecayedType, int> ||
-            std::is_same_v<DecayedType, unsigned int> ||
-            std::is_same_v<DecayedType, long> ||
-            std::is_same_v<DecayedType, unsigned long> ||
-            std::is_same_v<DecayedType, long long> ||
-            std::is_same_v<DecayedType, unsigned long long> ||
-            std::is_same_v<DecayedType, int8_t> ||
-            std::is_same_v<DecayedType, int16_t> ||
-            std::is_same_v<DecayedType, int32_t> ||
-            std::is_same_v<DecayedType, int64_t> ||
-            std::is_same_v<DecayedType, uint8_t> ||
-            std::is_same_v<DecayedType, uint16_t>;
-
-        if constexpr (is_supported_integer_alias)
-        {
-            if constexpr (std::is_signed_v<DecayedType>)
-            {
-                if constexpr (sizeof(DecayedType) == sizeof(int8_t))
-                {
-                    return MLCouplingDataTypeInt8;
-                }
-                else if constexpr (sizeof(DecayedType) == sizeof(int16_t))
-                {
-                    return MLCouplingDataTypeInt16;
-                }
-                else if constexpr (sizeof(DecayedType) == sizeof(int32_t))
-                {
-                    return MLCouplingDataTypeInt32;
-                }
-                else if constexpr (sizeof(DecayedType) == sizeof(int64_t))
-                {
-                    return MLCouplingDataTypeInt64;
-                }
-                else
-                {
-                    return MLCouplingDataTypeInvalid;
-                }
-            }
-            else
-            {
-                if constexpr (sizeof(DecayedType) == sizeof(uint8_t))
-                {
-                    return MLCouplingDataTypeUint8;
-                }
-                else if constexpr (sizeof(DecayedType) == sizeof(uint16_t))
-                {
-                    return MLCouplingDataTypeUint16;
-                }
-                else
-                {
-                    return MLCouplingDataTypeInvalid;
-                }
-            }
-        }
-        else
-        {
-            return MLCouplingDataTypeInvalid;
-        }
-    }
-}
 
 inline constexpr MLCouplingDataType kMLCouplingTypeInt = to_ml_coupling_data_type<int>();
 inline constexpr MLCouplingDataType kMLCouplingTypeUnsignedInt = to_ml_coupling_data_type<unsigned int>();

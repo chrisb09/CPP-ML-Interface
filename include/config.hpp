@@ -21,6 +21,7 @@
 #include <sstream>
 #include <tuple>
 #include <optional>
+#include <cctype>
 
 // Include toml++ for parsing TOML configurations
 #include <toml++/toml.h>
@@ -30,6 +31,7 @@
 #include "application/ml_coupling_application.hpp"
 #include "behavior/ml_coupling_behavior.hpp"
 #include "normalization/ml_coupling_normalization.hpp"
+#include "coupling_type.hpp"
 #include "generated_registry.hpp"
 #include "logging.hpp"
 
@@ -254,7 +256,9 @@ MLCoupling<In, Out>* create_mlcoupling_from_config_impl(const std::string &confi
         * 5: std::vector<std::string>
         */
 
-        config.for_each([&sections, &type_params, &sections_temp_ids](const toml::key& key, const toml::v3::node& node) {
+        std::optional<std::string> coupling_type_value;
+
+        config.for_each([&sections, &type_params, &sections_temp_ids, &coupling_type_value](const toml::key& key, const toml::v3::node& node) {
             logging::debug("Section: " + std::string(key.str()));
             if (node.is_table()) {
                 std::string key_str = std::string(key.str());
@@ -306,6 +310,13 @@ MLCoupling<In, Out>* create_mlcoupling_from_config_impl(const std::string &confi
                         }
                     }
                 });
+            } else if (std::string(key.str()) == "coupling_type") {
+                if (node.is_string()) {
+                    coupling_type_value = std::string(node.as_string()->get());
+                    logging::debug("Top-level coupling_type = " + *coupling_type_value);
+                } else {
+                    logging::warning("Top-level coupling_type must be a string.");
+                }
             }
         });
 
@@ -552,7 +563,40 @@ MLCoupling<In, Out>* create_mlcoupling_from_config_impl(const std::string &confi
             logging::info("Created application instance at " + application_ptr_stream.str() + " of type " + get_type_name(*application));
         }
 
-        return new MLCoupling<In, Out>(provider, application, behavior);
+        CouplingType coupling_type = CouplingType::STATIC;
+        if (coupling_type_value.has_value()) {
+            std::string normalized = *coupling_type_value;
+            std::transform(normalized.begin(), normalized.end(), normalized.begin(), [](unsigned char c) {
+                return static_cast<char>(std::toupper(c));
+            });
+            if (normalized == "STATIC") {
+                coupling_type = CouplingType::STATIC;
+            } else if (normalized == "FLEXIBLE") {
+                coupling_type = CouplingType::FLEXIBLE;
+            } else {
+                logging::error("Unknown coupling_type: " + *coupling_type_value + ". Expected STATIC or FLEXIBLE.");
+                exit(1);
+            }
+        }
+
+        MLCouplingData<In>* input_after_preprocessing_ptr = nullptr;
+        MLCouplingData<Out>* output_before_postprocessing_ptr = nullptr;
+        if (coupling_type == CouplingType::STATIC) {
+            auto buffers = application->get_pre_post_buffers();
+            input_after_preprocessing_ptr = buffers.first;
+            output_before_postprocessing_ptr = buffers.second;
+        }
+
+        if (provider && coupling_type == CouplingType::STATIC) {
+            provider->set_io_buffers(input_after_preprocessing_ptr, output_before_postprocessing_ptr);
+        }
+
+        return new MLCoupling<In, Out>(provider,
+                                       application,
+                                       behavior,
+                                       coupling_type,
+                                       input_after_preprocessing_ptr,
+                                       output_before_postprocessing_ptr);
 
     } catch (const toml::parse_error& err) {
         std::ostringstream err_stream;

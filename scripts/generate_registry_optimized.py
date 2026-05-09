@@ -1233,27 +1233,11 @@ def _write_map_factory(f, base_class, template_str, template_args, category,
             param_args = []
             debug_outputs = []
             for ptype, pname, pdefault in ctor:
-                ptype_norm = _normalize_type_for_display(ptype)
-                is_pointer = ptype_norm.endswith('*')
                 storage_type = _strip_cvref(ptype)
                 if _is_mlcoupling_data_type(ptype):
-                    if is_pointer:
-                        if pdefault:
-                            param_args.append(
-                                f'parameter.find("{pname}") != parameter.end() ? '
-                                f'reinterpret_cast<{ptype_norm}>(parameter.at("{pname}").second) : '
-                                f'({ptype_norm}){pdefault}'
-                            )
-                            debug_outputs.append(
-                                f'"{pname}=<" << (parameter.find("{pname}") != parameter.end() ? "provided" : "default") << ">"'
-                            )
-                        else:
-                            param_args.append(f'reinterpret_cast<{ptype_norm}>(parameter.at("{pname}").second)')
-                            debug_outputs.append(f'"{pname}=" << reinterpret_cast<{ptype_norm}>(parameter.at("{pname}").second)')
-                    else:
-                        # For MLCouplingData value, cast directly from void* (composite object, no type tag dispatch)
-                        param_args.append(f'*reinterpret_cast<{storage_type}*>(parameter.at("{pname}").second)')
-                        debug_outputs.append(f'"{pname}=" << (*reinterpret_cast<{storage_type}*>(parameter.at("{pname}").second))')
+                    # For MLCouplingData, cast directly from void* (composite object, no type tag dispatch)
+                    param_args.append(f'*reinterpret_cast<{storage_type}*>(parameter.at("{pname}").second)')
+                    debug_outputs.append(f'"{pname}=" << (*reinterpret_cast<{storage_type}*>(parameter.at("{pname}").second))')
                 elif _is_pointer_to_known_class(ptype):
                     # For pointers to known classes (e.g. MLCouplingNormalization<In,Out>*),
                     # the config already stores the raw object pointer in parameter.second.

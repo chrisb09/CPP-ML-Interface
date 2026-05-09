@@ -99,6 +99,10 @@ class MLCouplingApplication {
             }
         }
 
+        std::pair<MLCouplingData<In>*, MLCouplingData<Out>*> get_pre_post_buffers() {
+            return std::make_pair(&input_data_after_preprocessing, &output_data_before_postprocessing);
+        }
+
         virtual ~MLCouplingApplication() = default;
 
     protected:

@@ -1,6 +1,8 @@
 [general]
 log_level = "info"
 
+coupling_type = "STATIC"
+
 [provider]
 class = "Smartsim"
 device = "CPU"

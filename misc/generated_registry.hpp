@@ -30,7 +30,6 @@
 
 // Includes for subclasses of MLCouplingApplication
 #include "application/ml_coupling_application_turbulence_closure.hpp" // MLCouplingApplicationTurbulenceClosure 
-#include "module_test_application.hpp" // ModuleTestApplication 
 
 
 
@@ -101,9 +100,6 @@ inline std::string resolve_application_class_name(const std::string& name_or_ali
         {"turbulence-closure", "MLCouplingApplicationTurbulenceClosure"},
         {"turbulence_closure", "MLCouplingApplicationTurbulenceClosure"},
         {"turbulence", "MLCouplingApplicationTurbulenceClosure"},
-        {"ModuleTestApplication", "ModuleTestApplication"},
-        {"module-test-app", "ModuleTestApplication"},
-        {"module_test_app", "ModuleTestApplication"},
     };
 
     auto it = lookup.find(name_or_alias);
@@ -116,7 +112,11 @@ inline std::string resolve_application_class_name(const std::string& name_or_ali
 inline std::string resolve_class_name(const std::string& name_or_alias) {
     // This function checks all categories for a matching name or alias and returns the resolved class name.
     std::string resolved;
-    resolved = resolve_application_class_name(name_or_alias);
+    resolved = resolve_provider_class_name(name_or_alias);
+    if (resolved != name_or_alias) {
+        return resolved;
+    }
+    resolved = resolve_normalization_class_name(name_or_alias);
     if (resolved != name_or_alias) {
         return resolved;
     }
@@ -124,11 +124,7 @@ inline std::string resolve_class_name(const std::string& name_or_alias) {
     if (resolved != name_or_alias) {
         return resolved;
     }
-    resolved = resolve_provider_class_name(name_or_alias);
-    if (resolved != name_or_alias) {
-        return resolved;
-    }
-    resolved = resolve_normalization_class_name(name_or_alias);
+    resolved = resolve_application_class_name(name_or_alias);
     if (resolved != name_or_alias) {
         return resolved;
     }
@@ -164,8 +160,6 @@ inline std::vector<std::pair<std::string, std::string>> get_constructor_dependen
     } else if (class_name == "MLCouplingBehaviorPeriodic") {
     } else if (class_name == "MLCouplingApplicationTurbulenceClosure") {
         dependencies.push_back({"MLCouplingNormalization", "normalization"});
-    } else if (class_name == "ModuleTestApplication") {
-        dependencies.push_back({"MLCouplingNormalization", "normalization"});
     }
 
     return dependencies;
@@ -181,7 +175,7 @@ inline std::vector<std::string> get_constructor_signatures(const std::string& cl
     }
 
     if (class_name == "MLCouplingProviderPhydll") {
-        signatures.push_back("MLCouplingProviderPhydll()");
+        signatures.push_back("MLCouplingProviderPhydll(std::string model_file, std::string backend = \"TORCH\", std::string device = \"GPU\")");
         return signatures;
     }
 
@@ -211,12 +205,6 @@ inline std::vector<std::string> get_constructor_signatures(const std::string& cl
     if (class_name == "MLCouplingApplicationTurbulenceClosure") {
         signatures.push_back("MLCouplingApplicationTurbulenceClosure(MLCouplingData<In> input_data, MLCouplingData<Out> output_data, MLCouplingNormalization<In, Out>* normalization)");
         signatures.push_back("MLCouplingApplicationTurbulenceClosure(MLCouplingData<In> input_data, MLCouplingData<In> input_data_after_preprocessing, MLCouplingData<Out> output_data_before_postprocessing, MLCouplingData<Out> output_data, MLCouplingNormalization<In, Out>* normalization)");
-        return signatures;
-    }
-
-    if (class_name == "ModuleTestApplication") {
-        signatures.push_back("ModuleTestApplication(MLCouplingData<In> input_data, MLCouplingData<Out> output_data, MLCouplingNormalization<In, Out>* normalization)");
-        signatures.push_back("ModuleTestApplication(MLCouplingData<In> input_data, MLCouplingData<In> input_data_after_preprocessing, MLCouplingData<Out> output_data_before_postprocessing, MLCouplingData<Out> output_data, MLCouplingNormalization<In, Out>* normalization)");
         return signatures;
     }
 
@@ -252,7 +240,6 @@ inline std::vector<std::string> get_subclasses(const std::string& base_class_nam
 
     if (base_class_name == "MLCouplingApplication") {
         subclasses.push_back("MLCouplingApplicationTurbulenceClosure");
-        subclasses.push_back("ModuleTestApplication");
     }
 
     return subclasses;
@@ -269,7 +256,6 @@ inline std::vector<std::string> get_superclasses(const std::string& class_name) 
         {"MLCouplingBehaviorDefault", "MLCouplingBehavior"},
         {"MLCouplingBehaviorPeriodic", "MLCouplingBehavior"},
         {"MLCouplingApplicationTurbulenceClosure", "MLCouplingApplication"},
-        {"ModuleTestApplication", "MLCouplingApplication"},
     };
 
     auto it = hierarchy.find(class_name);
@@ -331,7 +317,6 @@ template<typename In, typename Out>
 inline std::string get_type_name(const MLCouplingApplication<In, Out>* obj) {
     if (!obj) return "nullptr";
     if (typeid(*obj) == typeid(MLCouplingApplicationTurbulenceClosure<In, Out>)) return "MLCouplingApplicationTurbulenceClosure";
-    if (typeid(*obj) == typeid(ModuleTestApplication<In, Out>)) return "ModuleTestApplication";
     if (typeid(*obj) == typeid(MLCouplingApplication<In, Out>)) return "MLCouplingApplication";
     return "unknown";
 }
@@ -521,12 +506,12 @@ MLCouplingProvider<In, Out>* create_instance_mlcouplingprovider(const std::strin
         }
         return nullptr;
     } else if (resolved_class_name == "MLCouplingProviderPhydll") {
-        // Constructor with 0 parameter(s)
-        // Parameters: 
-        if (parameter.size() == 0) {
+        // Constructor with 3 parameter(s)
+        // Parameters: std::string model_file, std::string backend = "TORCH", std::string device = "GPU"
+        if (parameter.size() >= 1 && parameter.size() <= 3) {
             try {
-                std::cout << "Creating instance of MLCouplingProviderPhydll with parameters: " << std::endl;
-                return new MLCouplingProviderPhydll<In, Out>();
+                std::cout << "Creating instance of MLCouplingProviderPhydll with parameters: " << "model_file=" << config_param_cast<std::string>(parameter.at("model_file")) << ", ""backend=" << (parameter.find("backend") != parameter.end() ? config_param_cast<std::string>(parameter.at("backend")) : (std::string)"TORCH") << ", ""device=" << (parameter.find("device") != parameter.end() ? config_param_cast<std::string>(parameter.at("device")) : (std::string)"GPU") << std::endl;
+                return new MLCouplingProviderPhydll<In, Out>(config_param_cast<std::string>(parameter.at("model_file")), parameter.find("backend") != parameter.end() ? config_param_cast<std::string>(parameter.at("backend")) : (std::string)"TORCH", parameter.find("device") != parameter.end() ? config_param_cast<std::string>(parameter.at("device")) : (std::string)"GPU");
             } catch (...) {
                 // Handle exceptions if necessary
             }
@@ -653,28 +638,6 @@ MLCouplingApplication<In, Out>* create_instance_mlcouplingapplication(const std:
             try {
                 std::cout << "Creating instance of MLCouplingApplicationTurbulenceClosure with parameters: " << "input_data=" << (*reinterpret_cast<MLCouplingData<In>*>(parameter.at("input_data").second)) << ", ""input_data_after_preprocessing=" << (*reinterpret_cast<MLCouplingData<In>*>(parameter.at("input_data_after_preprocessing").second)) << ", ""output_data_before_postprocessing=" << (*reinterpret_cast<MLCouplingData<Out>*>(parameter.at("output_data_before_postprocessing").second)) << ", ""output_data=" << (*reinterpret_cast<MLCouplingData<Out>*>(parameter.at("output_data").second)) << ", ""normalization=" << reinterpret_cast<MLCouplingNormalization<In, Out>*>(parameter.at("normalization").second) << std::endl;
                 return new MLCouplingApplicationTurbulenceClosure<In, Out>(*reinterpret_cast<MLCouplingData<In>*>(parameter.at("input_data").second), *reinterpret_cast<MLCouplingData<In>*>(parameter.at("input_data_after_preprocessing").second), *reinterpret_cast<MLCouplingData<Out>*>(parameter.at("output_data_before_postprocessing").second), *reinterpret_cast<MLCouplingData<Out>*>(parameter.at("output_data").second), reinterpret_cast<MLCouplingNormalization<In, Out>*>(parameter.at("normalization").second));
-            } catch (...) {
-                // Handle exceptions if necessary
-            }
-        }
-        return nullptr;
-    } else if (resolved_class_name == "ModuleTestApplication") {
-        // Constructor with 3 parameter(s)
-        // Parameters: MLCouplingData<In> input_data, MLCouplingData<Out> output_data, MLCouplingNormalization<In, Out>* normalization
-        if (parameter.size() == 3) {
-            try {
-                std::cout << "Creating instance of ModuleTestApplication with parameters: " << "input_data=" << (*reinterpret_cast<MLCouplingData<In>*>(parameter.at("input_data").second)) << ", ""output_data=" << (*reinterpret_cast<MLCouplingData<Out>*>(parameter.at("output_data").second)) << ", ""normalization=" << reinterpret_cast<MLCouplingNormalization<In, Out>*>(parameter.at("normalization").second) << std::endl;
-                return new ModuleTestApplication<In, Out>(*reinterpret_cast<MLCouplingData<In>*>(parameter.at("input_data").second), *reinterpret_cast<MLCouplingData<Out>*>(parameter.at("output_data").second), reinterpret_cast<MLCouplingNormalization<In, Out>*>(parameter.at("normalization").second));
-            } catch (...) {
-                // Handle exceptions if necessary
-            }
-        }
-        // Constructor with 5 parameter(s)
-        // Parameters: MLCouplingData<In> input_data, MLCouplingData<In> input_data_after_preprocessing, MLCouplingData<Out> output_data_before_postprocessing, MLCouplingData<Out> output_data, MLCouplingNormalization<In, Out>* normalization
-        if (parameter.size() == 5) {
-            try {
-                std::cout << "Creating instance of ModuleTestApplication with parameters: " << "input_data=" << (*reinterpret_cast<MLCouplingData<In>*>(parameter.at("input_data").second)) << ", ""input_data_after_preprocessing=" << (*reinterpret_cast<MLCouplingData<In>*>(parameter.at("input_data_after_preprocessing").second)) << ", ""output_data_before_postprocessing=" << (*reinterpret_cast<MLCouplingData<Out>*>(parameter.at("output_data_before_postprocessing").second)) << ", ""output_data=" << (*reinterpret_cast<MLCouplingData<Out>*>(parameter.at("output_data").second)) << ", ""normalization=" << reinterpret_cast<MLCouplingNormalization<In, Out>*>(parameter.at("normalization").second) << std::endl;
-                return new ModuleTestApplication<In, Out>(*reinterpret_cast<MLCouplingData<In>*>(parameter.at("input_data").second), *reinterpret_cast<MLCouplingData<In>*>(parameter.at("input_data_after_preprocessing").second), *reinterpret_cast<MLCouplingData<Out>*>(parameter.at("output_data_before_postprocessing").second), *reinterpret_cast<MLCouplingData<Out>*>(parameter.at("output_data").second), reinterpret_cast<MLCouplingNormalization<In, Out>*>(parameter.at("normalization").second));
             } catch (...) {
                 // Handle exceptions if necessary
             }

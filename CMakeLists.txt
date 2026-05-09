@@ -29,6 +29,7 @@ set(AIXELERATOR_DIR "${CMAKE_CURRENT_SOURCE_DIR}/extern/AIxeleratorService")
 set(AIXELERATOR_PREBUILT_INSTALL_PREFIX "${AIXELERATOR_DIR}/INSTALL-SCOREP" CACHE PATH "Install prefix used for prebuilt AIxelerator")
 set(AIXELERATOR_PREBUILT_LIB_DIR "${AIXELERATOR_PREBUILT_INSTALL_PREFIX}/lib" CACHE PATH "Library directory containing prebuilt AIxelerator .so")
 set(AIXELERATOR_CMAKE_ARGS "-DWITH_TORCH=ON" CACHE STRING "Additional CMake args used when auto-building prebuilt AIxelerator")
+set(PHYDLL_BUILD_DIR "${CMAKE_CURRENT_SOURCE_DIR}/extern/phydll/build" CACHE PATH "PhyDLL build prefix")
 
 message("WITH_SMARTSIM: ${WITH_SMARTSIM}")
 message("WITH_AIX: ${WITH_AIX}")
@@ -65,7 +66,7 @@ endif()
 file(GLOB_RECURSE ALL_HEADERS "${CMAKE_CURRENT_SOURCE_DIR}/include/**/*.hpp")
 
 # 2. Pfad für die generierte Datei definieren
-set(GENERATED_SRC "${CMAKE_CURRENT_SOURCE_DIR}/include/generated_registry.hpp")
+set(GENERATED_SRC "${CMAKE_CURRENT_BINARY_DIR}/generated_registry.hpp")
 
 if(NOT CPPML_DISABLE_REGISTRY_GEN)
     # 3. Custom Command für Code-Generierung
@@ -104,7 +105,7 @@ if(NOT CPPML_DISABLE_REGISTRY_GEN)
     add_dependencies(${LIBRARY_NAME} generate_registry)
 endif()
 
-target_include_directories(${LIBRARY_NAME} PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/include")
+target_include_directories(${LIBRARY_NAME} PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/include" "${CMAKE_CURRENT_BINARY_DIR}")
 
 # Header-only interface target for consumers that do not link the .so
 add_library(cpp_ml_interface_headers INTERFACE)
@@ -214,6 +215,15 @@ if(WITH_AIX)
     endif()
 endif()
 
+if(WITH_PHYDLL)
+    target_compile_definitions(${LIBRARY_NAME} PUBLIC WITH_PHYDLL)
+    target_include_directories(${LIBRARY_NAME} PUBLIC ${PHYDLL_BUILD_DIR}/include)
+    target_link_directories(${LIBRARY_NAME} PRIVATE ${PHYDLL_BUILD_DIR}/lib)
+    target_link_libraries(${LIBRARY_NAME} PRIVATE phydll)
+    target_include_directories(cpp_ml_interface_headers INTERFACE ${PHYDLL_BUILD_DIR}/include)
+    add_subdirectory(dl_clients)
+endif()
+
 # TOML++ verlinken
 target_link_libraries(${LIBRARY_NAME} PUBLIC tomlplusplus::tomlplusplus)
 
@@ -231,6 +241,11 @@ target_link_libraries(${EXECUTABLE_NAME} PRIVATE
 if(WITH_SMARTSIM)
     target_link_directories(${EXECUTABLE_NAME} PRIVATE ${SMARTREDIS_DIR}/install/lib64)
     target_link_libraries(${EXECUTABLE_NAME} PRIVATE smartredis)
+endif()
+
+if(WITH_PHYDLL)
+    target_link_directories(${EXECUTABLE_NAME} PRIVATE ${PHYDLL_BUILD_DIR}/lib)
+    target_link_libraries(${EXECUTABLE_NAME} PRIVATE phydll)
 endif()
 
 if (MPI_FOUND)

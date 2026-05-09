@@ -1,5 +1,8 @@
 #pragma once
 
+#include <string>
+#include <vector>
+
 #include "ml_coupling_provider.hpp"
 
 /*
@@ -19,6 +22,13 @@ class MLCouplingProviderFlexible : public MLCouplingProvider<In, Out> {
 
         // Essentially for the coupling step: send data to the ML model
         // We could also have a "fake" implementation of this for providers that don't need really support this by pooling the data locally and then sending it during inference...
-        virtual void send_data(MLCouplingData<In> input_data_after_preprocessing) = 0;
+        virtual void send_data(const std::vector<std::string>& keys, MLCouplingData<In>& input_data_after_preprocessing) = 0;
+
+        virtual void inference(std::vector<std::string> input_keys, std::vector<std::string> output_keys) = 0;
+
+        virtual void receive_data(std::vector<std::string> keys, MLCouplingData<Out>& output_data) = 0;
+
+        // A provider may support flexible coupling, but we still need to initialize the coupling as such
+        virtual bool is_flexible() = 0; 
 
 };

@@ -22,32 +22,6 @@ except ModuleNotFoundError:
 
 
 # =============================================================================
-# File Content Cache
-# =============================================================================
-
-_FILE_CACHE = {}
-
-
-def _get_file_lines(path):
-    if not path:
-        return []
-    cached = _FILE_CACHE.get(path)
-    if cached is not None:
-        return cached
-    try:
-        with open(path, 'r') as f:
-            lines = f.readlines()
-    except Exception:
-        lines = []
-    _FILE_CACHE[path] = lines
-    return lines
-
-
-def _get_file_text(path):
-    return ''.join(_get_file_lines(path))
-
-
-# =============================================================================
 # Libclang Initialization
 # =============================================================================
 
@@ -128,24 +102,26 @@ def get_class_metadata(node, header_path):
     """Extract @registry_name, @registry_aliases, and @category from comments above class."""
     if not node.location or not node.location.line:
         return {}
-
-    lines = _get_file_lines(header_path)
-    if not lines:
+    
+    try:
+        with open(header_path, 'r') as f:
+            lines = f.readlines()
+        
+        class_line = node.location.line - 1  # 0-indexed
+        metadata = {}
+        
+        for i in range(max(0, class_line - 15), class_line):
+            line = lines[i]
+            if match := re.match(r'//\s*@registry_name:\s*(.+)', line):
+                metadata['registry_name'] = match.group(1).strip()
+            elif match := re.match(r'//\s*@registry_aliases:\s*(.+)', line):
+                metadata['aliases'] = [a.strip() for a in match.group(1).split(',')]
+            elif match := re.match(r'//\s*@category:\s*(.+)', line):
+                metadata['category'] = match.group(1).strip()
+        
+        return metadata
+    except Exception:
         return {}
-
-    class_line = node.location.line - 1  # 0-indexed
-    metadata = {}
-
-    for i in range(max(0, class_line - 15), class_line):
-        line = lines[i]
-        if match := re.match(r'//\s*@registry_name:\s*(.+)', line):
-            metadata['registry_name'] = match.group(1).strip()
-        elif match := re.match(r'//\s*@registry_aliases:\s*(.+)', line):
-            metadata['aliases'] = [a.strip() for a in match.group(1).split(',')]
-        elif match := re.match(r'//\s*@category:\s*(.+)', line):
-            metadata['category'] = match.group(1).strip()
-
-    return metadata
 
 
 def _extract_params_from_constructor_tokens(constructor_node):
@@ -250,8 +226,10 @@ def _get_member_access_from_source(class_node, header_path, member_line):
     """Best-effort source-based access resolution for a member line within a class body.
     Returns 'public'/'private'/'protected' or None if it cannot be determined.
     """
-    lines = _get_file_lines(header_path)
-    if not lines:
+    try:
+        with open(header_path, 'r') as f:
+            lines = f.readlines()
+    except Exception:
         return None
 
     if not class_node.location or not class_node.location.line:
@@ -509,8 +487,10 @@ def is_subclass_of(node, base_name, seen=None):
 
 def text_inherits(header_path, node_name, base_name):
     """Fallback: check inheritance via regex in source text."""
-    txt = _get_file_text(header_path)
-    if not txt:
+    try:
+        with open(header_path, 'r') as f:
+            txt = f.read()
+    except Exception:
         return False
     
     pattern = rf"class\s+{re.escape(node_name)}[^{{]*:\s*[^{{;]*\b{re.escape(base_name)}\b"
@@ -522,8 +502,10 @@ def class_body_contains_pure_virtual(node, header_path):
     if not node.location or not node.location.line:
         return False
 
-    lines = _get_file_lines(header_path)
-    if not lines:
+    try:
+        with open(header_path, 'r') as f:
+            lines = f.readlines()
+    except Exception:
         return False
 
     start_line = max(0, node.location.line - 1)
@@ -1233,27 +1215,11 @@ def _write_map_factory(f, base_class, template_str, template_args, category,
             param_args = []
             debug_outputs = []
             for ptype, pname, pdefault in ctor:
-                ptype_norm = _normalize_type_for_display(ptype)
-                is_pointer = ptype_norm.endswith('*')
                 storage_type = _strip_cvref(ptype)
                 if _is_mlcoupling_data_type(ptype):
-                    if is_pointer:
-                        if pdefault:
-                            param_args.append(
-                                f'parameter.find("{pname}") != parameter.end() ? '
-                                f'reinterpret_cast<{ptype_norm}>(parameter.at("{pname}").second) : '
-                                f'({ptype_norm}){pdefault}'
-                            )
-                            debug_outputs.append(
-                                f'"{pname}=<" << (parameter.find("{pname}") != parameter.end() ? "provided" : "default") << ">"'
-                            )
-                        else:
-                            param_args.append(f'reinterpret_cast<{ptype_norm}>(parameter.at("{pname}").second)')
-                            debug_outputs.append(f'"{pname}=" << reinterpret_cast<{ptype_norm}>(parameter.at("{pname}").second)')
-                    else:
-                        # For MLCouplingData value, cast directly from void* (composite object, no type tag dispatch)
-                        param_args.append(f'*reinterpret_cast<{storage_type}*>(parameter.at("{pname}").second)')
-                        debug_outputs.append(f'"{pname}=" << (*reinterpret_cast<{storage_type}*>(parameter.at("{pname}").second))')
+                    # For MLCouplingData, cast directly from void* (composite object, no type tag dispatch)
+                    param_args.append(f'*reinterpret_cast<{storage_type}*>(parameter.at("{pname}").second)')
+                    debug_outputs.append(f'"{pname}=" << (*reinterpret_cast<{storage_type}*>(parameter.at("{pname}").second))')
                 elif _is_pointer_to_known_class(ptype):
                     # For pointers to known classes (e.g. MLCouplingNormalization<In,Out>*),
                     # the config already stores the raw object pointer in parameter.second.
@@ -1319,11 +1285,6 @@ def generate():
     # Initialize libclang
     index = init_libclang()
     parse_args = get_parse_args()
-    parse_options = 0
-    if os.environ.get("CLANG_PARSE_SKIP_FUNCTION_BODIES", "1") != "0":
-        if hasattr(clang.cindex.TranslationUnit, "PARSE_SKIP_FUNCTION_BODIES"):
-            parse_options |= clang.cindex.TranslationUnit.PARSE_SKIP_FUNCTION_BODIES
-    use_regex_fallback = os.environ.get("ENABLE_REGEX_FALLBACK", "1") != "0"
     
     # Data structures
     found_classes = {bc: [] for bc in base_classes}
@@ -1337,11 +1298,8 @@ def generate():
     
     for h in headers:
         print("Parsing:", h)
-        tu = index.parse(h, args=parse_args, options=parse_options)
+        tu = index.parse(h, args=parse_args)
         for node in tu.cursor.walk_preorder():
-            node_file = str(node.location.file) if node.location and node.location.file else ""
-            if node_file and not (node_file.endswith(h) or h.endswith(node_file)):
-                continue
             if node.kind not in (clang.cindex.CursorKind.CLASS_DECL, # type: ignore
                                  clang.cindex.CursorKind.STRUCT_DECL, # type: ignore
                                  clang.cindex.CursorKind.CLASS_TEMPLATE): # type: ignore
@@ -1364,7 +1322,7 @@ def generate():
                 
                 is_sub = is_subclass_of(node, base_class)
                 # Fallback to text-based check if AST didn't expose base specifier
-                if not is_sub and node.spelling and use_regex_fallback:
+                if not is_sub and node.spelling:
                     is_sub = text_inherits(h, node.spelling, base_class)
 
                 if is_sub and node.spelling and not is_effectively_abstract(node, h):

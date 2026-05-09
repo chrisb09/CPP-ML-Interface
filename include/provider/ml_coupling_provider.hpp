@@ -35,7 +35,14 @@ class MLCouplingProvider {
         }
 
         // Perform inference with the ML model and get the output data
-        virtual void inference(MLCouplingData<In> input_data_after_preprocessing, MLCouplingData<Out>& output_data_before_postprocessing) = 0;
+        virtual void inference(MLCouplingData<In>* input_after_preprocessing,
+                       MLCouplingData<Out>* output_before_postprocessing) = 0;
+
+        virtual void set_io_buffers(MLCouplingData<In>* input_after_preprocessing,
+                                    MLCouplingData<Out>* output_before_postprocessing) {
+            (void)input_after_preprocessing;
+            (void)output_before_postprocessing;
+        }
 
         virtual ~MLCouplingProvider() = default;
 

@@ -13,7 +13,15 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 EXTERN_RUNTIME_ROOT="/home/thes2181/python"
 DEFAULT_RUNTIME_ROOT="${SCRIPT_DIR}/extern/python"
 
+SMARTSIM_EXTERN_LIBTORCH_ROOT="/home/thes2181/libtorch"
+CREATE_LIBTORCH_SYMLINK
+
 SMARTREDIS_DIR="${SCRIPT_DIR}/extern/SmartRedis"
+
+LIBTORCH_DIR_DEFAULT="${SCRIPT_DIR}/extern/libtorch"
+LIBTORCH_DIR="${SMARTSIM_LIBTORCH_DIR:-$LIBTORCH_DIR_DEFAULT}"
+LIBTORCH_VERSION="${SMARTSIM_LIBTORCH_VERSION:-2.6.0}"
+LIBTORCH_ARCH="${SMARTSIM_LIBTORCH_ARCH:-cu124}"
 
 RUNTIME_ROOT="${SMARTSIM_RUNTIME_ROOT:-$DEFAULT_RUNTIME_ROOT}"
 
@@ -49,6 +57,46 @@ if [ "$CREATE_RUNTIME_SYMLINK" = "1" ]; then
             ln -snf "$EXTERN_RUNTIME_ROOT" "${RUNTIME_ROOT}" 2>/dev/null || true
         fi
     fi
+fi
+
+if [ "$CREATE_LIBTORCH_SYMLINK" = "1" ] && [ -n "$EXTERN_LIBTORCH_ROOT" ]; then
+    if [ ! -L "$LIBTORCH_DIR" ]; then
+        if [ -d "$LIBTORCH_DIR" ]; then
+            echo "Keeping existing '${LIBTORCH_DIR}' directory (not replacing with symlink)."
+        else
+            ln -snf "$EXTERN_LIBTORCH_ROOT" "$LIBTORCH_DIR" 2>/dev/null || true
+        fi
+    fi
+fi
+
+libtorch_ready=false
+if [ -d "$LIBTORCH_DIR" ]; then
+    if [ -f "$LIBTORCH_DIR/lib/libtorch.so" ] && [ -f "$LIBTORCH_DIR/lib/libc10.so" ]; then
+        libtorch_ready=true
+    fi
+fi
+
+if [ "$libtorch_ready" = false ]; then
+    echo "libtorch not found or incomplete in $LIBTORCH_DIR. Downloading..."
+    mkdir -p "$LIBTORCH_DIR"
+    tmp_dir="$LIBTORCH_DIR/.tmp_download"
+    rm -rf "$tmp_dir"
+    mkdir -p "$tmp_dir"
+    libtorch_zip="libtorch-cxx11-abi-shared-with-deps-${LIBTORCH_VERSION}%2B${LIBTORCH_ARCH}.zip"
+    libtorch_url="https://download.pytorch.org/libtorch/${LIBTORCH_ARCH}/${libtorch_zip}"
+    local_zip="libtorch.zip"
+    (cd "$tmp_dir" && wget -O "$local_zip" "$libtorch_url" && unzip "$local_zip")
+    if [ -d "$tmp_dir/libtorch" ]; then
+        rm -rf "$LIBTORCH_DIR"
+        mv "$tmp_dir/libtorch" "$LIBTORCH_DIR"
+        echo "libtorch installed to $LIBTORCH_DIR"
+    else
+        echo "Failed to unpack libtorch from $libtorch_url"
+        exit 1
+    fi
+    rm -rf "$tmp_dir"
+else
+    echo "libtorch found in $LIBTORCH_DIR"
 fi
 
 # options: cpu,rocm-64,cuda-11,cuda-12

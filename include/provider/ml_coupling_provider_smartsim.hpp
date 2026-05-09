@@ -101,7 +101,9 @@ private:
                                int min_batch_size = 0,
                                int min_batch_timeout = 0,
                                const std::vector<std::string>& tf_input_labels = {},
-                               const std::vector<std::string>& tf_output_labels = {})
+                               const std::vector<std::string>& tf_output_labels = {},
+                               MLCouplingData<In>* input_after_preprocessing = nullptr,
+                               MLCouplingData<Out>* output_before_postprocessing = nullptr)
                                :
           device(device),
           model_backend(model_backend),
@@ -110,7 +112,9 @@ private:
           first_gpu(first_gpu),
           batch_size(batch_size),
           min_batch_size(min_batch_size),
-          min_batch_timeout(min_batch_timeout)
+          min_batch_timeout(min_batch_timeout),
+          input_after_preprocessing(input_after_preprocessing),
+          output_before_postprocessing(output_before_postprocessing)
     {
 
         # if !defined(WITH_SMARTSIM)
@@ -212,9 +216,11 @@ public:
                                int min_batch_size = 0,
                                int min_batch_timeout = 0,
                                const std::vector<std::string>& tf_input_labels = {},
-                               const std::vector<std::string>& tf_output_labels = {}
+                               const std::vector<std::string>& tf_output_labels = {},
+                               MLCouplingData<In>* input_after_preprocessing = nullptr,
+                               MLCouplingData<Out>* output_before_postprocessing = nullptr
                             )
-        : MLCouplingProviderSmartsim(std::move(device), std::move(model_backend), std::move(model_path), std::string_view(), std::move(model_name), std::move(host), port, std::vector<std::string>(), std::vector<int>(), nodes, num_gpus, first_gpu, batch_size, min_batch_size, min_batch_timeout, tf_input_labels, tf_output_labels)
+        : MLCouplingProviderSmartsim(std::move(device), std::move(model_backend), std::move(model_path), std::string_view(), std::move(model_name), std::move(host), port, std::vector<std::string>(), std::vector<int>(), nodes, num_gpus, first_gpu, batch_size, min_batch_size, min_batch_timeout, tf_input_labels, tf_output_labels, input_after_preprocessing, output_before_postprocessing)
         {};
 
 
@@ -231,10 +237,18 @@ public:
                                int min_batch_size = 0,
                                int min_batch_timeout = 0,
                                const std::vector<std::string>& tf_input_labels = {},
-                               const std::vector<std::string>& tf_output_labels = {}
+                               const std::vector<std::string>& tf_output_labels = {},
+                               MLCouplingData<In>* input_after_preprocessing = nullptr,
+                               MLCouplingData<Out>* output_before_postprocessing = nullptr
                             )
-        : MLCouplingProviderSmartsim(std::move(device), std::move(model_backend), std::string(), std::move(model), std::move(model_name), std::move(host), port, std::vector<std::string>(), std::vector<int>(), nodes, num_gpus, first_gpu, batch_size, min_batch_size, min_batch_timeout, tf_input_labels, tf_output_labels)
+        : MLCouplingProviderSmartsim(std::move(device), std::move(model_backend), std::string(), std::move(model), std::move(model_name), std::move(host), port, std::vector<std::string>(), std::vector<int>(), nodes, num_gpus, first_gpu, batch_size, min_batch_size, min_batch_timeout, tf_input_labels, tf_output_labels, input_after_preprocessing, output_before_postprocessing)
         {};
+
+    void set_io_buffers(MLCouplingData<In>* input_after_preprocessing,
+                        MLCouplingData<Out>* output_before_postprocessing) override {
+        this->input_after_preprocessing = input_after_preprocessing;
+        this->output_before_postprocessing = output_before_postprocessing;
+    }
 
     void validate_parameter(const std::string& device,
                                const std::string& model_backend,
@@ -280,13 +294,15 @@ public:
         guarantee(tf_input_labels.empty() == tf_output_labels.empty(), "tf_input_labels and tf_output_labels must be specified together for TF and TFLITE backends");
     }
 
-    void send_data(MLCouplingData<In> input_data_after_preprocessing) override
+    void inference(MLCouplingData<In>* input_after_preprocessing,
+                   MLCouplingData<Out>* output_before_postprocessing) override
     {
-        // TODO
-    }
 
-    void inference(MLCouplingData<In> input_data_after_preprocessing, MLCouplingData<Out>& output_data_before_postprocessing) override
-    {
+        guarantee(input_after_preprocessing != nullptr, "Smartsim inference requires input_after_preprocessing.");
+        guarantee(output_before_postprocessing != nullptr, "Smartsim inference requires output_before_postprocessing.");
+
+        auto& input_data_after_preprocessing = *input_after_preprocessing;
+        auto& output_data_before_postprocessing = *output_before_postprocessing;
 
         # ifdef WITH_SMARTSIM
 
@@ -391,5 +407,27 @@ public:
         # endif
         // TODO
     }
+
+
+    void send_data(const std::vector<std::string>& keys, MLCouplingData<In>& input_data_after_preprocessing) override {
+        return; // TODO
+    }
+
+    void inference(std::vector<std::string> input_keys, std::vector<std::string> output_keys) override {
+        return; // TODO
+    }
+
+    void receive_data(std::vector<std::string> keys, MLCouplingData<Out>& output_data) override {
+        return; // TODO
+    }
+
+    bool is_flexible() override {
+        return false; // for now
+    }
+
+private:
+    MLCouplingData<In>* input_after_preprocessing = nullptr;
+    MLCouplingData<Out>* output_before_postprocessing = nullptr;
+
 
 };
