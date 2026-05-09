@@ -5,3 +5,7 @@
 	path = extern/SmartRedis
 	url = git@github.com:chrisb09/SmartRedis.git
 	branch = develop
+[submodule "extern/phydll"]
+	path = extern/phydll
+	url = https://gitlab.com/cerfacs/phydll.git
+	branch = release/0.2
