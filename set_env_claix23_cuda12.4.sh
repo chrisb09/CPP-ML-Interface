@@ -1,4 +1,4 @@
-#!/usr/local_rwth/bin/zsh
+#!/bin/sh
 
 # SmartSim requirements:
 # - Python 3.9-3.11, pip
@@ -11,24 +11,12 @@
 
 # CUDA/12.4.0  GCCcore/11.3.0  Clang/15.0.5  GCC/11.3.0  OpenMPI/4.1.4  FFTW.MPI/3.3.10  HDF5/1.12.2  PnetCDF/1.12.3  cuDNN/8.9.7.29-CUDA-12.4.0  imkl/2024.2.0
 
-module_names=(
-    OpenSSL/1.1
-    CUDA/12.4.0
-    GCCcore/11.3.0
-    Clang/15.0.5
-    GCC/11.3.0
-    OpenMPI/4.1.4
-    FFTW.MPI/3.3.10
-    HDF5/1.12.2
-    PnetCDF/1.12.3
-    cuDNN/8.9.7.29-CUDA-12.4.0
-    imkl/2024.2.0
-)
+module_names="OpenSSL/1.1 CUDA/12.4.0 GCCcore/11.3.0 Clang/15.0.5 GCC/11.3.0 OpenMPI/4.1.4 FFTW.MPI/3.3.10 HDF5/1.12.2 PnetCDF/1.12.3 cuDNN/8.9.7.29-CUDA-12.4.0 imkl/2024.2.0"
 
 any_load_required=false
 
-for module in "${module_names[@]}"; do
-    if ! module is-loaded "$module" &> /dev/null; then
+for module in $module_names; do
+    if ! module is-loaded "$module" >/dev/null 2>&1; then
         any_load_required=true
         echo "Module $module is not loaded. Purging and loading required modules."
         break
@@ -39,7 +27,7 @@ if [ "$any_load_required" = true ]; then
     echo "Purging and loading required modules for SmartSim..."
     module purge
     echo "Loading required modules..."
-    for module in "${module_names[@]}"; do
+    for module in $module_names; do
         module load "$module"
     done
 fi

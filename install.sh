@@ -7,14 +7,15 @@ mkdir -p "$TMPDIR"
 
 . ./set_env_claix23_cuda12.4.sh 
 
-# Script dir
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# Script dir (POSIX sh)
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 
 EXTERN_RUNTIME_ROOT="/home/thes2181/python"
 DEFAULT_RUNTIME_ROOT="${SCRIPT_DIR}/extern/python"
 
-SMARTSIM_EXTERN_LIBTORCH_ROOT="/home/thes2181/libtorch"
-CREATE_LIBTORCH_SYMLINK
+EXTERN_LIBTORCH_ROOT="/home/thes2181/libtorch"
+CREATE_LIBTORCH_SYMLINK=1
+FORCE_LIBTORCH_SYMLINK="${SMARTSIM_FORCE_LIBTORCH_SYMLINK:-0}"
 
 SMARTREDIS_DIR="${SCRIPT_DIR}/extern/SmartRedis"
 
@@ -50,6 +51,16 @@ echo "Using SmartSim runtime root: $RUNTIME_ROOT"
 echo "Using SmartSim runtime tar dir: $RUNTIME_TAR_DIR"
 
 if [ "$CREATE_RUNTIME_SYMLINK" = "1" ]; then
+    if [ -L "${RUNTIME_ROOT}" ] && [ ! -e "${RUNTIME_ROOT}" ]; then
+        echo "Removing dangling runtime symlink: ${RUNTIME_ROOT}"
+        rm -f "${RUNTIME_ROOT}"
+        if [ -n "$EXTERN_RUNTIME_ROOT" ] && [ -d "$EXTERN_RUNTIME_ROOT" ]; then
+            ln -snf "$EXTERN_RUNTIME_ROOT" "${RUNTIME_ROOT}" 2>/dev/null || true
+        else
+            echo "External runtime root missing; creating local directory: ${RUNTIME_ROOT}"
+            mkdir -p "${RUNTIME_ROOT}"
+        fi
+    fi
     if [ ! -L "${RUNTIME_ROOT}" ]; then
         if [ -d "${RUNTIME_ROOT}" ]; then
             echo "Keeping existing '${RUNTIME_ROOT}' directory (not replacing with symlink)."
@@ -62,7 +73,13 @@ fi
 if [ "$CREATE_LIBTORCH_SYMLINK" = "1" ] && [ -n "$EXTERN_LIBTORCH_ROOT" ]; then
     if [ ! -L "$LIBTORCH_DIR" ]; then
         if [ -d "$LIBTORCH_DIR" ]; then
-            echo "Keeping existing '${LIBTORCH_DIR}' directory (not replacing with symlink)."
+            if [ "$FORCE_LIBTORCH_SYMLINK" = "1" ]; then
+                echo "Replacing existing '${LIBTORCH_DIR}' directory with symlink."
+                rm -rf "$LIBTORCH_DIR"
+                ln -snf "$EXTERN_LIBTORCH_ROOT" "$LIBTORCH_DIR" 2>/dev/null || true
+            else
+                echo "Keeping existing '${LIBTORCH_DIR}' directory (not replacing with symlink)."
+            fi
         else
             ln -snf "$EXTERN_LIBTORCH_ROOT" "$LIBTORCH_DIR" 2>/dev/null || true
         fi
@@ -78,20 +95,32 @@ fi
 
 if [ "$libtorch_ready" = false ]; then
     echo "libtorch not found or incomplete in $LIBTORCH_DIR. Downloading..."
-    mkdir -p "$LIBTORCH_DIR"
-    tmp_dir="$LIBTORCH_DIR/.tmp_download"
-    rm -rf "$tmp_dir"
-    mkdir -p "$tmp_dir"
+    # If libtorch dir is a dangling symlink, remove it so we can create a real directory.
+    if [ -L "$LIBTORCH_DIR" ] && [ ! -e "$LIBTORCH_DIR" ]; then
+        echo "Removing dangling symlink: $LIBTORCH_DIR"
+        rm -f "$LIBTORCH_DIR"
+    fi
+    tmp_dir="$(mktemp -d "${TMPDIR}/libtorch.XXXXXX" 2>/dev/null || mktemp -d)"
     libtorch_zip="libtorch-cxx11-abi-shared-with-deps-${LIBTORCH_VERSION}%2B${LIBTORCH_ARCH}.zip"
     libtorch_url="https://download.pytorch.org/libtorch/${LIBTORCH_ARCH}/${libtorch_zip}"
     local_zip="libtorch.zip"
     (cd "$tmp_dir" && wget -O "$local_zip" "$libtorch_url" && unzip "$local_zip")
     if [ -d "$tmp_dir/libtorch" ]; then
-        rm -rf "$LIBTORCH_DIR"
-        mv "$tmp_dir/libtorch" "$LIBTORCH_DIR"
-        echo "libtorch installed to $LIBTORCH_DIR"
+        if [ -L "$LIBTORCH_DIR" ]; then
+            rm -f "$LIBTORCH_DIR"
+        else
+            rm -rf "$LIBTORCH_DIR"
+        fi
+        if mv "$tmp_dir/libtorch" "$LIBTORCH_DIR"; then
+            echo "libtorch installed to $LIBTORCH_DIR"
+        else
+            echo "Failed to move libtorch into $LIBTORCH_DIR"
+            rm -rf "$tmp_dir"
+            exit 1
+        fi
     else
         echo "Failed to unpack libtorch from $libtorch_url"
+        rm -rf "$tmp_dir"
         exit 1
     fi
     rm -rf "$tmp_dir"
