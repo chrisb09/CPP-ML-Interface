@@ -4,73 +4,80 @@
 
 #include "ml_coupling_application.hpp"
 
-
 // @registry_name: TurbulenceClosure
 // @registry_aliases: turbulence-closure, turbulence_closure, turbulence
 template <typename In, typename Out>
-class MLCouplingApplicationTurbulenceClosure : public MLCouplingApplication<In, Out> {
-    public:
+class MLCouplingApplicationTurbulenceClosure : public MLCouplingApplication<In, Out>
+{
+public:
+    MLCouplingApplicationTurbulenceClosure(
+        MLCouplingData<In> input_data,
+        MLCouplingData<Out> output_data,
+        MLCouplingNormalization<In, Out> *normalization)
+        : MLCouplingApplication<In, Out>(std::move(input_data), std::move(output_data), normalization)
+    {
+    }
 
-        MLCouplingApplicationTurbulenceClosure(
-            MLCouplingData<In> input_data,
-            MLCouplingData<Out> output_data,
-            MLCouplingNormalization<In, Out>* normalization)
-            : MLCouplingApplication<In, Out>(std::move(input_data), std::move(output_data), normalization) {
-        }
+    MLCouplingApplicationTurbulenceClosure(
+        MLCouplingData<In> input_data,
+        MLCouplingData<In> input_data_after_preprocessing,
+        MLCouplingData<Out> output_data_before_postprocessing,
+        MLCouplingData<Out> output_data,
+        MLCouplingNormalization<In, Out> *normalization)
+        : MLCouplingApplication<In, Out>(std::move(input_data),
+                                         std::move(input_data_after_preprocessing),
+                                         std::move(output_data_before_postprocessing),
+                                         std::move(output_data),
+                                         normalization)
+    {
+    }
 
-        MLCouplingApplicationTurbulenceClosure(
-            MLCouplingData<In> input_data,
-            MLCouplingData<In> input_data_after_preprocessing,
-            MLCouplingData<Out> output_data_before_postprocessing,
-            MLCouplingData<Out> output_data,
-            MLCouplingNormalization<In, Out>* normalization)
-            : MLCouplingApplication<In, Out>(std::move(input_data),
-                                             std::move(input_data_after_preprocessing),
-                                             std::move(output_data_before_postprocessing),
-                                             std::move(output_data),
-                                             normalization) {
-        }
+protected:
+    // Pre- and post-processing are already called in MLCoupling's ml_step()
 
-    protected:
-        // Pre- and post-processing are already called in MLCoupling's ml_step()
+    MLCouplingData<In> preprocess(MLCouplingData<In> input_data) override
+    {
+        // TODO: Implement turbulence closure specific preprocessing here
+        this->normalization->normalize_input(input_data);
+        uniform_filtering();
+        downsampling();
+        return input_data;
+    }
 
-        MLCouplingData<In> preprocess(MLCouplingData<In> input_data) override {
-            // TODO: Implement turbulence closure specific preprocessing here
-            this->normalization->normalize_input(input_data);
-            uniform_filtering();
-            downsampling();
-            return input_data;
-        }
+    void coupling_step(MLCouplingData<In> input_data_after_preprocessing) override
+    {
+        // Implement turbulence closure specific inference logic here
+        // TODO
+    }
 
-        void coupling_step(MLCouplingData<In> input_data_after_preprocessing) override {
-            // Implement turbulence closure specific inference logic here
-            // TODO
-        }
+    MLCouplingData<Out> ml_step(MLCouplingData<In> input_data_after_preprocessing) override
+    {
+        // Implement turbulence closure specific inference logic here
+        // TODO
+        return MLCouplingData<Out>();
+    }
 
-        MLCouplingData<Out> ml_step(MLCouplingData<In> input_data_after_preprocessing) override {
-            // Implement turbulence closure specific inference logic here
-            // TODO
-            return MLCouplingData<Out>();
-        }
+    MLCouplingData<Out> postprocess(MLCouplingData<Out> output_data_before_postprocessing) override
+    {
+        // TODO: Implement turbulence closure specific postprocessing here
+        this->normalization->denormalize_output(output_data_before_postprocessing);
+        compute_tau_ij();
+        return output_data_before_postprocessing;
+    }
 
-        MLCouplingData<Out> postprocess(MLCouplingData<Out> output_data_before_postprocessing) override {
-            // TODO: Implement turbulence closure specific postprocessing here
-            this->normalization->denormalize_output(output_data_before_postprocessing);
-            compute_tau_ij();
-            return output_data_before_postprocessing;
-        }
-        
-    private:
-        void uniform_filtering() {
-            // Placeholder for uniform filtering implementation
-        }
+private:
+    void uniform_filtering()
+    {
+        // Placeholder for uniform filtering implementation
+    }
 
-        void downsampling() {
-            // Placeholder for downsampling implementation
-        }
+    void downsampling()
+    {
+        // Placeholder for downsampling implementation
+    }
 
-        void compute_tau_ij() {
-            // Placeholder for computing subgrid-scale stress tensor tau_ij
-        }
-
+    void compute_tau_ij()
+    {
+        // Placeholder for computing subgrid-scale stress tensor tau_ij
+    }
 };

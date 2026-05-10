@@ -37,7 +37,7 @@ public:
 		using pointer = void;
 		using reference = T;
 
-		const_element_iterator(const MLCouplingTensor<T>* tensor, size_t linear_index)
+		const_element_iterator(const MLCouplingTensor<T> *tensor, size_t linear_index)
 			: tensor_(tensor), linear_index_(linear_index) {}
 
 		T operator*() const
@@ -45,7 +45,7 @@ public:
 			return tensor_->at_linear(linear_index_);
 		}
 
-		const_element_iterator& operator++()
+		const_element_iterator &operator++()
 		{
 			++linear_index_;
 			return *this;
@@ -58,28 +58,28 @@ public:
 			return tmp;
 		}
 
-		bool operator==(const const_element_iterator& other) const
+		bool operator==(const const_element_iterator &other) const
 		{
 			return tensor_ == other.tensor_ && linear_index_ == other.linear_index_;
 		}
 
-		bool operator!=(const const_element_iterator& other) const
+		bool operator!=(const const_element_iterator &other) const
 		{
 			return !(*this == other);
 		}
 
 	private:
-		const MLCouplingTensor<T>* tensor_;
+		const MLCouplingTensor<T> *tensor_;
 		size_t linear_index_;
 	};
 
 	MLCouplingTensor() = default;
 
-	MLCouplingTensor(void* root,
+	MLCouplingTensor(void *root,
 					 std::vector<int> dimensions,
 					 MLCouplingMemoryLayout layout,
 					 MLCouplingOwnership ownership = MLCouplingOwnershipExternal,
-					 std::function<void(void*)> deleter = {})
+					 std::function<void(void *)> deleter = {})
 		: root_(root),
 		  dimensions_(std::move(dimensions)),
 		  layout_(layout),
@@ -93,7 +93,7 @@ public:
 		validate_shape();
 	}
 
-	static MLCouplingTensor<T> wrap_flat(T* data,
+	static MLCouplingTensor<T> wrap_flat(T *data,
 										 std::vector<int> dimensions,
 										 MLCouplingMemoryLayout layout = MLCouplingMemLayoutContiguous,
 										 MLCouplingOwnership ownership = MLCouplingOwnershipExternal)
@@ -102,17 +102,18 @@ public:
 		{
 			throw std::invalid_argument("wrap_flat(): layout must be contiguous");
 		}
-		return MLCouplingTensor<T>(static_cast<void*>(data), std::move(dimensions), layout, ownership,
+		return MLCouplingTensor<T>(static_cast<void *>(data), std::move(dimensions), layout, ownership,
 								   ownership == MLCouplingOwnershipOwned
-									   ? [](void* ptr) { delete[] static_cast<T*>(ptr); }
-									   : std::function<void(void*)>{});
+									   ? [](void *ptr)
+									   { delete[] static_cast<T *>(ptr); }
+									   : std::function<void(void *)>{});
 	}
 
-	static MLCouplingTensor<T> wrap_nested(void* root,
+	static MLCouplingTensor<T> wrap_nested(void *root,
 										   std::vector<int> dimensions,
 										   MLCouplingMemoryLayout layout = MLCouplingMemLayoutNested,
 										   MLCouplingOwnership ownership = MLCouplingOwnershipExternal,
-										   std::function<void(void*)> deleter = {})
+										   std::function<void(void *)> deleter = {})
 	{
 		if (!is_nested_layout(layout))
 		{
@@ -121,8 +122,8 @@ public:
 		return MLCouplingTensor<T>(root, std::move(dimensions), layout, ownership, std::move(deleter));
 	}
 
-	static MLCouplingTensor<T> from_flat_copy(const std::vector<T>& values,
-											  const std::vector<int>& dimensions,
+	static MLCouplingTensor<T> from_flat_copy(const std::vector<T> &values,
+											  const std::vector<int> &dimensions,
 											  MLCouplingMemoryLayout layout = MLCouplingMemLayoutContiguous)
 	{
 		if (!is_contiguous_layout(layout))
@@ -136,7 +137,7 @@ public:
 			throw std::invalid_argument("from_flat_copy(): values.size() does not match dimensions product");
 		}
 
-		T* buffer = new T[expected];
+		T *buffer = new T[expected];
 		std::copy(values.begin(), values.end(), buffer);
 		return wrap_flat(buffer, dimensions, layout, MLCouplingOwnershipOwned);
 	}
@@ -146,7 +147,7 @@ public:
 		release_owned();
 	}
 
-	MLCouplingTensor(const MLCouplingTensor& other)
+	MLCouplingTensor(const MLCouplingTensor &other)
 		: root_(other.root_),
 		  dimensions_(other.dimensions_),
 		  layout_(other.layout_),
@@ -154,7 +155,7 @@ public:
 		  deleter_(other.deleter_),
 		  owner_(other.owner_) {}
 
-	MLCouplingTensor& operator=(const MLCouplingTensor& other)
+	MLCouplingTensor &operator=(const MLCouplingTensor &other)
 	{
 		if (this == &other)
 		{
@@ -170,7 +171,7 @@ public:
 		return *this;
 	}
 
-	MLCouplingTensor(MLCouplingTensor&& other) noexcept
+	MLCouplingTensor(MLCouplingTensor &&other) noexcept
 		: root_(other.root_),
 		  dimensions_(std::move(other.dimensions_)),
 		  layout_(other.layout_),
@@ -184,7 +185,7 @@ public:
 		other.deleter_ = {};
 	}
 
-	MLCouplingTensor& operator=(MLCouplingTensor&& other) noexcept
+	MLCouplingTensor &operator=(MLCouplingTensor &&other) noexcept
 	{
 		if (this == &other)
 		{
@@ -207,7 +208,7 @@ public:
 
 		return *this;
 	}
-	const std::vector<int>& dimensions() const { return dimensions_; }
+	const std::vector<int> &dimensions() const { return dimensions_; }
 	// AIxeleratorService needs int64 dimensions, so we provide a helper for that. We can add similar helpers for other types if needed.
 	const std::vector<int64_t> dimensions_as_int64() const
 	{
@@ -221,7 +222,7 @@ public:
 	}
 	MLCouplingMemoryLayout layout() const { return layout_; }
 	MLCouplingOwnership ownership() const { return ownership_; }
-	void* root() const { return root_; }
+	void *root() const { return root_; }
 	bool empty() const { return numel() == 0; }
 
 	size_t rank() const
@@ -234,10 +235,10 @@ public:
 		return numel_from_shape(dimensions_);
 	}
 
-    size_t element_size() const
-    {
-        return sizeof(T);
-    }
+	size_t element_size() const
+	{
+		return sizeof(T);
+	}
 
 	bool is_nested() const
 	{
@@ -254,28 +255,28 @@ public:
 		return to_ml_coupling_data_type<T>();
 	}
 
-	T at(const std::vector<int>& index) const
+	T at(const std::vector<int> &index) const
 	{
 		validate_index(index);
 
 		if (is_contiguous())
 		{
 			const size_t offset = linear_offset(index, dimensions_, layout_);
-			return static_cast<T*>(root_)[offset];
+			return static_cast<T *>(root_)[offset];
 		}
 
 		if (dimensions_.size() == 1)
 		{
-			return static_cast<T*>(root_)[index[0]];
+			return static_cast<T *>(root_)[index[0]];
 		}
 
-		const void* current = root_;
+		const void *current = root_;
 		for (size_t depth = 0; depth + 1 < dimensions_.size(); ++depth)
 		{
-			const void* const* level = static_cast<const void* const*>(current);
+			const void *const *level = static_cast<const void *const *>(current);
 			current = level[index[depth]];
 		}
-		const T* leaf = static_cast<const T*>(current);
+		const T *leaf = static_cast<const T *>(current);
 		return leaf[index.back()];
 	}
 
@@ -288,34 +289,34 @@ public:
 		return at(unravel_index(linear_index, dimensions_, layout_));
 	}
 
-	void set(const std::vector<int>& index, const T& value)
+	void set(const std::vector<int> &index, const T &value)
 	{
 		validate_index(index);
 
 		if (is_contiguous())
 		{
 			const size_t offset = linear_offset(index, dimensions_, layout_);
-			static_cast<T*>(root_)[offset] = value;
+			static_cast<T *>(root_)[offset] = value;
 			return;
 		}
 
 		if (dimensions_.size() == 1)
 		{
-			static_cast<T*>(root_)[index[0]] = value;
+			static_cast<T *>(root_)[index[0]] = value;
 			return;
 		}
 
-		void* current = root_;
+		void *current = root_;
 		for (size_t depth = 0; depth + 1 < dimensions_.size(); ++depth)
 		{
-			void** level = static_cast<void**>(current);
+			void **level = static_cast<void **>(current);
 			current = level[index[depth]];
 		}
-		T* leaf = static_cast<T*>(current);
+		T *leaf = static_cast<T *>(current);
 		leaf[index.back()] = value;
 	}
 
-	void set_linear(size_t linear_index, const T& value)
+	void set_linear(size_t linear_index, const T &value)
 	{
 		if (linear_index >= numel())
 		{
@@ -365,25 +366,27 @@ public:
 		if (flat.rank() == 1)
 		{
 			const size_t n = flat.numel();
-			T* leaf = new T[n];
-			std::copy(static_cast<T*>(flat.root_), static_cast<T*>(flat.root_) + n, leaf);
-			return wrap_nested(static_cast<void*>(leaf), flat.dimensions_, target_layout,
+			T *leaf = new T[n];
+			std::copy(static_cast<T *>(flat.root_), static_cast<T *>(flat.root_) + n, leaf);
+			return wrap_nested(static_cast<void *>(leaf), flat.dimensions_, target_layout,
 							   MLCouplingOwnershipOwned,
-							   [](void* ptr) { delete[] static_cast<T*>(ptr); });
+							   [](void *ptr)
+							   { delete[] static_cast<T *>(ptr); });
 		}
 
-		std::function<void*(size_t, size_t)> build_level;
-		build_level = [&](size_t depth, size_t base_linear) -> void* {
+		std::function<void *(size_t, size_t)> build_level;
+		build_level = [&](size_t depth, size_t base_linear) -> void *
+		{
 			const int level_size = flat.dimensions_[depth];
 
 			if (depth + 1 == flat.dimensions_.size() - 1)
 			{
-				void** table = new void*[level_size];
+				void **table = new void *[level_size];
 				const int leaf_size = flat.dimensions_.back();
 
 				for (int i = 0; i < level_size; ++i)
 				{
-					T* leaf = new T[leaf_size];
+					T *leaf = new T[leaf_size];
 					for (int j = 0; j < leaf_size; ++j)
 					{
 						std::vector<int> idx(flat.dimensions_.size(), 0);
@@ -397,28 +400,29 @@ public:
 						}
 
 						const size_t src_off = linear_offset(idx, flat.dimensions_, flat.layout_);
-						leaf[j] = static_cast<T*>(flat.root_)[src_off];
+						leaf[j] = static_cast<T *>(flat.root_)[src_off];
 					}
-					table[i] = static_cast<void*>(leaf);
+					table[i] = static_cast<void *>(leaf);
 				}
-				return static_cast<void*>(table);
+				return static_cast<void *>(table);
 			}
 
-			void** table = new void*[level_size];
+			void **table = new void *[level_size];
 			const size_t stride = stride_for_depth(flat.dimensions_, flat.layout_, depth);
 			for (int i = 0; i < level_size; ++i)
 			{
 				table[i] = build_level(depth + 1, base_linear + static_cast<size_t>(i) * stride);
 			}
-			return static_cast<void*>(table);
+			return static_cast<void *>(table);
 		};
 
-		void* root = build_level(0, 0);
+		void *root = build_level(0, 0);
 		return wrap_nested(root,
 						   flat.dimensions_,
 						   target_layout,
 						   MLCouplingOwnershipOwned,
-						   [dims = flat.dimensions_](void* ptr) {
+						   [dims = flat.dimensions_](void *ptr)
+						   {
 							   free_nested_tree(ptr, dims, 0);
 						   });
 	}
@@ -426,7 +430,7 @@ public:
 	const_element_iterator begin_elements() const { return const_element_iterator(this, 0); }
 	const_element_iterator end_elements() const { return const_element_iterator(this, numel()); }
 
-	std::string to_string(const std::string& class_name = "MLCouplingTensor") const
+	std::string to_string(const std::string &class_name = "MLCouplingTensor") const
 	{
 		std::ostringstream out;
 		out << class_name << "{"
@@ -464,33 +468,33 @@ public:
 		return out.str();
 	}
 
-    std::string shape_string() const
-    {
-        std::ostringstream out;
-        out << "[";
-        for (size_t i = 0; i < dimensions_.size(); ++i)
-        {
-            if (i > 0)
-            {
-                out << ", ";
-            }
-            out << dimensions_[i];
-        }
-        out << "]";
-        return out.str();
-    }
+	std::string shape_string() const
+	{
+		std::ostringstream out;
+		out << "[";
+		for (size_t i = 0; i < dimensions_.size(); ++i)
+		{
+			if (i > 0)
+			{
+				out << ", ";
+			}
+			out << dimensions_[i];
+		}
+		out << "]";
+		return out.str();
+	}
 
 private:
-	void* root_ = nullptr;
+	void *root_ = nullptr;
 	std::vector<int> dimensions_;
 	MLCouplingMemoryLayout layout_ = MLCouplingMemLayoutInvalid;
 	MLCouplingOwnership ownership_ = MLCouplingOwnershipExternal;
-	std::function<void(void*)> deleter_;
+	std::function<void(void *)> deleter_;
 	std::shared_ptr<void> owner_;
 
-	static std::shared_ptr<void> make_owner(void* root,
-											 MLCouplingMemoryLayout layout,
-											 const std::function<void(void*)>& deleter)
+	static std::shared_ptr<void> make_owner(void *root,
+											MLCouplingMemoryLayout layout,
+											const std::function<void(void *)> &deleter)
 	{
 		if (root == nullptr)
 		{
@@ -502,12 +506,13 @@ private:
 		}
 		if (is_contiguous_layout(layout))
 		{
-			return std::shared_ptr<void>(root, [](void* ptr) { delete[] static_cast<T*>(ptr); });
+			return std::shared_ptr<void>(root, [](void *ptr)
+										 { delete[] static_cast<T *>(ptr); });
 		}
 		return {};
 	}
 
-	static size_t numel_from_shape(const std::vector<int>& dimensions)
+	static size_t numel_from_shape(const std::vector<int> &dimensions)
 	{
 		if (dimensions.empty())
 		{
@@ -526,7 +531,7 @@ private:
 	}
 
 	static std::vector<int> unravel_index(size_t linear_index,
-										  const std::vector<int>& dimensions,
+										  const std::vector<int> &dimensions,
 										  MLCouplingMemoryLayout layout)
 	{
 		std::vector<int> idx(dimensions.size(), 0);
@@ -555,8 +560,8 @@ private:
 		return idx;
 	}
 
-	static size_t linear_offset(const std::vector<int>& index,
-								const std::vector<int>& dimensions,
+	static size_t linear_offset(const std::vector<int> &index,
+								const std::vector<int> &dimensions,
 								MLCouplingMemoryLayout layout)
 	{
 		if (index.size() != dimensions.size())
@@ -586,7 +591,7 @@ private:
 		return offset;
 	}
 
-	static size_t stride_for_depth(const std::vector<int>& dimensions,
+	static size_t stride_for_depth(const std::vector<int> &dimensions,
 								   MLCouplingMemoryLayout layout,
 								   size_t depth)
 	{
@@ -613,7 +618,7 @@ private:
 		return stride;
 	}
 
-	static void free_nested_tree(void* root, const std::vector<int>& dimensions, size_t depth)
+	static void free_nested_tree(void *root, const std::vector<int> &dimensions, size_t depth)
 	{
 		if (root == nullptr)
 		{
@@ -627,22 +632,22 @@ private:
 
 		if (dimensions.size() == 1)
 		{
-			delete[] static_cast<T*>(root);
+			delete[] static_cast<T *>(root);
 			return;
 		}
 
 		if (depth + 1 == dimensions.size() - 1)
 		{
-			void** table = static_cast<void**>(root);
+			void **table = static_cast<void **>(root);
 			for (int i = 0; i < dimensions[depth]; ++i)
 			{
-				delete[] static_cast<T*>(table[i]);
+				delete[] static_cast<T *>(table[i]);
 			}
 			delete[] table;
 			return;
 		}
 
-		void** table = static_cast<void**>(root);
+		void **table = static_cast<void **>(root);
 		for (int i = 0; i < dimensions[depth]; ++i)
 		{
 			free_nested_tree(table[i], dimensions, depth + 1);
@@ -666,7 +671,7 @@ private:
 		}
 	}
 
-	void validate_index(const std::vector<int>& index) const
+	void validate_index(const std::vector<int> &index) const
 	{
 		if (index.size() != dimensions_.size())
 		{
@@ -689,7 +694,7 @@ private:
 		deleter_ = {};
 	}
 
-	void copy_from(const MLCouplingTensor& other)
+	void copy_from(const MLCouplingTensor &other)
 	{
 		dimensions_ = other.dimensions_;
 		layout_ = other.layout_;
@@ -708,11 +713,12 @@ private:
 		if (is_contiguous_layout(other.layout_))
 		{
 			const size_t n = flat.numel();
-			T* copied = new T[n];
-			std::copy(static_cast<T*>(flat.root_), static_cast<T*>(flat.root_) + n, copied);
-			root_ = static_cast<void*>(copied);
+			T *copied = new T[n];
+			std::copy(static_cast<T *>(flat.root_), static_cast<T *>(flat.root_) + n, copied);
+			root_ = static_cast<void *>(copied);
 			ownership_ = MLCouplingOwnershipOwned;
-			deleter_ = [](void* ptr) { delete[] static_cast<T*>(ptr); };
+			deleter_ = [](void *ptr)
+			{ delete[] static_cast<T *>(ptr); };
 			owner_ = make_owner(root_, layout_, deleter_);
 			return;
 		}
@@ -743,12 +749,12 @@ public:
 	explicit MLCouplingData(std::vector<MLCouplingTensor<T>> tensors)
 		: tensors_(std::move(tensors)) {}
 
-	void add_tensor(const MLCouplingTensor<T>& tensor)
+	void add_tensor(const MLCouplingTensor<T> &tensor)
 	{
 		tensors_.push_back(tensor);
 	}
 
-	void add_tensor(MLCouplingTensor<T>&& tensor)
+	void add_tensor(MLCouplingTensor<T> &&tensor)
 	{
 		tensors_.push_back(std::move(tensor));
 	}
@@ -756,8 +762,8 @@ public:
 	size_t size() const { return tensors_.size(); }
 	bool empty() const { return tensors_.empty(); }
 
-	MLCouplingTensor<T>& operator[](size_t i) { return tensors_.at(i); }
-	const MLCouplingTensor<T>& operator[](size_t i) const { return tensors_.at(i); }
+	MLCouplingTensor<T> &operator[](size_t i) { return tensors_.at(i); }
+	const MLCouplingTensor<T> &operator[](size_t i) const { return tensors_.at(i); }
 
 	iterator begin() { return tensors_.begin(); }
 	iterator end() { return tensors_.end(); }
@@ -770,7 +776,7 @@ public:
 	{
 		MLCouplingData<T> out;
 		out.tensors_.reserve(tensors_.size());
-		for (const auto& t : tensors_)
+		for (const auto &t : tensors_)
 		{
 			out.tensors_.push_back(t.flatten(target_layout));
 		}
@@ -781,7 +787,7 @@ public:
 	{
 		MLCouplingData<T> out;
 		out.tensors_.reserve(tensors_.size());
-		for (const auto& tensor : tensors_)
+		for (const auto &tensor : tensors_)
 		{
 			out.tensors_.push_back(tensor.deep_copy());
 		}
@@ -792,13 +798,13 @@ public:
 	{
 		std::vector<T> combined;
 		size_t total = 0;
-		for (const auto& tensor : tensors_)
+		for (const auto &tensor : tensors_)
 		{
 			total += tensor.numel();
 		}
 		combined.reserve(total);
 
-		for (const auto& tensor : tensors_)
+		for (const auto &tensor : tensors_)
 		{
 			std::vector<T> local = tensor.as_flat_vector(MLCouplingMemLayoutContiguous);
 			combined.insert(combined.end(), local.begin(), local.end());
@@ -807,7 +813,7 @@ public:
 		return combined;
 	}
 
-	std::string to_string(const std::string& class_name = "MLCouplingData") const
+	std::string to_string(const std::string &class_name = "MLCouplingData") const
 	{
 		std::ostringstream out;
 		out << class_name << "{num_tensors=" << tensors_.size() << ", tensors=[";
@@ -828,14 +834,14 @@ private:
 };
 
 template <typename T>
-std::ostream& operator<<(std::ostream& os, const MLCouplingTensor<T>& tensor)
+std::ostream &operator<<(std::ostream &os, const MLCouplingTensor<T> &tensor)
 {
 	os << tensor.to_string();
 	return os;
 }
 
 template <typename T>
-std::ostream& operator<<(std::ostream& os, const MLCouplingData<T>& data)
+std::ostream &operator<<(std::ostream &os, const MLCouplingData<T> &data)
 {
 	os << data.to_string();
 	return os;
@@ -848,7 +854,7 @@ public:
 	explicit MLCouplingScalar(T value)
 		: MLCouplingTensor<T>(MLCouplingTensor<T>::from_flat_copy(std::vector<T>{value}, std::vector<int>{1})) {}
 
-	explicit MLCouplingScalar(T* ptr, MLCouplingOwnership ownership = MLCouplingOwnershipExternal)
+	explicit MLCouplingScalar(T *ptr, MLCouplingOwnership ownership = MLCouplingOwnershipExternal)
 		: MLCouplingTensor<T>(MLCouplingTensor<T>::wrap_flat(ptr, std::vector<int>{1}, MLCouplingMemLayoutContiguous, ownership)) {}
 };
 
@@ -859,7 +865,7 @@ public:
 	explicit MLCouplingVector(std::vector<T> values)
 		: MLCouplingTensor<T>(MLCouplingTensor<T>::from_flat_copy(values, std::vector<int>{static_cast<int>(values.size())})) {}
 
-	MLCouplingVector(T* ptr, int size, MLCouplingOwnership ownership = MLCouplingOwnershipExternal)
+	MLCouplingVector(T *ptr, int size, MLCouplingOwnership ownership = MLCouplingOwnershipExternal)
 		: MLCouplingTensor<T>(MLCouplingTensor<T>::wrap_flat(ptr, std::vector<int>{size}, MLCouplingMemLayoutContiguous, ownership)) {}
 };
 
@@ -867,7 +873,7 @@ template <typename T>
 class MLCouplingMatrix : public MLCouplingTensor<T>
 {
 public:
-	MLCouplingMatrix(T* ptr, int rows, int cols, MLCouplingOwnership ownership = MLCouplingOwnershipExternal)
+	MLCouplingMatrix(T *ptr, int rows, int cols, MLCouplingOwnership ownership = MLCouplingOwnershipExternal)
 		: MLCouplingTensor<T>(MLCouplingTensor<T>::wrap_flat(ptr, std::vector<int>{rows, cols}, MLCouplingMemLayoutContiguous, ownership)) {}
 
 	explicit MLCouplingMatrix(std::vector<std::vector<T>> values)
@@ -881,7 +887,7 @@ private:
 		std::vector<T> flat;
 		flat.reserve(static_cast<size_t>(rows) * static_cast<size_t>(cols));
 
-		for (const auto& row : values)
+		for (const auto &row : values)
 		{
 			if (static_cast<int>(row.size()) != cols)
 			{

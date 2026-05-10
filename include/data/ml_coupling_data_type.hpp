@@ -23,7 +23,7 @@ typedef enum
     MLCouplingDataTypeUint16 = 8   // 16-bit unsigned integer tensor type
 } MLCouplingDataType;
 
-inline constexpr const char* to_string(MLCouplingDataType type)
+inline constexpr const char *to_string(MLCouplingDataType type)
 {
     switch (type)
     {
@@ -51,26 +51,27 @@ inline constexpr const char* to_string(MLCouplingDataType type)
 }
 
 // A lightweight tag to carry type information
-template <typename T> 
-struct TypeTag { 
-    using type = T; 
+template <typename T>
+struct TypeTag
+{
+    using type = T;
 };
 
 // A variant that can hold any of our supported type tags
 using MLCouplingSupportedTypes = std::variant<
-    TypeTag<double>, 
+    TypeTag<double>,
     TypeTag<float>,
     TypeTag<int8_t>,
     TypeTag<int16_t>,
     TypeTag<int32_t>,
     TypeTag<int64_t>,
     TypeTag<uint8_t>,
-    TypeTag<uint16_t>
->;
+    TypeTag<uint16_t>>;
 
 inline MLCouplingSupportedTypes ml_coupling_data_type_to_supported_type(MLCouplingDataType type);
 
-inline MLCouplingSupportedTypes get_type_tag(int selection) {
+inline MLCouplingSupportedTypes get_type_tag(int selection)
+{
     return ml_coupling_data_type_to_supported_type(static_cast<MLCouplingDataType>(selection));
 }
 
@@ -158,12 +159,12 @@ inline constexpr MLCouplingDataType to_ml_coupling_data_type()
     }
 }
 
-inline MLCouplingDataType to_ml_coupling_data_type(const MLCouplingSupportedTypes& type_tag)
+inline MLCouplingDataType to_ml_coupling_data_type(const MLCouplingSupportedTypes &type_tag)
 {
-    return std::visit([](auto&& tag) -> MLCouplingDataType {
+    return std::visit([](auto &&tag) -> MLCouplingDataType
+                      {
         using T = typename std::decay_t<decltype(tag)>::type;
-        return to_ml_coupling_data_type<T>();
-    }, type_tag);
+        return to_ml_coupling_data_type<T>(); }, type_tag);
 }
 
 inline MLCouplingSupportedTypes ml_coupling_data_type_to_supported_type(MLCouplingDataType type)
@@ -190,7 +191,6 @@ inline MLCouplingSupportedTypes ml_coupling_data_type_to_supported_type(MLCoupli
         throw std::invalid_argument("Invalid MLCouplingDataType");
     }
 }
-
 
 #ifdef WITH_SMARTSIM
 // Define a mapping from MLCouplingDataType to SmartSim's SRTensorType
@@ -230,7 +230,7 @@ inline MLCouplingDataType to_ml_coupling_data_type(SRTensorType type)
         return MLCouplingDataTypeFloat;
     case SRTensorTypeInt8:
         return MLCouplingDataTypeInt8;
-    case SRTensorTypeInt16: 
+    case SRTensorTypeInt16:
         return MLCouplingDataTypeInt16;
     case SRTensorTypeInt32:
         return MLCouplingDataTypeInt32;
@@ -253,7 +253,5 @@ inline constexpr MLCouplingDataType kMLCouplingTypeUnsignedLong = to_ml_coupling
 inline constexpr MLCouplingDataType kMLCouplingTypeLongLong = to_ml_coupling_data_type<long long>();
 inline constexpr MLCouplingDataType kMLCouplingTypeUnsignedLongLong =
     to_ml_coupling_data_type<unsigned long long>();
-
-
 
 //
