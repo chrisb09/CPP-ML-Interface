@@ -1,5 +1,8 @@
 cmake_minimum_required(VERSION 3.10)
 
+# Honor <Package>_ROOT variables like CUDA_ROOT.
+cmake_policy(SET CMP0074 NEW)
+
 project(PhyDLLDlClient LANGUAGES CXX)
 
 option(PHYDLL_DL_WITH_TORCH "Build DL client with libtorch" ON)
