@@ -193,26 +193,18 @@ public:
     {
         if (provider && application && behavior && behavior->should_perform_inference())
         {
-            if (application->input_data_after_preprocessing.empty())
-            {
-                application->input_data_after_preprocessing = application->input_data;
-            }
-            if (application->output_data_before_postprocessing.empty())
-            {
-                application->output_data_before_postprocessing = application->output_data;
-            }
+            application->prepare_input();
             if (coupling_type == CouplingType::STATIC)
             {
                 provider->inference(input_after_preprocessing,
                                     output_before_postprocessing);
-                application->output_data = application->output_data_before_postprocessing;
             }
             else
             {
                 provider->inference(&(application->input_data_after_preprocessing),
                                     &(application->output_data_before_postprocessing));
-                application->output_data = application->output_data_before_postprocessing;
             }
+            application->finalize_output();
         }
     }
 

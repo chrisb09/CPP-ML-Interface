@@ -666,7 +666,8 @@ def _strip_cvref(param_type: str) -> str:
 def write_includes(f, base_classes, base_classes_found, found_classes):
     """Generate #include statements."""
     f.write("#pragma once\n\n")
-    f.write("#include <string>\n#include <vector>\n#include <unordered_map>\n#include <iostream>\n#include <typeinfo>\n#include <type_traits>\n#include <limits>\n#include <cmath>\n#include <algorithm>\n#include <cctype>\n\n")
+    f.write("#include <string>\n#include <vector>\n#include <unordered_map>\n#include <iostream>\n#include <sstream>\n#include <typeinfo>\n#include <type_traits>\n#include <limits>\n#include <cmath>\n#include <algorithm>\n#include <cctype>\n\n")
+    f.write("#include \"logging.hpp\"\n\n")
     
     # Base class includes
     for base_class in base_classes:
@@ -850,9 +851,9 @@ def write_print_constructor_help(f):
     f.write("// Print constructor help to console/log\n")
     f.write("inline void print_constructor_help(const std::string& class_name) {\n")
     f.write("    auto sigs = get_constructor_signatures(class_name);\n")
-    f.write("    if (sigs.empty()) { std::cout << \"No constructors found for \" << class_name << std::endl; return; }\n")
-    f.write("    std::cout << \"Available constructors for \" << class_name << \":\" << std::endl;\n")
-    f.write("    for (const auto &s : sigs) std::cout << \"  \" << s << std::endl;\n")
+    f.write("    if (sigs.empty()) { logging::info(\"No constructors found for \" + class_name); return; }\n")
+    f.write("    logging::info(\"Available constructors for \" + class_name + \":\");\n")
+    f.write("    for (const auto &s : sigs) logging::info(\"  \" + s);\n")
     f.write("}\n\n")
 
 
@@ -1265,12 +1266,14 @@ def _write_map_factory(f, base_class, template_str, template_args, category,
             params_str = ', '.join(param_args)
             
             # Build debug output statement with proper << chaining
-            debug_line = 'std::cout << "Creating instance of ' + cls + ' with parameters: "'
+            debug_line = 'create_log_stream << "Creating instance of ' + cls + ' with parameters: "'
             for idx, debug_out in enumerate(debug_outputs):
                 debug_line += " << " + ("\", \"" if idx > 0 else "") + debug_out
-            debug_line += ' << std::endl;'
-            
+            debug_line += ';'
+
+            f.write('                std::ostringstream create_log_stream;\n')
             f.write(f'                {debug_line}\n')
+            f.write('                logging::info(create_log_stream.str());\n')
             f.write(f'                return new {cls_inst}({params_str});\n')
             f.write(f'            }} catch (...) {{\n')
             f.write(f'                // Handle exceptions if necessary\n')

@@ -4,6 +4,8 @@
 #include "../tool.h"
 #include "../data/ml_coupling_data_type.hpp"
 #include "../data/ml_coupling_memory_layout.hpp"
+#include "../logging.hpp"
+#include "../slurm_env.hpp"
 
 #include <string>
 #include <string_view>
@@ -84,6 +86,42 @@ class MLCouplingProviderSmartsim : public MLCouplingProviderFlexible<In, Out>
     SR_MODEL_LOAD_RETRIES
     */
 
+    static int infer_smartsim_het_group()
+    {
+        const int explicit_group =
+            mlcoupling::slurm_env::get_env_int("SMARTSIM_DB_HET_GROUP",
+                mlcoupling::slurm_env::get_env_int("MLCOUPLING_SMARTSIM_HET_GROUP",
+                    mlcoupling::slurm_env::get_env_int("DB_HET_GROUP", -1)));
+        if (explicit_group >= 0)
+        {
+            return explicit_group;
+        }
+
+        return mlcoupling::slurm_env::single_gpu_het_group(1);
+    }
+
+    static int resolve_nodes(int configured_nodes)
+    {
+        if (configured_nodes >= 0)
+        {
+            return configured_nodes;
+        }
+        return mlcoupling::slurm_env::het_group_nodes(infer_smartsim_het_group(), 1);
+    }
+
+    static int resolve_num_gpus(const std::string &device, int configured_num_gpus)
+    {
+        if (configured_num_gpus >= 0)
+        {
+            return configured_num_gpus;
+        }
+        if (device != "GPU")
+        {
+            return 0;
+        }
+        return mlcoupling::slurm_env::het_group_gpus_per_node(infer_smartsim_het_group(), 0);
+    }
+
 private:
     MLCouplingProviderSmartsim(std::string device = std::string(),
                                std::string model_backend = std::string(),
@@ -94,8 +132,8 @@ private:
                                int port = -1,
                                std::vector<std::string> hosts = {},
                                std::vector<int> ports = {},
-                               int nodes = 1,
-                               int num_gpus = 0,
+                               int nodes = -1,
+                               int num_gpus = -1,
                                int first_gpu = 0,
                                int batch_size = 0,
                                int min_batch_size = 0,
@@ -107,7 +145,7 @@ private:
         : device(device),
           model_backend(model_backend),
           model_name(model_name),
-          num_gpus(num_gpus),
+          num_gpus(resolve_num_gpus(device, num_gpus)),
           first_gpu(first_gpu),
           batch_size(batch_size),
           min_batch_size(min_batch_size),
@@ -120,6 +158,8 @@ private:
         guarantee(false, "SmartSim provider is not enabled. Please make sure WITH_SMARTSIM is defined and the necessary dependencies are installed.");
 #endif
 
+        const int resolved_nodes = resolve_nodes(nodes);
+
         validate_parameter(this->device,
                            this->model_backend,
                            model_path,
@@ -129,7 +169,7 @@ private:
                            port,
                            hosts,
                            ports,
-                           nodes,
+                           resolved_nodes,
                            this->num_gpus,
                            this->first_gpu,
                            this->batch_size,
@@ -158,10 +198,11 @@ private:
                     ssdb += ",";
                 }
             }
+            setenv("SSDB", ssdb.c_str(), 1);
         }
 
         // Setting the database type based on the number of nodes
-        setenv("SR_DB_TYPE", nodes > 1 ? "Clustered" : "Standalone", 1);
+        setenv("SR_DB_TYPE", resolved_nodes > 1 ? "Clustered" : "Standalone", 1);
 
 #if defined(WITH_SMARTSIM)
 
@@ -171,17 +212,18 @@ private:
 
         if (this->rank <= 0)
         {
-            std::cout << "SmartSim Coupling Provider initialized with the following parameters:" << std::endl;
-            std::cout << "Device: " << this->device << std::endl;
-            std::cout << "Model Backend: " << this->model_backend << std::endl;
-            std::cout << "Number of GPUs: " << this->num_gpus << std::endl;
-            std::cout << "First GPU: " << this->first_gpu << std::endl;
-            std::cout << "Batch Size: " << this->batch_size << std::endl;
-            std::cout << "Min Batch Size: " << this->min_batch_size << std::endl;
-            std::cout << "Min Batch Timeout: " << this->min_batch_timeout << " ms" << std::endl;
+            logging::info("SmartSim Coupling Provider initialized with the following parameters:");
+            logging::info("Device: " + this->device);
+            logging::info("Model Backend: " + this->model_backend);
+            logging::info("SmartSim DB Nodes: " + std::to_string(resolved_nodes));
+            logging::info("Number of GPUs: " + std::to_string(this->num_gpus));
+            logging::info("First GPU: " + std::to_string(this->first_gpu));
+            logging::info("Batch Size: " + std::to_string(this->batch_size));
+            logging::info("Min Batch Size: " + std::to_string(this->min_batch_size));
+            logging::info("Min Batch Timeout: " + std::to_string(this->min_batch_timeout) + " ms");
             if (!ssdb.empty())
             {
-                std::cout << "SSDB: " << ssdb << std::endl;
+                logging::info("SSDB: " + ssdb);
             }
 
             // Load the model into the database
@@ -191,11 +233,11 @@ private:
                 // Load model from file path
                 if (this->device == "GPU")
                 {
-                    client->set_model_from_file_multigpu(this->model_name, model_path, this->model_backend, first_gpu, num_gpus, batch_size, min_batch_size, min_batch_timeout, "", tf_input_labels, tf_output_labels);
+                    client->set_model_from_file_multigpu(this->model_name, model_path, this->model_backend, this->first_gpu, this->num_gpus, this->batch_size, this->min_batch_size, this->min_batch_timeout, "", tf_input_labels, tf_output_labels);
                 }
                 else
                 {
-                    client->set_model_from_file(this->model_name, model_path, this->model_backend, "CPU", batch_size, min_batch_size, min_batch_timeout, "", tf_input_labels, tf_output_labels);
+                    client->set_model_from_file(this->model_name, model_path, this->model_backend, "CPU", this->batch_size, this->min_batch_size, this->min_batch_timeout, "", tf_input_labels, tf_output_labels);
                 }
             }
             else if (!model.empty())
@@ -203,11 +245,11 @@ private:
                 // Load model from string
                 if (this->device == "GPU")
                 {
-                    client->set_model_multigpu(this->model_name, model, this->model_backend, first_gpu, num_gpus, batch_size, min_batch_size, min_batch_timeout, "", tf_input_labels, tf_output_labels);
+                    client->set_model_multigpu(this->model_name, model, this->model_backend, this->first_gpu, this->num_gpus, this->batch_size, this->min_batch_size, this->min_batch_timeout, "", tf_input_labels, tf_output_labels);
                 }
                 else
                 {
-                    client->set_model(this->model_name, model, this->model_backend, "CPU", batch_size, min_batch_size, min_batch_timeout, "", tf_input_labels, tf_output_labels);
+                    client->set_model(this->model_name, model, this->model_backend, "CPU", this->batch_size, this->min_batch_size, this->min_batch_timeout, "", tf_input_labels, tf_output_labels);
                 }
             }
         }
@@ -220,10 +262,10 @@ public:
                                std::string model_backend,
                                std::string model_path,
                                std::string model_name = "model",
-                               std::string host = "localhost",
-                               int port = 6379,
-                               int nodes = 1,
-                               int num_gpus = 0,
+                               std::string host = "",
+                               int port = -1,
+                               int nodes = -1,
+                               int num_gpus = -1,
                                int first_gpu = 0,
                                int batch_size = 0,
                                int min_batch_size = 0,
@@ -238,10 +280,10 @@ public:
                                std::string model_backend,
                                std::string_view model,
                                std::string model_name = "model",
-                               std::string host = "localhost",
-                               int port = 6379,
-                               int nodes = 1,
-                               int num_gpus = 0,
+                               std::string host = "",
+                               int port = -1,
+                               int nodes = -1,
+                               int num_gpus = -1,
                                int first_gpu = 0,
                                int batch_size = 0,
                                int min_batch_size = 0,
@@ -326,7 +368,7 @@ public:
             return converted_dims;
         };
 
-        std::cout << "Write these tensors to SmartSim: " << std::endl;
+        logging::debug("Write these tensors to SmartSim:");
 
         std::vector<std::string> input_tensor_names;
         // loop over tensors
@@ -339,7 +381,7 @@ public:
             MLCouplingDataType ml_type = to_ml_coupling_data_type<In>();
             SRTensorType sr_type = to_srtensor_type(ml_type);
             std::vector<size_t> dims = to_size_t_dims(tensor.dimensions());
-            std::cout << "  " << tensor.to_string("Tensor " + std::to_string(tensor_index)) << std::endl;
+            logging::debug("  " + tensor.to_string("Tensor " + std::to_string(tensor_index)));
 
             client->put_tensor(input_name,
                                data,
@@ -347,30 +389,12 @@ public:
                                sr_type,
                                to_sr_memory_layout(tensor.layout()));
             input_tensor_names.push_back(input_name);
-
-            // Sanity check, get the tensor back from the database and print it out to make sure it looks correct (this is especially important for GPU tensors to make sure the data is actually being sent to the database correctly, since GPU support in SmartSim is relatively new and we want to be sure this part works correctly before moving on to inference)
-
-            void *retrieved_data = nullptr;
-            std::vector<size_t> retrieved_dims = dims;
-            SRTensorType retrieved_type = sr_type;
-            client->get_tensor(input_name, retrieved_data, retrieved_dims, retrieved_type, to_sr_memory_layout(tensor.layout()));
-            std::string message = "Sanity check for tensor sent to SmartSim with name: " + input_name;
-            message += " and expected shape: " + tensor.shape_string() + " and expected dtype: " + to_string(tensor.data_type());
-            std::cout << message << std::endl;
-            std::vector<int> retrieved_dims_int;
-            retrieved_dims_int.reserve(retrieved_dims.size());
-            for (size_t dim : retrieved_dims)
-            {
-                retrieved_dims_int.push_back(static_cast<int>(dim));
-            }
-            MLCouplingTensor<In> retrieved_tensor = MLCouplingTensor<In>(retrieved_data, std::move(retrieved_dims_int), tensor.layout(), MLCouplingOwnershipExternal);
-            std::cout << "  " << retrieved_tensor.to_string("Retrieved Tensor") << std::endl;
         }
 
-        std::cout << "Input tensor names sent to SmartSim: " << std::endl;
+        logging::debug("Input tensor names sent to SmartSim:");
         for (const auto &name : input_tensor_names)
         {
-            std::cout << "  " << name << std::endl;
+            logging::debug("  " + name);
         }
 
         std::vector<std::string> output_tensor_names;
@@ -380,10 +404,10 @@ public:
             output_tensor_names.push_back(output_name);
         }
 
-        std::cout << "Output tensor names expected from SmartSim: " << std::endl;
+        logging::debug("Output tensor names expected from SmartSim:");
         for (const auto &name : output_tensor_names)
         {
-            std::cout << "  " << name << std::endl;
+            logging::debug("  " + name);
         }
 
         if (this->device == "GPU")
@@ -403,7 +427,7 @@ public:
                            const SRTensorType type,
                            const SRMemoryLayout mem_layout);
         */
-        std::cout << "Retrieve these tensors from SmartSim: " << std::endl;
+        logging::debug("Retrieve these tensors from SmartSim:");
         for (size_t tensor_index = 0; tensor_index < output_data_before_postprocessing.size(); ++tensor_index)
         {
             std::string output_name = "output_" + std::to_string(this->rank) + "_" + std::to_string(tensor_index);
@@ -417,7 +441,7 @@ public:
                                   dims,
                                   sr_type,
                                   to_sr_memory_layout(tensor.layout()));
-            std::cout << "  " << tensor.to_string("Tensor " + std::to_string(tensor_index)) << std::endl;
+            logging::debug("  " + tensor.to_string("Tensor " + std::to_string(tensor_index)));
         }
 
 #endif

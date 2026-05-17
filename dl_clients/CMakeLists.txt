@@ -8,6 +8,14 @@ project(PhyDLLDlClient LANGUAGES CXX)
 option(PHYDLL_DL_WITH_TORCH "Build DL client with libtorch" ON)
 set(LIBTORCH_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../extern/libtorch" CACHE PATH "Path to libtorch root (contains share/cmake/Torch)")
 
+add_library(phydll_dl_runtime
+    phydll_dl_runtime.cpp
+)
+
+target_include_directories(phydll_dl_runtime PRIVATE ${PHYDLL_BUILD_DIR}/include)
+target_link_directories(phydll_dl_runtime PRIVATE ${PHYDLL_BUILD_DIR}/lib)
+target_link_libraries(phydll_dl_runtime PRIVATE phydll)
+
 add_executable(phydll_dl_client dl_client.cpp)
 
 if(NOT PHYDLL_BUILD_DIR)
@@ -16,7 +24,7 @@ endif()
 
 target_include_directories(phydll_dl_client PRIVATE ${PHYDLL_BUILD_DIR}/include)
 target_link_directories(phydll_dl_client PRIVATE ${PHYDLL_BUILD_DIR}/lib)
-target_link_libraries(phydll_dl_client PRIVATE phydll)
+target_link_libraries(phydll_dl_client PRIVATE phydll phydll_dl_runtime)
 
 if(PHYDLL_DL_WITH_TORCH)
     if(LIBTORCH_DIR AND EXISTS "${LIBTORCH_DIR}/share/cmake/Torch/TorchConfig.cmake")

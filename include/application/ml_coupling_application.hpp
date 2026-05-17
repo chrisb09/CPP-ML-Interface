@@ -115,6 +115,16 @@ public:
         }
     }
 
+    void prepare_input()
+    {
+        input_data_after_preprocessing = preprocess(input_data);
+    }
+
+    void finalize_output()
+    {
+        output_data = postprocess(output_data_before_postprocessing);
+    }
+
     std::pair<MLCouplingData<In> *, MLCouplingData<Out> *> get_pre_post_buffers()
     {
         return std::make_pair(&input_data_after_preprocessing, &output_data_before_postprocessing);

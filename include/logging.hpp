@@ -5,6 +5,10 @@
 #include <string>
 #include <algorithm>
 
+#ifdef MPI_FOUND
+#include <mpi.h>
+#endif
+
 namespace logging
 {
 
@@ -74,6 +78,19 @@ namespace logging
     {
         if (is_at_least(level, GLOBAL_LEVEL))
         {
+#ifdef MPI_FOUND
+            int mpi_initialized = 0;
+            MPI_Initialized(&mpi_initialized);
+            if (mpi_initialized)
+            {
+                int rank = 0;
+                MPI_Comm_rank(MPI_COMM_WORLD, &rank);
+                if (rank != 0)
+                {
+                    return;
+                }
+            }
+#endif
             if (level == Level::ERROR && ERROR_SEPERATE)
             {
                 std::cerr << "[" << to_string(level) << "] " << message << std::endl;
