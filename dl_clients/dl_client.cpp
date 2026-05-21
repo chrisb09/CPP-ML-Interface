@@ -148,11 +148,7 @@ int main(int argc, char **argv) {
     phydll_dl::DlRuntime runtime(dl_count);
     runtime.initialize();
 
-    std::fprintf(stderr, "[PHYDLL:DL] barrier before metadata\n");
-    std::fflush(stderr);
     MPI_Barrier(MPI_COMM_WORLD);
-    std::fprintf(stderr, "[PHYDLL:DL] barrier done, receiving metadata\n");
-    std::fflush(stderr);
 
     int ndest = phydll_get_ndest();
     int *dests = phydll_get_dest();
@@ -160,8 +156,6 @@ int main(int argc, char **argv) {
     {
         int source_rank = dests[i];
         const auto p2p_meta = receive_p2p_metadata(source_rank);
-        std::fprintf(stderr, "[PHYDLL:DL] metadata received from rank %d valid=%d\n", source_rank, p2p_meta.valid ? 1 : 0);
-        std::fflush(stderr);
         if (p2p_meta.valid)
         {
             if (!meta_initialized)
@@ -176,15 +170,7 @@ int main(int argc, char **argv) {
     }
     std::uint64_t frame_id = 0;
     while (runtime.is_running()) {
-        std::fprintf(stderr, "[PHYDLL:DL] frame=%llu before receive\n",
-                     static_cast<unsigned long long>(frame_id));
-        std::fflush(stderr);
-
         const auto frame = runtime.receive_frame();
-
-        std::fprintf(stderr, "[PHYDLL:DL] recv done, frame=%llu\n",
-                     static_cast<unsigned long long>(frame_id));
-        std::fflush(stderr);
 
         if (frame.has_meta && !meta_initialized && frame.meta.phase == phydll_dl::MetaPhase::Init) {
             model_path = frame.meta.entries.empty() ? std::string() : frame.meta.entries.front().model_path;
@@ -210,33 +196,23 @@ int main(int argc, char **argv) {
                 if (cuda_ok) {
                     torch_device = torch::Device(torch::kCUDA, 0);
                 } else {
-                    std::fprintf(stderr, "[PHYDLL:DL] requested GPU but no CUDA device available; using CPU\n");
-                    std::fflush(stderr);
+                    std::cerr << "[PHYDLL:DL] requested GPU but no CUDA device available; using CPU" << std::endl;
                     torch_device = torch::Device(torch::kCPU);
                 }
             } else {
                 torch_device = torch::Device(torch::kCPU);
             }
 
-            std::fprintf(stderr, "[PHYDLL:DL] using device=%s\n", torch_device.is_cuda() ? "cuda" : "cpu");
-            std::fflush(stderr);
-
             if (!model_path.empty()) {
-                std::fprintf(stderr, "[PHYDLL:DL] loading model '%s'\n", model_path.c_str());
-                std::fflush(stderr);
                 try {
                     model = torch::jit::load(model_path);
                     model.eval();
                     model.to(torch_device);
-                    std::fprintf(stderr, "[PHYDLL:DL] model loaded\n");
-                    std::fflush(stderr);
+                    std::cerr << "[PHYDLL:DL] model loaded" << std::endl;
                 } catch (const c10::Error &e) {
                     std::cerr << "Failed to load TorchScript model: " << e.what() << std::endl;
                     MPI_Abort(MPI_COMM_WORLD, 1);
                 }
-            } else {
-                std::fprintf(stderr, "[PHYDLL:DL] no model path; continuing without model\n");
-                std::fflush(stderr);
             }
 #else
             if (!model_path.empty()) {
@@ -274,23 +250,10 @@ int main(int argc, char **argv) {
                 }
             }
 
-            std::fprintf(stderr, "[PHYDLL:DL] input vector size=%zu values=", input.size());
-            for (size_t i = 0; i < input.size(); ++i) {
-                std::fprintf(stderr, "%s%.6f", (i == 0 ? "" : ","), input[i]);
-            }
-            std::fprintf(stderr, "\n");
-            std::fflush(stderr);
-
             auto options = torch::TensorOptions().dtype(torch::kFloat32);
             auto input_tensor = torch::from_blob(input.data(), {batch_size, input_per_rank_used}, options).clone();
             input_tensor = input_tensor.to(torch_device);
             try {
-                std::fprintf(stderr, "[PHYDLL:DL] forward input shape=[%lld,%lld] device=%s\n",
-                             static_cast<long long>(input_tensor.size(0)),
-                             static_cast<long long>(input_tensor.size(1)),
-                             input_tensor.is_cuda() ? "cuda" : "cpu");
-                std::fflush(stderr);
-
                 auto output_tensor = model.forward({input_tensor}).toTensor();
                 output_tensor = output_tensor.to(torch::kCPU).contiguous().view({-1});
 
@@ -304,12 +267,10 @@ int main(int argc, char **argv) {
                 }
                 used_model = true;
             } catch (const c10::Error &e) {
-                std::fprintf(stderr, "[PHYDLL:DL] forward failed: %s\n", e.what());
-                std::fflush(stderr);
+                std::cerr << "[PHYDLL:DL] forward failed: " << e.what() << std::endl;
                 MPI_Abort(MPI_COMM_WORLD, 1);
             } catch (const std::exception &e) {
-                std::fprintf(stderr, "[PHYDLL:DL] forward exception: %s\n", e.what());
-                std::fflush(stderr);
+                std::cerr << "[PHYDLL:DL] forward exception: " << e.what() << std::endl;
                 MPI_Abort(MPI_COMM_WORLD, 1);
             }
         }
@@ -322,8 +283,6 @@ int main(int argc, char **argv) {
             }
         }
 
-        std::fprintf(stderr, "[PHYDLL:DL] send_output size=%zu\n", output.size());
-        std::fflush(stderr);
         runtime.send_output(output);
 
         ++frame_id;

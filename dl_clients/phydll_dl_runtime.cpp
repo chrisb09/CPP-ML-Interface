@@ -133,10 +133,8 @@ void DlRuntime::send_output(const std::vector<double>& output) {
 }
 
 void DlRuntime::receive_fields() {
-    std::cerr << "[PHYDLL:DL] waiting recv" << std::endl;
     phydll_irecv();
     phydll_wait_irecv();
-    std::cerr << "[PHYDLL:DL] recv done" << std::endl;
 
     combined_data_.clear();
     combined_data_.reserve(static_cast<size_t>(field_size_) * static_cast<size_t>(dl_count_));

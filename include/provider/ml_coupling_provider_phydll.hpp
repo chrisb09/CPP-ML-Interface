@@ -74,27 +74,15 @@ public:
         this->output_before_postprocessing = output_before_postprocessing;
         initialize_if_needed();
 
-        int world_rank = 0;
-        MPI_Comm_rank(MPI_COMM_WORLD, &world_rank);
-
         prepare_data_buffer();
-
-        std::cerr << "[PHYDLL:PHY] rank=" << world_rank
-              << " field_size=" << field_size_
-              << " input_total=" << sum_sizes(input_sizes_)
-              << " output_total=" << sum_sizes(output_sizes_)
-              << std::endl;
 
         double *data_ptr = data_buffer_.data();
         char data_label[] = "PHY-DATA";
 
         phydll_set_field(&data_ptr, data_label);
-        std::cerr << "[PHYDLL:PHY] send data" << std::endl;
         phydll_send();
 
-        std::cerr << "[PHYDLL:PHY] waiting recv" << std::endl;
         phydll_recv();
-        std::cerr << "[PHYDLL:PHY] recv done" << std::endl;
 
         double *recv_ptr = nullptr;
         char recv_label[64] = {0};
@@ -102,7 +90,6 @@ public:
             recv_ptr = nullptr;
             std::memset(recv_label, 0, sizeof(recv_label));
             phydll_get_field(&recv_ptr, recv_label);
-            std::cerr << "[PHYDLL:PHY] got label '" << recv_label << "'" << std::endl;
             if (std::string(recv_label) == "DL-OUT") {
                 const size_t per_rank = static_cast<size_t>(sum_sizes(output_sizes_));
                 if (recv_ptr && per_rank > 0) {
@@ -205,11 +192,7 @@ private:
         int world_rank = 0;
         MPI_Comm_rank(MPI_COMM_WORLD, &world_rank);
 
-        std::fprintf(stderr, "[PHYDLL:PHY] barrier before metadata (rank=%d)\n", world_rank);
-        std::fflush(stderr);
         MPI_Barrier(MPI_COMM_WORLD);
-        std::fprintf(stderr, "[PHYDLL:PHY] barrier done, broadcasting metadata (rank=%d)\n", world_rank);
-        std::fflush(stderr);
 
         BcastMetaHeader header;
         std::vector<unsigned char> payload;
@@ -264,9 +247,6 @@ private:
             }
         }
 
-        std::fprintf(stderr, "[PHYDLL:PHY] metadata p2p send complete (rank=%d)\n", world_rank);
-        std::fflush(stderr);
-
         metadata_bcasted_ = true;
 #endif
     }
@@ -286,13 +266,6 @@ private:
         const int64_t total_output = sum_sizes(output_sizes_);
         const int header_len = compute_header_content_len();
         field_size_ = static_cast<int>(std::max<int64_t>({total_input, total_output, header_len}));
-
-        std::cerr << "[PHYDLL:PHY] define_phy count=" << kFieldCount
-              << " field_size=" << field_size_
-              << " header_len=" << header_len
-              << " total_input=" << total_input
-              << " total_output=" << total_output
-              << std::endl;
 
         initialize_phydll_if_needed();
         phydll_opt_enable_cpl_loop();
