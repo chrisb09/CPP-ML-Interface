@@ -54,7 +54,7 @@ int main(int argc, char** argv) {
             std::string level_str = argv[i + 1];
             std::transform(level_str.begin(), level_str.end(), level_str.begin(), ::tolower);
             logging::set_level(logging::get_level(level_str));
-            logging::info("Logging level set to " + level_str);
+            logging::debug("Logging level set to " + level_str);
             i++;
             continue;
         }

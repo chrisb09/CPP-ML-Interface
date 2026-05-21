@@ -223,18 +223,17 @@ private:
 
         if (this->rank == 0)
         {
-            logging::info("SmartSim Coupling Provider initialized with the following parameters:");
-            logging::info("Device: " + this->device);
-            logging::info("Model Backend: " + this->model_backend);
-            logging::info("SmartSim DB Nodes: " + std::to_string(resolved_nodes));
-            logging::info("Number of GPUs: " + std::to_string(this->num_gpus));
-            logging::info("First GPU: " + std::to_string(this->first_gpu));
-            logging::info("Batch Size: " + std::to_string(this->batch_size));
-            logging::info("Min Batch Size: " + std::to_string(this->min_batch_size));
-            logging::info("Min Batch Timeout: " + std::to_string(this->min_batch_timeout) + " ms");
-            if (!ssdb.empty())
-            {
-                logging::info("SSDB: " + ssdb);
+            logging::debug("SmartSim Coupling Provider initialized with the following parameters:");
+            logging::debug("Device: " + this->device);
+            logging::debug("Model Backend: " + this->model_backend);
+            logging::debug("SmartSim DB Nodes: " + std::to_string(resolved_nodes));
+            logging::debug("Number of GPUs: " + std::to_string(this->num_gpus));
+            logging::debug("First GPU: " + std::to_string(this->first_gpu));
+            logging::debug("Batch Size: " + std::to_string(this->batch_size));
+            logging::debug("Min Batch Size: " + std::to_string(this->min_batch_size));
+            logging::debug("Min Batch Timeout: " + std::to_string(this->min_batch_timeout) + " ms");
+            if (!ssdb.empty()) {
+                logging::debug("SSDB: " + ssdb);
             }
 
             // Load the model into the database

@@ -1310,7 +1310,7 @@ def _write_map_factory(f, base_class, template_str, template_args, category,
 
             f.write('                std::ostringstream create_log_stream;\n')
             f.write(f'                {debug_line}\n')
-            f.write('                logging::info(create_log_stream.str());\n')
+            f.write('                logging::debug(create_log_stream.str());\n')
             f.write(f'                return new {cls_inst}({params_str});\n')
             f.write(f'            }} catch (...) {{\n')
             f.write(f'                // Handle exceptions if necessary\n')

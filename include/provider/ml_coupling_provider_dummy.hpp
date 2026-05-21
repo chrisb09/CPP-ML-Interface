@@ -24,7 +24,7 @@ public:
         : input_after_preprocessing(input_after_preprocessing),
           output_before_postprocessing(output_before_postprocessing)
     {
-        logging::info("Initialized dummy provider. This does not implement any actual functionality and is just a placeholder.");
+        logging::debug("Initialized dummy provider. This does not implement any actual functionality and is just a placeholder.");
     }
 
     void inference(MLCouplingData<In> *input_after_preprocessing,

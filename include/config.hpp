@@ -211,7 +211,7 @@ inline void *create_mlcoupling_object(
         }
     }
 
-    logging::info("Creating module instance of class: " + module_classname + " with " + std::to_string(module_params.size()) + " parameters");
+    logging::debug("Creating module instance of class: " + module_classname + " with " + std::to_string(module_params.size()) + " parameters");
     return create_instance_function(module_classname, module_params);
 }
 
@@ -730,25 +730,25 @@ MLCoupling<In, Out> *create_mlcoupling_from_config_impl(const std::string &confi
         {
             std::ostringstream normalization_stream;
             normalization_stream << *normalization;
-            logging::info("Created normalization instance: " + normalization_stream.str() + " of type " + get_type_name(*normalization));
+            logging::debug("Created normalization instance: " + normalization_stream.str() + " of type " + get_type_name(*normalization));
         }
         if (provider)
         {
             std::ostringstream provider_ptr_stream;
             provider_ptr_stream << provider;
-            logging::info("Created provider instance at " + provider_ptr_stream.str() + " of type " + get_type_name(*provider));
+            logging::debug("Created provider instance at " + provider_ptr_stream.str() + " of type " + get_type_name(*provider));
         }
         if (behavior)
         {
             std::ostringstream behavior_ptr_stream;
             behavior_ptr_stream << behavior;
-            logging::info("Created behavior instance at " + behavior_ptr_stream.str() + " of type " + get_type_name(*behavior));
+            logging::debug("Created behavior instance at " + behavior_ptr_stream.str() + " of type " + get_type_name(*behavior));
         }
         if (application)
         {
             std::ostringstream application_ptr_stream;
             application_ptr_stream << application;
-            logging::info("Created application instance at " + application_ptr_stream.str() + " of type " + get_type_name(*application));
+            logging::debug("Created application instance at " + application_ptr_stream.str() + " of type " + get_type_name(*application));
         }
 
         return new MLCoupling<In, Out>(provider,

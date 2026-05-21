@@ -57,7 +57,6 @@ public:
 #ifdef WITH_PHYDLL
         if (phydll_initialized_)
         {
-            std::cerr << "[PHYDLL:PHY] finalizing phydll" << std::endl;
             phydll_finalize();
         }
 #endif
@@ -305,7 +304,6 @@ private:
         }
 
         char mode[] = "physical";
-        std::cerr << "[PHYDLL:PHY] initializing phydll" << std::endl;
         phydll_init(mode);
         phydll_initialized_ = true;
 #endif

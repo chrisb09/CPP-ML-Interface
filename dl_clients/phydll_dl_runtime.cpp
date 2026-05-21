@@ -61,11 +61,9 @@ void DlRuntime::initialize() {
     if (initialized_) {
         return;
     }
-    std::cerr << "[PHYDLL:DL] init" << std::endl;
     phydll_init(const_cast<char*>("dl"));
     phydll_define_dl(dl_count_);
     phydll_get_field_size(&field_size_);
-    std::cerr << "[PHYDLL:DL] dl_count=" << dl_count_ << " field_size=" << field_size_ << std::endl;
     if (field_size_ <= 0) {
         throw std::runtime_error("PhyDLL returned invalid field size.");
     }
