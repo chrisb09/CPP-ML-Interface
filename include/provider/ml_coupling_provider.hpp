@@ -2,8 +2,14 @@
 
 #include "../data/ml_coupling_data.hpp"
 
-#ifdef MPI_FOUND
+#if defined(MPI_FOUND)
 #include <mpi.h>
+#define MLCOUPLING_PROVIDER_HAS_MPI 1
+#elif defined(__has_include)
+#if __has_include(<mpi.h>)
+#include <mpi.h>
+#define MLCOUPLING_PROVIDER_HAS_MPI 1
+#endif
 #endif
 
 // @category: provider
@@ -11,13 +17,13 @@ template <typename In, typename Out>
 class MLCouplingProvider
 {
 public:
-    int rank = -1;
+    int rank = 0;
 
     MLCouplingProvider()
     {
-#ifdef MPI_FOUND
+#ifdef MLCOUPLING_PROVIDER_HAS_MPI
         // check if MPI is initialized and get the rank if it is, otherwise set rank to -1
-        int flag;
+        int flag = 0;
         MPI_Initialized(&flag);
         if (flag)
         {
@@ -41,13 +47,6 @@ public:
     // Perform inference with the ML model and get the output data
     virtual void inference(MLCouplingData<In> *input_after_preprocessing,
                            MLCouplingData<Out> *output_before_postprocessing) = 0;
-
-    virtual void set_io_buffers(MLCouplingData<In> *input_after_preprocessing,
-                                MLCouplingData<Out> *output_before_postprocessing)
-    {
-        (void)input_after_preprocessing;
-        (void)output_before_postprocessing;
-    }
 
     virtual ~MLCouplingProvider() = default;
 

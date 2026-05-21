@@ -69,17 +69,6 @@ public:
         }
     }
 
-    void set_io_buffers(MLCouplingData<In> *input_after_preprocessing,
-                        MLCouplingData<Out> *output_before_postprocessing) override
-    {
-        this->input_after_preprocessing = input_after_preprocessing;
-        this->output_before_postprocessing = output_before_postprocessing;
-        if (this->input_after_preprocessing && this->output_before_postprocessing)
-        {
-            initialize_service(this->input_after_preprocessing, this->output_before_postprocessing);
-        }
-    }
-
     void inference(MLCouplingData<In> *input_after_preprocessing,
                    MLCouplingData<Out> *output_before_postprocessing) override
     {

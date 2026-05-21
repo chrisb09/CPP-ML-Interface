@@ -19,6 +19,8 @@
 extern "C"
 {
 #include "phydll.h"
+    int* phydll_get_dest();
+    int phydll_get_ndest();
 }
 #endif
 
@@ -43,19 +45,22 @@ public:
 #ifndef WITH_PHYDLL
         guarantee(false, "PhyDLL provider is not enabled. Please make sure WITH_PHYDLL is defined and the necessary dependencies are installed.");
 #else
-        if (!use_oob_metadata())
-        {
-            initialize_phydll_if_needed();
+        initialize_phydll_if_needed();
+        if (this->input_after_preprocessing && this->output_before_postprocessing) {
+            initialize_if_needed();
         }
 #endif
     }
 
-    void set_io_buffers(MLCouplingData<In> *input_after_preprocessing,
-                        MLCouplingData<Out> *output_before_postprocessing) override
+    ~MLCouplingProviderPhydll() override
     {
-        this->input_after_preprocessing = input_after_preprocessing;
-        this->output_before_postprocessing = output_before_postprocessing;
-        initialize_if_needed();
+#ifdef WITH_PHYDLL
+        if (phydll_initialized_)
+        {
+            std::cerr << "[PHYDLL:PHY] finalizing phydll" << std::endl;
+            phydll_finalize();
+        }
+#endif
     }
 
     virtual void inference(MLCouplingData<In> *input_after_preprocessing,
@@ -69,39 +74,43 @@ public:
         this->output_before_postprocessing = output_before_postprocessing;
         initialize_if_needed();
 
-        prepare_meta_buffer(metadata_sent_ ? MetaPhase::Data : MetaPhase::Init);
+        int world_rank = 0;
+        MPI_Comm_rank(MPI_COMM_WORLD, &world_rank);
+
         prepare_data_buffer();
 
-        std::cerr << "[PHYDLL:PHY] rank=" << this->rank
+        std::cerr << "[PHYDLL:PHY] rank=" << world_rank
               << " field_size=" << field_size_
-              << " meta_sent=" << (metadata_sent_ ? "yes" : "no")
               << " input_total=" << sum_sizes(input_sizes_)
               << " output_total=" << sum_sizes(output_sizes_)
               << std::endl;
 
-        double *meta_ptr = meta_buffer_.data();
         double *data_ptr = data_buffer_.data();
-        char meta_label[] = "PHY-META";
         char data_label[] = "PHY-DATA";
 
-        phydll_set_field(&meta_ptr, meta_label);
         phydll_set_field(&data_ptr, data_label);
-        std::cerr << "[PHYDLL:PHY] send meta+data" << std::endl;
+        std::cerr << "[PHYDLL:PHY] send data" << std::endl;
         phydll_send();
 
         std::cerr << "[PHYDLL:PHY] waiting recv" << std::endl;
         phydll_recv();
         std::cerr << "[PHYDLL:PHY] recv done" << std::endl;
 
-        std::vector<double> recv_buffer(static_cast<size_t>(field_size_), 0.0);
-        double *recv_ptr = recv_buffer.data();
+        double *recv_ptr = nullptr;
         char recv_label[64] = {0};
         for (int i = 0; i < kFieldCount; ++i) {
+            recv_ptr = nullptr;
             std::memset(recv_label, 0, sizeof(recv_label));
             phydll_get_field(&recv_ptr, recv_label);
             std::cerr << "[PHYDLL:PHY] got label '" << recv_label << "'" << std::endl;
             if (std::string(recv_label) == "DL-OUT") {
-                std::copy(recv_ptr, recv_ptr + field_size_, data_buffer_.begin());
+                const size_t per_rank = static_cast<size_t>(sum_sizes(output_sizes_));
+                if (recv_ptr && per_rank > 0) {
+                    std::copy(recv_ptr, recv_ptr + per_rank, data_buffer_.begin());
+                }
+            }
+            if (recv_ptr) {
+                free(recv_ptr);
             }
         }
 
@@ -139,7 +148,7 @@ private:
 
     static constexpr double kMetaMagic = 424242.0;
     static constexpr int kMetaVersion = 1;
-    static constexpr int kFieldCount = 2;
+    static constexpr int kFieldCount = 1; // PHY-DATA (Metadata is OOB)
     static constexpr int kHeaderFixedCount = 14;
     static constexpr int kBcastMetaMagic = 0x4D4C434D; // "MLCM"
     static constexpr int kBcastMetaVersion = 1;
@@ -178,12 +187,6 @@ private:
         int32_t layout = 0;
     };
 
-    static bool use_oob_metadata()
-    {
-        const char *oob_env = std::getenv("PHYDLL_OOB_META");
-        return oob_env && oob_env[0] != '\0' && std::atoi(oob_env) != 0;
-    }
-
     void broadcast_metadata_once()
     {
 #ifdef WITH_PHYDLL
@@ -202,84 +205,70 @@ private:
         int world_rank = 0;
         MPI_Comm_rank(MPI_COMM_WORLD, &world_rank);
 
-        const bool use_oob = use_oob_metadata();
-        if (use_oob)
-        {
-            std::fprintf(stderr, "[PHYDLL:PHY] barrier before metadata (rank=%d)\n", world_rank);
-            std::fflush(stderr);
-            MPI_Barrier(MPI_COMM_WORLD);
-            std::fprintf(stderr, "[PHYDLL:PHY] barrier done, broadcasting metadata (rank=%d)\n", world_rank);
-            std::fflush(stderr);
-        }
+        std::fprintf(stderr, "[PHYDLL:PHY] barrier before metadata (rank=%d)\n", world_rank);
+        std::fflush(stderr);
+        MPI_Barrier(MPI_COMM_WORLD);
+        std::fprintf(stderr, "[PHYDLL:PHY] barrier done, broadcasting metadata (rank=%d)\n", world_rank);
+        std::fflush(stderr);
 
         BcastMetaHeader header;
         std::vector<unsigned char> payload;
 
-        if (world_rank == 0)
-        {
-            header.model_len = static_cast<int32_t>(model_file.size());
-            header.backend_len = static_cast<int32_t>(backend.size());
-            header.device_len = static_cast<int32_t>(device.size());
-            header.num_inputs = static_cast<int32_t>(input_sizes_.size());
-            header.num_outputs = static_cast<int32_t>(output_sizes_.size());
-            header.total_input = sum_sizes(input_sizes_);
-            header.total_output = sum_sizes(output_sizes_);
-            header.dtype = static_cast<int32_t>(to_ml_coupling_data_type<In>());
-            header.layout = static_cast<int32_t>(MLCouplingMemLayoutContiguous);
+        header.model_len = static_cast<int32_t>(model_file.size());
+        header.backend_len = static_cast<int32_t>(backend.size());
+        header.device_len = static_cast<int32_t>(device.size());
+        header.num_inputs = static_cast<int32_t>(input_sizes_.size());
+        header.num_outputs = static_cast<int32_t>(output_sizes_.size());
+        header.total_input = sum_sizes(input_sizes_);
+        header.total_output = sum_sizes(output_sizes_);
+        header.dtype = static_cast<int32_t>(to_ml_coupling_data_type<In>());
+        header.layout = static_cast<int32_t>(MLCouplingMemLayoutContiguous);
 
-            const size_t sizes_bytes = (input_sizes_.size() + output_sizes_.size()) * sizeof(int64_t);
-            payload.resize(static_cast<size_t>(header.model_len + header.backend_len + header.device_len) + sizes_bytes);
-            size_t offset = 0;
-            if (header.model_len > 0)
-            {
-                std::memcpy(payload.data() + offset, model_file.data(), header.model_len);
-                offset += static_cast<size_t>(header.model_len);
-            }
-            if (header.backend_len > 0)
-            {
-                std::memcpy(payload.data() + offset, backend.data(), header.backend_len);
-                offset += static_cast<size_t>(header.backend_len);
-            }
-            if (header.device_len > 0)
-            {
-                std::memcpy(payload.data() + offset, device.data(), header.device_len);
-                offset += static_cast<size_t>(header.device_len);
-            }
-            if (!input_sizes_.empty())
-            {
-                std::memcpy(payload.data() + offset, input_sizes_.data(), input_sizes_.size() * sizeof(int64_t));
-                offset += input_sizes_.size() * sizeof(int64_t);
-            }
-            if (!output_sizes_.empty())
-            {
-                std::memcpy(payload.data() + offset, output_sizes_.data(), output_sizes_.size() * sizeof(int64_t));
-            }
+        const size_t sizes_bytes = (input_sizes_.size() + output_sizes_.size()) * sizeof(int64_t);
+        payload.resize(static_cast<size_t>(header.model_len + header.backend_len + header.device_len) + sizes_bytes);
+        size_t offset = 0;
+        if (header.model_len > 0)
+        {
+            std::memcpy(payload.data() + offset, model_file.data(), header.model_len);
+            offset += static_cast<size_t>(header.model_len);
+        }
+        if (header.backend_len > 0)
+        {
+            std::memcpy(payload.data() + offset, backend.data(), header.backend_len);
+            offset += static_cast<size_t>(header.backend_len);
+        }
+        if (header.device_len > 0)
+        {
+            std::memcpy(payload.data() + offset, device.data(), header.device_len);
+            offset += static_cast<size_t>(header.device_len);
+        }
+        if (!input_sizes_.empty())
+        {
+            std::memcpy(payload.data() + offset, input_sizes_.data(), input_sizes_.size() * sizeof(int64_t));
+            offset += input_sizes_.size() * sizeof(int64_t);
+        }
+        if (!output_sizes_.empty())
+        {
+            std::memcpy(payload.data() + offset, output_sizes_.data(), output_sizes_.size() * sizeof(int64_t));
         }
 
-        if (use_oob)
+        int ndest = phydll_get_ndest();
+        int *dests = phydll_get_dest();
+        for (int i = 0; i < ndest; ++i)
         {
-            MPI_Bcast(&header, sizeof(header), MPI_BYTE, 0, MPI_COMM_WORLD);
+            int dl_rank = dests[i];
+            MPI_Send(&header, sizeof(header), MPI_BYTE, dl_rank, world_rank, MPI_COMM_WORLD);
+            if (!payload.empty())
+            {
+                MPI_Send(payload.data(), static_cast<int>(payload.size()), MPI_BYTE, dl_rank, world_rank, MPI_COMM_WORLD);
+            }
         }
 
-        const size_t payload_size = static_cast<size_t>(header.model_len + header.backend_len + header.device_len) +
-                                    (static_cast<size_t>(header.num_inputs + header.num_outputs) * sizeof(int64_t));
-        if (world_rank != 0)
-        {
-            payload.resize(payload_size);
-        }
-        if (use_oob && !payload.empty())
-        {
-            MPI_Bcast(payload.data(), static_cast<int>(payload.size()), MPI_BYTE, 0, MPI_COMM_WORLD);
-        }
-
-        if (use_oob)
-        {
-            std::fprintf(stderr, "[PHYDLL:PHY] metadata broadcast complete (rank=%d)\n", world_rank);
-            std::fflush(stderr);
-        }
+        std::fprintf(stderr, "[PHYDLL:PHY] metadata p2p send complete (rank=%d)\n", world_rank);
+        std::fflush(stderr);
 
         metadata_bcasted_ = true;
-    #endif
+#endif
     }
 
     void initialize_if_needed()
@@ -305,10 +294,11 @@ private:
               << " total_output=" << total_output
               << std::endl;
 
-        broadcast_metadata_once();
-
         initialize_phydll_if_needed();
+        phydll_opt_enable_cpl_loop();
         phydll_define_phy(kFieldCount, field_size_);
+
+        broadcast_metadata_once();
 
         meta_buffer_.assign(static_cast<size_t>(field_size_), 0.0);
         data_buffer_.assign(static_cast<size_t>(field_size_), 0.0);

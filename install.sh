@@ -7,8 +7,9 @@ mkdir -p "$TMPDIR"
 
 . ./set_env_claix23_cuda12.4.sh 
 
-# Script dir (POSIX sh)
-SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+# Script dir (POSIX sh and bash support)
+SCRIPT_PATH="${BASH_SOURCE[0]:-$0}"
+SCRIPT_DIR="$(cd "$(dirname "$SCRIPT_PATH")" && pwd)"
 
 EXTERN_RUNTIME_ROOT="/home/thes2181/python"
 DEFAULT_RUNTIME_ROOT="${SCRIPT_DIR}/extern/python"

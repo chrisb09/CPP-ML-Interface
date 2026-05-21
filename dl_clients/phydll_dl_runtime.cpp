@@ -5,6 +5,7 @@
 #include <iostream>
 #include <limits>
 #include <stdexcept>
+#include <cstdlib>
 
 namespace phydll_dl {
 namespace {
@@ -51,6 +52,11 @@ MetaPhase to_phase(double value) {
 
 DlRuntime::DlRuntime(int dl_count) : dl_count_(dl_count) {}
 
+DlRuntime::~DlRuntime() {
+    // We do NOT free output_ptrs_ here because phydll_finalize
+    // (called in dl_client.cpp main) will free them.
+}
+
 void DlRuntime::initialize() {
     if (initialized_) {
         return;
@@ -63,9 +69,20 @@ void DlRuntime::initialize() {
     if (field_size_ <= 0) {
         throw std::runtime_error("PhyDLL returned invalid field size.");
     }
+    
     meta_buffer_.resize(static_cast<size_t>(field_size_));
     data_buffer_.resize(static_cast<size_t>(field_size_));
     meta_out_buffer_.resize(static_cast<size_t>(field_size_));
+    
+    // Allocate individual buffers for each field to satisfy PhyDLL's ownership/freeing model
+    output_ptrs_.resize(static_cast<size_t>(dl_count_));
+    for (int i = 0; i < dl_count_; ++i) {
+        output_ptrs_[i] = (double*)malloc(static_cast<size_t>(field_size_) * sizeof(double));
+        if (!output_ptrs_[i]) {
+            throw std::runtime_error("Failed to allocate output buffer.");
+        }
+    }
+
     initialized_ = true;
 }
 
@@ -82,13 +99,8 @@ Frame DlRuntime::receive_frame() {
     receive_fields();
 
     Frame frame;
-    frame.data = data_buffer_;
-    frame.meta = parse_meta(meta_buffer_);
-    frame.has_meta = !frame.meta.entries.empty();
-    std::fprintf(stderr, "[PHYDLL:DL] meta header magic=%.0f version=%.0f phase=%.0f header_len=%.0f entries=%zu\n",
-                 meta_buffer_[0], meta_buffer_[1], meta_buffer_[2], meta_buffer_[13],
-                 frame.meta.entries.size());
-    std::fflush(stderr);
+    frame.data = combined_data_;
+    frame.has_meta = false;
     return frame;
 }
 
@@ -97,20 +109,26 @@ void DlRuntime::send_output(const std::vector<double>& output) {
         initialize();
     }
 
-    if (output.size() > data_buffer_.size()) {
-        throw std::runtime_error("Output buffer larger than field size.");
+    const size_t total_expected = static_cast<size_t>(field_size_) * static_cast<size_t>(dl_count_);
+    if (output.size() > total_expected) {
+        throw std::runtime_error("Output data exceeds registered field size.");
     }
 
-    std::fill(data_buffer_.begin(), data_buffer_.end(), 0.0);
-    std::copy(output.begin(), output.end(), data_buffer_.begin());
-
-    double* output_ptr = data_buffer_.data();
-    double* meta_ptr = meta_out_buffer_.data();
-    std::fill(meta_out_buffer_.begin(), meta_out_buffer_.end(), 0.0);
     char out_label[] = "DL-OUT";
-    char meta_label[] = "DL-META";
-    phydll_set_field(&output_ptr, out_label);
-    phydll_set_field(&meta_ptr, meta_label);
+    for (int i = 0; i < dl_count_; ++i) {
+        std::memset(output_ptrs_[i], 0, static_cast<size_t>(field_size_) * sizeof(double));
+        
+        // Copy relevant chunk if available
+        const size_t offset = static_cast<size_t>(i) * static_cast<size_t>(field_size_);
+        if (offset < output.size()) {
+            const size_t to_copy = std::min(static_cast<size_t>(field_size_), output.size() - offset);
+            std::copy(output.begin() + offset, output.begin() + offset + to_copy, output_ptrs_[i]);
+        }
+
+        // We MUST call phydll_set_field for EACH of the dl_count_ fields
+        phydll_set_field(&output_ptrs_[i], out_label);
+    }
+    
     phydll_send();
 }
 
@@ -120,20 +138,23 @@ void DlRuntime::receive_fields() {
     phydll_wait_irecv();
     std::cerr << "[PHYDLL:DL] recv done" << std::endl;
 
+    combined_data_.clear();
+    combined_data_.reserve(static_cast<size_t>(field_size_) * static_cast<size_t>(dl_count_));
+
     double* buffer_ptr = nullptr;
     char label[64] = {0};
 
-    for (int i = 0; i < 2; ++i) {
-        buffer_ptr = data_buffer_.data();
+    for (int i = 0; i < dl_count_; ++i) {
+        buffer_ptr = nullptr; // phydll_get_field will allocate a new buffer via malloc
         std::memset(label, 0, sizeof(label));
         phydll_get_field(&buffer_ptr, label);
 
-        std::cerr << "[PHYDLL:DL] got label '" << label << "'" << std::endl;
-
-        if (std::string(label) == "PHY-META") {
-            std::copy(buffer_ptr, buffer_ptr + field_size_, meta_buffer_.begin());
-        } else if (std::string(label) == "PHY-DATA") {
-            std::copy(buffer_ptr, buffer_ptr + field_size_, data_buffer_.begin());
+        if (std::string(label) == "PHY-DATA") {
+            combined_data_.insert(combined_data_.end(), buffer_ptr, buffer_ptr + field_size_);
+        }
+        
+        if (buffer_ptr) {
+            free(buffer_ptr);
         }
     }
 }
@@ -141,6 +162,7 @@ void DlRuntime::receive_fields() {
 void DlRuntime::reset_buffers() {
     std::fill(meta_buffer_.begin(), meta_buffer_.end(), 0.0);
     std::fill(data_buffer_.begin(), data_buffer_.end(), 0.0);
+    combined_data_.clear();
 }
 
 MetaBatch DlRuntime::parse_meta(const std::vector<double>& buffer) {
@@ -148,20 +170,15 @@ MetaBatch DlRuntime::parse_meta(const std::vector<double>& buffer) {
     size_t offset = 0;
     while (offset + kHeaderFixedCount <= buffer.size()) {
         if (buffer[offset + kHeaderMagicIndex] != kMetaMagic) {
-            std::cerr << "[PHYDLL:DL] meta magic mismatch value="
-                      << buffer[offset + kHeaderMagicIndex] << std::endl;
             break;
         }
         const int version = static_cast<int>(buffer[offset + kHeaderVersionIndex]);
         if (version != kMetaVersion) {
-            std::cerr << "[PHYDLL:DL] meta version mismatch value=" << version << std::endl;
             break;
         }
 
         const int header_len = static_cast<int>(buffer[offset + kHeaderLengthIndex]);
         if (header_len <= 0 || offset + static_cast<size_t>(header_len) > buffer.size()) {
-            std::cerr << "[PHYDLL:DL] meta header length invalid value=" << header_len
-                      << " buffer_size=" << buffer.size() << std::endl;
             break;
         }
 

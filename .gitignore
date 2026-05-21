@@ -16,3 +16,4 @@ venv/
 extern/python
 extern/libtorch
 dl_clients/build
+tmp/

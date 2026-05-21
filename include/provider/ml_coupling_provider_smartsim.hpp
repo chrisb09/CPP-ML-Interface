@@ -5,7 +5,6 @@
 #include "../data/ml_coupling_data_type.hpp"
 #include "../data/ml_coupling_memory_layout.hpp"
 #include "../logging.hpp"
-#include "../slurm_env.hpp"
 
 #include <string>
 #include <string_view>
@@ -86,18 +85,21 @@ class MLCouplingProviderSmartsim : public MLCouplingProviderFlexible<In, Out>
     SR_MODEL_LOAD_RETRIES
     */
 
-    static int infer_smartsim_het_group()
+    static int env_int(const char *name, int fallback)
     {
-        const int explicit_group =
-            mlcoupling::slurm_env::get_env_int("SMARTSIM_DB_HET_GROUP",
-                mlcoupling::slurm_env::get_env_int("MLCOUPLING_SMARTSIM_HET_GROUP",
-                    mlcoupling::slurm_env::get_env_int("DB_HET_GROUP", -1)));
-        if (explicit_group >= 0)
+        const char *raw = std::getenv(name);
+        if (raw == nullptr || *raw == '\0')
         {
-            return explicit_group;
+            return fallback;
         }
-
-        return mlcoupling::slurm_env::single_gpu_het_group(1);
+        char *end = nullptr;
+        errno = 0;
+        const long parsed = std::strtol(raw, &end, 10);
+        if (end == raw || errno == ERANGE || parsed < INT_MIN || parsed > INT_MAX)
+        {
+            return fallback;
+        }
+        return static_cast<int>(parsed);
     }
 
     static int resolve_nodes(int configured_nodes)
@@ -106,7 +108,7 @@ class MLCouplingProviderSmartsim : public MLCouplingProviderFlexible<In, Out>
         {
             return configured_nodes;
         }
-        return mlcoupling::slurm_env::het_group_nodes(infer_smartsim_het_group(), 1);
+        return env_int("MLCOUPLING_SMARTSIM_NODES", -1);
     }
 
     static int resolve_num_gpus(const std::string &device, int configured_num_gpus)
@@ -119,7 +121,7 @@ class MLCouplingProviderSmartsim : public MLCouplingProviderFlexible<In, Out>
         {
             return 0;
         }
-        return mlcoupling::slurm_env::het_group_gpus_per_node(infer_smartsim_het_group(), 0);
+        return env_int("MLCOUPLING_SMARTSIM_NUM_GPUS", -1);
     }
 
 private:
@@ -159,6 +161,15 @@ private:
 #endif
 
         const int resolved_nodes = resolve_nodes(nodes);
+
+        if (resolved_nodes < 0)
+        {
+            logging::warning("nodes not configured; set nodes explicitly or MLCOUPLING_SMARTSIM_NODES.");
+        }
+        if (this->device == "GPU" && this->num_gpus < 0)
+        {
+            logging::warning("num_gpus not configured; set num_gpus explicitly or MLCOUPLING_SMARTSIM_NUM_GPUS.");
+        }
 
         validate_parameter(this->device,
                            this->model_backend,
@@ -210,7 +221,7 @@ private:
 
         client = new SmartRedis::Client("solver_" + std::to_string(world_rank));
 
-        if (this->rank <= 0)
+        if (this->rank == 0)
         {
             logging::info("SmartSim Coupling Provider initialized with the following parameters:");
             logging::info("Device: " + this->device);
@@ -254,6 +265,15 @@ private:
             }
         }
 
+#ifdef MLCOUPLING_PROVIDER_HAS_MPI
+        int mpi_initialized = 0;
+        MPI_Initialized(&mpi_initialized);
+        if (mpi_initialized)
+        {
+            MPI_Barrier(MPI_COMM_WORLD);
+        }
+#endif
+
 #endif
     }
 
@@ -294,13 +314,6 @@ public:
                                MLCouplingData<Out> *output_before_postprocessing = nullptr)
         : MLCouplingProviderSmartsim(std::move(device), std::move(model_backend), std::string(), std::move(model), std::move(model_name), std::move(host), port, std::vector<std::string>(), std::vector<int>(), nodes, num_gpus, first_gpu, batch_size, min_batch_size, min_batch_timeout, tf_input_labels, tf_output_labels, input_after_preprocessing, output_before_postprocessing) {};
 
-    void set_io_buffers(MLCouplingData<In> *input_after_preprocessing,
-                        MLCouplingData<Out> *output_before_postprocessing) override
-    {
-        this->input_after_preprocessing = input_after_preprocessing;
-        this->output_before_postprocessing = output_before_postprocessing;
-    }
-
     void validate_parameter(const std::string &device,
                             const std::string &model_backend,
                             const std::string &model_path,
@@ -324,6 +337,7 @@ public:
         guarantee(model_path.empty() || model.empty(), "Cannot specify both model_path and model");
 
         guarantee(device == "CPU" || device == "GPU", "Device must be either 'CPU' or 'GPU'");
+        guarantee(num_gpus != -1, "num_gpus could not be resolved; set num_gpus explicitly or check Slurm GPU env vars");
         guarantee(!(device == "GPU" && num_gpus == 0), "If device is GPU, num_gpus cannot be 0");
         guarantee(model_backend == "TF" || model_backend == "ONNX" || model_backend == "TFLITE" || model_backend == "TORCH", "Model backend must be either 'TF', 'ONNX', 'TFLITE', or 'TORCH'");
         guarantee(num_gpus >= 0, "num_gpus cannot be negative");

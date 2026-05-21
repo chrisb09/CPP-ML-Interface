@@ -133,7 +133,7 @@ public:
         {
             guarantee(false, "CouplingType STATIC requires non-null pre/post buffers.");
         }
-        this->provider->set_io_buffers(this->input_after_preprocessing, this->output_before_postprocessing);
+
         if (behavior == nullptr)
         {
             // Use default behavior if none provided
@@ -175,11 +175,6 @@ public:
             (this->input_after_preprocessing == nullptr || this->output_before_postprocessing == nullptr))
         {
             guarantee(false, "CouplingType STATIC requires non-null pre/post buffers.");
-        }
-
-        if (this->coupling_type == CouplingType::STATIC)
-        {
-            this->provider->set_io_buffers(this->input_after_preprocessing, this->output_before_postprocessing);
         }
     }
 

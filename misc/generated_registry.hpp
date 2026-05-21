@@ -554,7 +554,7 @@ MLCouplingNormalization<In, Out>* create_instance_mlcouplingnormalization(const 
         if (parameter.size() == 4) {
             try {
                 std::cout << "Creating instance of MLCouplingMinMaxNormalization with parameters: " << "input_min=<provided>" << ", ""input_max=<provided>" << ", ""output_min=<provided>" << ", ""output_max=<provided>" << std::endl;
-                return new MLCouplingMinMaxNormalization<In, Out>(*reinterpret_cast<In*>(parameter.at("input_min").second), *reinterpret_cast<In*>(parameter.at("input_max").second), *reinterpret_cast<Out*>(parameter.at("output_min").second), *reinterpret_cast<Out*>(parameter.at("output_max").second));
+                return new MLCouplingMinMaxNormalization<In, Out>(config_param_cast<In>(parameter.at("input_min")), config_param_cast<In>(parameter.at("input_max")), config_param_cast<Out>(parameter.at("output_min")), config_param_cast<Out>(parameter.at("output_max")));
             } catch (...) {
                 // Handle exceptions if necessary
             }
@@ -646,4 +646,3 @@ MLCouplingApplication<In, Out>* create_instance_mlcouplingapplication(const std:
     }
     return nullptr;
 }
-

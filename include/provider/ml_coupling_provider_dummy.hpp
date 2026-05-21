@@ -7,7 +7,7 @@
 
 #include "ml_coupling_provider_flexible.hpp"
 #include "../tool.h"
-
+#include "../logging.hpp"
 
 
 // @registry_name: Dummy
@@ -24,13 +24,7 @@ public:
         : input_after_preprocessing(input_after_preprocessing),
           output_before_postprocessing(output_before_postprocessing)
     {
-    }
-
-    void set_io_buffers(MLCouplingData<In> *input_after_preprocessing,
-                        MLCouplingData<Out> *output_before_postprocessing) override
-    {
-        this->input_after_preprocessing = input_after_preprocessing;
-        this->output_before_postprocessing = output_before_postprocessing;
+        logging::info("Initialized dummy provider. This does not implement any actual functionality and is just a placeholder.");
     }
 
     void inference(MLCouplingData<In> *input_after_preprocessing,

@@ -7,6 +7,8 @@
 
 extern "C" {
 #include "phydll.h"
+    int* phydll_get_dest();
+    int phydll_get_ndest();
 }
 
 namespace phydll_dl {
@@ -48,6 +50,7 @@ struct Frame {
 class DlRuntime {
 public:
     explicit DlRuntime(int dl_count);
+    ~DlRuntime();
 
     void initialize();
     bool is_running() const;
@@ -65,6 +68,11 @@ private:
     std::vector<double> meta_buffer_;
     std::vector<double> data_buffer_;
     std::vector<double> meta_out_buffer_;
+    std::vector<double> combined_data_;
+    
+    // Persistent buffers for output that are registered with PhyDLL.
+    // We use raw malloc'd pointers because PhyDLL finalize will free them.
+    std::vector<double*> output_ptrs_;
 
     void receive_fields();
     void reset_buffers();

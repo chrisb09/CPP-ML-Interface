@@ -129,6 +129,51 @@ inline void print_failed_constructor(std::string class_name, std::unordered_map<
     logging::error("Note: The config parsing uses types that may be automatically cast to fit the constructor parameters. For example, all integer values in the config are parsed as int64_t, but if the constructor expects an int, it will be cast accordingly. If there is a type mismatch that cannot be resolved, the constructor will fail.");
 }
 
+inline void apply_logging_settings(const toml::v3::table &config)
+{
+    if (const auto *logging_table = config.get_as<toml::v3::table>("logging"))
+    {
+        if (const auto *level_node = logging_table->get_as<std::string>("level"))
+        {
+            try
+            {
+                logging::set_level(logging::get_level(level_node->get()));
+            }
+            catch (const std::exception &e)
+            {
+                logging::warning("Invalid logging.level value: " + std::string(e.what()));
+            }
+        }
+        if (const auto *separate_node = logging_table->get_as<bool>("error_separate"))
+        {
+            logging::set_error_seperate(separate_node->get());
+        }
+    }
+
+    const char *env_level = std::getenv("MLCOUPLING_LOG_LEVEL");
+    if (env_level != nullptr && std::strlen(env_level) > 0)
+    {
+        try
+        {
+            logging::set_level(logging::get_level(env_level));
+        }
+        catch (const std::exception &e)
+        {
+            logging::warning("Invalid MLCOUPLING_LOG_LEVEL value: " + std::string(e.what()));
+        }
+    }
+
+    const char *env_separate = std::getenv("MLCOUPLING_LOG_ERROR_SEPARATE");
+    if (env_separate != nullptr && std::strlen(env_separate) > 0)
+    {
+        std::string value = env_separate;
+        std::transform(value.begin(), value.end(), value.begin(), [](unsigned char c)
+                       { return static_cast<char>(std::tolower(c)); });
+        const bool separate = (value == "1" || value == "true" || value == "yes" || value == "on");
+        logging::set_error_seperate(separate);
+    }
+}
+
 template <typename In, typename Out>
 inline void *create_mlcoupling_object(
     std::string module_classname,
@@ -259,6 +304,7 @@ MLCoupling<In, Out> *create_mlcoupling_from_config_impl(const std::string &confi
     try
     {
         toml::v3::table config = toml::parse(config_str);
+        apply_logging_settings(config);
 
         // Let's iterate through the configs "sections" or "categories" or whatever you want to call them (like [provider], [application], etc. but not hardcoded but all that is in the config)
 
@@ -573,6 +619,66 @@ MLCoupling<In, Out> *create_mlcoupling_from_config_impl(const std::string &confi
             logging::debug("Dummy value after normalization: " + after_stream.str());
         }
 
+        CouplingType coupling_type = CouplingType::STATIC;
+        if (coupling_type_value.has_value())
+        {
+            std::string normalized = *coupling_type_value;
+            std::transform(normalized.begin(), normalized.end(), normalized.begin(), [](unsigned char c)
+                           { return static_cast<char>(std::toupper(c)); });
+            if (normalized == "STATIC")
+            {
+                coupling_type = CouplingType::STATIC;
+            }
+            else if (normalized == "FLEXIBLE")
+            {
+                coupling_type = CouplingType::FLEXIBLE;
+            }
+            else
+            {
+                logging::error("Unknown coupling_type: " + *coupling_type_value + ". Expected STATIC or FLEXIBLE.");
+                exit(1);
+            }
+        }
+
+        if (application_class_name.empty())
+        {
+            logging::error("No application class specified in configuration.");
+            exit(1);
+        }
+        else
+        {
+            application_params["input_data"] = std::make_pair(0, static_cast<void *>(&input_data));
+            application_params["output_data"] = std::make_pair(0, static_cast<void *>(&output_data));
+            application_params["input_data_after_preprocessing"] = std::make_pair(0, static_cast<void *>(&input_data_after_preprocessing));
+            application_params["output_data_before_postprocessing"] = std::make_pair(0, static_cast<void *>(&output_data_before_postprocessing));
+            application = static_cast<MLCouplingApplication<In, Out> *>(create_mlcoupling_object<In, Out>(application_class_name, application_params, module_instances, create_instance_mlcouplingapplication<In, Out>));
+            if (application == nullptr && allow_two_buffer_application_fallback)
+            {
+                application_params.erase("input_data_after_preprocessing");
+                application_params.erase("output_data_before_postprocessing");
+                application = static_cast<MLCouplingApplication<In, Out> *>(create_mlcoupling_object<In, Out>(application_class_name, application_params, module_instances, create_instance_mlcouplingapplication<In, Out>));
+            }
+            if (application)
+            {
+                module_instances[resolve_application_class_name(application_class_name)] = std::make_pair(0, static_cast<void *>(application));
+            }
+            else
+            {
+                logging::error("Failed to create application instance of class: " + application_class_name);
+                print_failed_constructor(application_class_name, application_params, module_instances);
+                return nullptr;
+            }
+        }
+
+        MLCouplingData<In> *input_after_preprocessing_ptr = nullptr;
+        MLCouplingData<Out> *output_before_postprocessing_ptr = nullptr;
+        if (coupling_type == CouplingType::STATIC)
+        {
+            auto buffers = application->get_pre_post_buffers();
+            input_after_preprocessing_ptr = buffers.first;
+            output_before_postprocessing_ptr = buffers.second;
+        }
+
         if (provider_class_name.empty())
         {
             logging::error("No provider class specified in configuration.");
@@ -580,6 +686,11 @@ MLCoupling<In, Out> *create_mlcoupling_from_config_impl(const std::string &confi
         }
         else
         {
+            if (coupling_type == CouplingType::STATIC)
+            {
+                provider_params["input_after_preprocessing"] = std::make_pair(0, static_cast<void *>(input_after_preprocessing_ptr));
+                provider_params["output_before_postprocessing"] = std::make_pair(0, static_cast<void *>(output_before_postprocessing_ptr));
+            }
             provider = static_cast<MLCouplingProvider<In, Out> *>(create_mlcoupling_object<In, Out>(provider_class_name, provider_params, module_instances, create_instance_mlcouplingprovider<In, Out>));
             if (provider)
             {
@@ -615,36 +726,6 @@ MLCoupling<In, Out> *create_mlcoupling_from_config_impl(const std::string &confi
             }
         }
 
-        if (application_class_name.empty())
-        {
-            logging::error("No application class specified in configuration.");
-            exit(1);
-        }
-        else
-        {
-            application_params["input_data"] = std::make_pair(0, static_cast<void *>(&input_data));
-            application_params["output_data"] = std::make_pair(0, static_cast<void *>(&output_data));
-            application_params["input_data_after_preprocessing"] = std::make_pair(0, static_cast<void *>(&input_data_after_preprocessing));
-            application_params["output_data_before_postprocessing"] = std::make_pair(0, static_cast<void *>(&output_data_before_postprocessing));
-            application = static_cast<MLCouplingApplication<In, Out> *>(create_mlcoupling_object<In, Out>(application_class_name, application_params, module_instances, create_instance_mlcouplingapplication<In, Out>));
-            if (application == nullptr && allow_two_buffer_application_fallback)
-            {
-                application_params.erase("input_data_after_preprocessing");
-                application_params.erase("output_data_before_postprocessing");
-                application = static_cast<MLCouplingApplication<In, Out> *>(create_mlcoupling_object<In, Out>(application_class_name, application_params, module_instances, create_instance_mlcouplingapplication<In, Out>));
-            }
-            if (application)
-            {
-                module_instances[resolve_application_class_name(application_class_name)] = std::make_pair(0, static_cast<void *>(application));
-            }
-            else
-            {
-                logging::error("Failed to create application instance of class: " + application_class_name);
-                print_failed_constructor(application_class_name, application_params, module_instances);
-                return nullptr;
-            }
-        }
-
         if (normalization)
         {
             std::ostringstream normalization_stream;
@@ -668,41 +749,6 @@ MLCoupling<In, Out> *create_mlcoupling_from_config_impl(const std::string &confi
             std::ostringstream application_ptr_stream;
             application_ptr_stream << application;
             logging::info("Created application instance at " + application_ptr_stream.str() + " of type " + get_type_name(*application));
-        }
-
-        CouplingType coupling_type = CouplingType::STATIC;
-        if (coupling_type_value.has_value())
-        {
-            std::string normalized = *coupling_type_value;
-            std::transform(normalized.begin(), normalized.end(), normalized.begin(), [](unsigned char c)
-                           { return static_cast<char>(std::toupper(c)); });
-            if (normalized == "STATIC")
-            {
-                coupling_type = CouplingType::STATIC;
-            }
-            else if (normalized == "FLEXIBLE")
-            {
-                coupling_type = CouplingType::FLEXIBLE;
-            }
-            else
-            {
-                logging::error("Unknown coupling_type: " + *coupling_type_value + ". Expected STATIC or FLEXIBLE.");
-                exit(1);
-            }
-        }
-
-        MLCouplingData<In> *input_after_preprocessing_ptr = nullptr;
-        MLCouplingData<Out> *output_before_postprocessing_ptr = nullptr;
-        if (coupling_type == CouplingType::STATIC)
-        {
-            auto buffers = application->get_pre_post_buffers();
-            input_after_preprocessing_ptr = buffers.first;
-            output_before_postprocessing_ptr = buffers.second;
-        }
-
-        if (provider && coupling_type == CouplingType::STATIC)
-        {
-            provider->set_io_buffers(input_after_preprocessing_ptr, output_before_postprocessing_ptr);
         }
 
         return new MLCoupling<In, Out>(provider,

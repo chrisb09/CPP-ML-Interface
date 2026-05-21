@@ -1212,6 +1212,10 @@ def _write_map_factory(f, base_class, template_str, template_args, category,
             f.write(f'    }} else if (resolved_class_name == "{cls}") {{\n')
         
         cls_inst = _get_class_instantiation(cls, subclass_template_params, base_template_params)
+        template_param_names = {
+            _strip_cvref(name)
+            for name in (base_template_params + subclass_template_params)
+        }
         
         for ctor in subclass_constructors[base_class].get(cls, []):
             param_count = len(ctor)
@@ -1223,10 +1227,18 @@ def _write_map_factory(f, base_class, template_str, template_args, category,
             f.write(f'        // Constructor with {param_count} parameter(s)\n')
             f.write(f'        // Parameters: {", ".join(param_docs)}\n')
             
+            required_names = [pname for _, pname, pdefault in ctor if pdefault is None]
+            required_checks = ' && '.join([f'parameter.find("{name}") != parameter.end()' for name in required_names])
+
             if params_with_defaults > 0:
-                f.write(f'        if (parameter.size() >= {params_without_defaults} && parameter.size() <= {param_count}) {{\n')
+                size_check = f'parameter.size() >= {params_without_defaults} && parameter.size() <= {param_count}'
             else:
-                f.write(f'        if (parameter.size() == {param_count}) {{\n')
+                size_check = f'parameter.size() == {param_count}'
+
+            if required_checks:
+                f.write(f'        if ({size_check} && {required_checks}) {{\n')
+            else:
+                f.write(f'        if ({size_check}) {{\n')
             
             f.write(f'            try {{\n')
             
@@ -1268,6 +1280,15 @@ def _write_map_factory(f, base_class, template_str, template_args, category,
                         debug_outputs.append(f'"{pname}=" << (parameter.find("{pname}") != parameter.end() ? config_param_cast<{cast_type}>(parameter.at("{pname}")) : ({cast_type}){pdefault})')
                     else:
                         # Required parameter: use config_param_cast
+                        param_args.append(f'config_param_cast<{cast_type}>(parameter.at("{pname}"))')
+                        debug_outputs.append(f'"{pname}=" << config_param_cast<{cast_type}>(parameter.at("{pname}"))')
+                elif storage_type in template_param_names:
+                    # Template parameters such as In/Out/T should use typed config casting as well.
+                    cast_type = storage_type
+                    if pdefault:
+                        param_args.append(f'parameter.find("{pname}") != parameter.end() ? config_param_cast<{cast_type}>(parameter.at("{pname}")) : ({cast_type}){pdefault}')
+                        debug_outputs.append(f'"{pname}=" << (parameter.find("{pname}") != parameter.end() ? config_param_cast<{cast_type}>(parameter.at("{pname}")) : ({cast_type}){pdefault})')
+                    else:
                         param_args.append(f'config_param_cast<{cast_type}>(parameter.at("{pname}"))')
                         debug_outputs.append(f'"{pname}=" << config_param_cast<{cast_type}>(parameter.at("{pname}"))')
                 elif pdefault:
