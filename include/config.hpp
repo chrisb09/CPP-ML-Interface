@@ -58,6 +58,9 @@ inline void print_failed_constructor(std::string class_name, std::unordered_map<
         {
             switch (param_value.first)
             {
+            case -1: // opaque pointer
+                value_str = "Opaque pointer (" + std::to_string(reinterpret_cast<uintptr_t>(param_value.second)) + ")";
+                break;
             case 1: // int64_t
                 value_str = std::to_string(*reinterpret_cast<int64_t *>(param_value.second));
                 break;
@@ -89,7 +92,7 @@ inline void print_failed_constructor(std::string class_name, std::unordered_map<
         }
         catch (const std::exception &e)
         {
-            std::string val_type = (param_value.first == 1 ? "int64_t" : (param_value.first == 2 ? "double" : (param_value.first == 3 ? "std::string" : (param_value.first == 4 ? "bool" : (param_value.first == 5 ? "std::vector<std::string>" : "unknown")))));
+            std::string val_type = (param_value.first == -1 ? "pointer" : (param_value.first == 1 ? "int64_t" : (param_value.first == 2 ? "double" : (param_value.first == 3 ? "std::string" : (param_value.first == 4 ? "bool" : (param_value.first == 5 ? "std::vector<std::string>" : "unknown"))))));
             logging::error("Error retrieving value for parameter " + param_name + " which is of type " + val_type + ". This might different than the constructor expected. Error: " + e.what());
             return;
         }
@@ -99,7 +102,7 @@ inline void print_failed_constructor(std::string class_name, std::unordered_map<
             return;
         }
 
-        std::string type_str = (param_value.first == 1 ? "int64_t" : (param_value.first == 2 ? "double" : (param_value.first == 3 ? "std::string" : (param_value.first == 4 ? "bool" : (param_value.first == 5 ? "std::vector<std::string>" : "unknown")))));
+        std::string type_str = (param_value.first == -1 ? "pointer" : (param_value.first == 1 ? "int64_t" : (param_value.first == 2 ? "double" : (param_value.first == 3 ? "std::string" : (param_value.first == 4 ? "bool" : (param_value.first == 5 ? "std::vector<std::string>" : "unknown"))))));
         std::string left = "  " + param_name + " = " + value_str;
         entries.push_back({left, type_str});
     }
@@ -231,6 +234,22 @@ struct ConfigCastModeGuard
     }
 };
 
+struct ConfigParameterMatchModeGuard
+{
+    ConfigParameterMatchMode previous_mode;
+
+    explicit ConfigParameterMatchModeGuard(ConfigParameterMatchMode new_mode)
+        : previous_mode(get_config_parameter_match_mode())
+    {
+        set_config_parameter_match_mode(new_mode);
+    }
+
+    ~ConfigParameterMatchModeGuard()
+    {
+        set_config_parameter_match_mode(previous_mode);
+    }
+};
+
 inline std::optional<std::pair<std::string, std::string>> split_dotted_override_key(const std::string &dotted_key)
 {
     const auto dot_pos = dotted_key.find('.');
@@ -298,9 +317,11 @@ MLCoupling<In, Out> *create_mlcoupling_from_config_impl(const std::string &confi
                                                         MLCouplingData<Out> output_data_before_postprocessing,
                                                         bool allow_two_buffer_application_fallback,
                                                         ConfigCastMode cast_mode,
+                                                        ConfigParameterMatchMode parameter_match_mode,
                                                         const ConfigOverrides &overrides)
 {
     ConfigCastModeGuard cast_mode_guard(cast_mode);
+    ConfigParameterMatchModeGuard parameter_match_mode_guard(parameter_match_mode);
     try
     {
         toml::v3::table config = toml::parse(config_str);
@@ -688,8 +709,8 @@ MLCoupling<In, Out> *create_mlcoupling_from_config_impl(const std::string &confi
         {
             if (coupling_type == CouplingType::STATIC)
             {
-                provider_params["input_after_preprocessing"] = std::make_pair(0, static_cast<void *>(input_after_preprocessing_ptr));
-                provider_params["output_before_postprocessing"] = std::make_pair(0, static_cast<void *>(output_before_postprocessing_ptr));
+                provider_params["input_after_preprocessing"] = std::make_pair(-1, static_cast<void *>(input_after_preprocessing_ptr));
+                provider_params["output_before_postprocessing"] = std::make_pair(-1, static_cast<void *>(output_before_postprocessing_ptr));
             }
             provider = static_cast<MLCouplingProvider<In, Out> *>(create_mlcoupling_object<In, Out>(provider_class_name, provider_params, module_instances, create_instance_mlcouplingprovider<In, Out>));
             if (provider)
@@ -791,6 +812,7 @@ MLCoupling<In, Out> *create_mlcoupling_from_config(const std::string &config_str
                                                        std::move(output_data_before_postprocessing),
                                                        true,
                                                        cast_mode,
+                                                       ConfigParameterMatchMode::Strict,
                                                        ConfigOverrides{});
 }
 
@@ -812,6 +834,26 @@ MLCoupling<In, Out> *create_mlcoupling_from_config(const std::string &config_str
                                                    MLCouplingData<In> input_data,
                                                    MLCouplingData<Out> output_data,
                                                    ConfigCastMode cast_mode,
+                                                   ConfigParameterMatchMode parameter_match_mode)
+{
+    MLCouplingData<In> input_data_after_preprocessing = input_data;
+    MLCouplingData<Out> output_data_before_postprocessing = output_data;
+    return create_mlcoupling_from_config_impl<In, Out>(config_str,
+                                                       std::move(input_data),
+                                                       std::move(output_data),
+                                                       std::move(input_data_after_preprocessing),
+                                                       std::move(output_data_before_postprocessing),
+                                                       true,
+                                                       cast_mode,
+                                                       parameter_match_mode,
+                                                       ConfigOverrides{});
+}
+
+template <typename In, typename Out>
+MLCoupling<In, Out> *create_mlcoupling_from_config(const std::string &config_str,
+                                                   MLCouplingData<In> input_data,
+                                                   MLCouplingData<Out> output_data,
+                                                   ConfigCastMode cast_mode,
                                                    const ConfigOverrides &overrides)
 {
     MLCouplingData<In> input_data_after_preprocessing = input_data;
@@ -823,6 +865,28 @@ MLCoupling<In, Out> *create_mlcoupling_from_config(const std::string &config_str
                                                        std::move(output_data_before_postprocessing),
                                                        true,
                                                        cast_mode,
+                                                       ConfigParameterMatchMode::Strict,
+                                                       overrides);
+}
+
+template <typename In, typename Out>
+MLCoupling<In, Out> *create_mlcoupling_from_config(const std::string &config_str,
+                                                   MLCouplingData<In> input_data,
+                                                   MLCouplingData<Out> output_data,
+                                                   ConfigCastMode cast_mode,
+                                                   ConfigParameterMatchMode parameter_match_mode,
+                                                   const ConfigOverrides &overrides)
+{
+    MLCouplingData<In> input_data_after_preprocessing = input_data;
+    MLCouplingData<Out> output_data_before_postprocessing = output_data;
+    return create_mlcoupling_from_config_impl<In, Out>(config_str,
+                                                       std::move(input_data),
+                                                       std::move(output_data),
+                                                       std::move(input_data_after_preprocessing),
+                                                       std::move(output_data_before_postprocessing),
+                                                       true,
+                                                       cast_mode,
+                                                       parameter_match_mode,
                                                        overrides);
 }
 
@@ -855,6 +919,26 @@ MLCoupling<In, Out> *create_mlcoupling_from_config(const std::string &config_str
                                          std::move(input_data_after_preprocessing),
                                          std::move(output_data_before_postprocessing),
                                          cast_mode,
+                                         ConfigParameterMatchMode::Strict,
+                                         ConfigOverrides{});
+}
+
+template <typename In, typename Out>
+MLCoupling<In, Out> *create_mlcoupling_from_config(const std::string &config_str,
+                                                   MLCouplingData<In> input_data,
+                                                   MLCouplingData<Out> output_data,
+                                                   MLCouplingData<In> input_data_after_preprocessing,
+                                                   MLCouplingData<Out> output_data_before_postprocessing,
+                                                   ConfigCastMode cast_mode,
+                                                   ConfigParameterMatchMode parameter_match_mode)
+{
+    return create_mlcoupling_from_config(config_str,
+                                         std::move(input_data),
+                                         std::move(output_data),
+                                         std::move(input_data_after_preprocessing),
+                                         std::move(output_data_before_postprocessing),
+                                         cast_mode,
+                                         parameter_match_mode,
                                          ConfigOverrides{});
 }
 
@@ -874,6 +958,28 @@ MLCoupling<In, Out> *create_mlcoupling_from_config(const std::string &config_str
                                                        std::move(output_data_before_postprocessing),
                                                        false,
                                                        cast_mode,
+                                                       ConfigParameterMatchMode::Strict,
+                                                       overrides);
+}
+
+template <typename In, typename Out>
+MLCoupling<In, Out> *create_mlcoupling_from_config(const std::string &config_str,
+                                                   MLCouplingData<In> input_data,
+                                                   MLCouplingData<Out> output_data,
+                                                   MLCouplingData<In> input_data_after_preprocessing,
+                                                   MLCouplingData<Out> output_data_before_postprocessing,
+                                                   ConfigCastMode cast_mode,
+                                                   ConfigParameterMatchMode parameter_match_mode,
+                                                   const ConfigOverrides &overrides)
+{
+    return create_mlcoupling_from_config_impl<In, Out>(config_str,
+                                                       std::move(input_data),
+                                                       std::move(output_data),
+                                                       std::move(input_data_after_preprocessing),
+                                                       std::move(output_data_before_postprocessing),
+                                                       false,
+                                                       cast_mode,
+                                                       parameter_match_mode,
                                                        overrides);
 }
 
@@ -900,6 +1006,24 @@ MLCoupling<In, Out> *create_mlcoupling_from_config_file(const std::string &confi
                                                        std::move(input_data_after_preprocessing),
                                                        std::move(output_data_before_postprocessing),
                                                        cast_mode);
+}
+
+template <typename In, typename Out>
+MLCoupling<In, Out> *create_mlcoupling_from_config_file(const std::string &config_file_path,
+                                                        MLCouplingData<In> input_data,
+                                                        MLCouplingData<Out> output_data,
+                                                        ConfigCastMode cast_mode,
+                                                        ConfigParameterMatchMode parameter_match_mode)
+{
+    MLCouplingData<In> input_data_after_preprocessing = input_data;
+    MLCouplingData<Out> output_data_before_postprocessing = output_data;
+    return create_mlcoupling_from_config_file<In, Out>(config_file_path,
+                                                       std::move(input_data),
+                                                       std::move(output_data),
+                                                       std::move(input_data_after_preprocessing),
+                                                       std::move(output_data_before_postprocessing),
+                                                       cast_mode,
+                                                       parameter_match_mode);
 }
 
 template <typename In, typename Out>
@@ -937,6 +1061,26 @@ template <typename In, typename Out>
 MLCoupling<In, Out> *create_mlcoupling_from_config_file(const std::string &config_file_path,
                                                         MLCouplingData<In> input_data,
                                                         MLCouplingData<Out> output_data,
+                                                        ConfigCastMode cast_mode,
+                                                        ConfigParameterMatchMode parameter_match_mode,
+                                                        const ConfigOverrides &overrides)
+{
+    MLCouplingData<In> input_data_after_preprocessing = input_data;
+    MLCouplingData<Out> output_data_before_postprocessing = output_data;
+    return create_mlcoupling_from_config_file<In, Out>(config_file_path,
+                                                       std::move(input_data),
+                                                       std::move(output_data),
+                                                       std::move(input_data_after_preprocessing),
+                                                       std::move(output_data_before_postprocessing),
+                                                       cast_mode,
+                                                       parameter_match_mode,
+                                                       overrides);
+}
+
+template <typename In, typename Out>
+MLCoupling<In, Out> *create_mlcoupling_from_config_file(const std::string &config_file_path,
+                                                        MLCouplingData<In> input_data,
+                                                        MLCouplingData<Out> output_data,
                                                         MLCouplingData<In> input_data_after_preprocessing,
                                                         MLCouplingData<Out> output_data_before_postprocessing)
 {
@@ -962,6 +1106,7 @@ MLCoupling<In, Out> *create_mlcoupling_from_config_file(const std::string &confi
                                                        std::move(input_data_after_preprocessing),
                                                        std::move(output_data_before_postprocessing),
                                                        cast_mode,
+                                                       ConfigParameterMatchMode::Strict,
                                                        ConfigOverrides{});
 }
 
@@ -972,6 +1117,45 @@ MLCoupling<In, Out> *create_mlcoupling_from_config_file(const std::string &confi
                                                         MLCouplingData<In> input_data_after_preprocessing,
                                                         MLCouplingData<Out> output_data_before_postprocessing,
                                                         ConfigCastMode cast_mode,
+                                                        ConfigParameterMatchMode parameter_match_mode)
+{
+    return create_mlcoupling_from_config_file<In, Out>(config_file_path,
+                                                       std::move(input_data),
+                                                       std::move(output_data),
+                                                       std::move(input_data_after_preprocessing),
+                                                       std::move(output_data_before_postprocessing),
+                                                       cast_mode,
+                                                       parameter_match_mode,
+                                                       ConfigOverrides{});
+}
+
+template <typename In, typename Out>
+MLCoupling<In, Out> *create_mlcoupling_from_config_file(const std::string &config_file_path,
+                                                        MLCouplingData<In> input_data,
+                                                        MLCouplingData<Out> output_data,
+                                                        MLCouplingData<In> input_data_after_preprocessing,
+                                                        MLCouplingData<Out> output_data_before_postprocessing,
+                                                        ConfigCastMode cast_mode,
+                                                        const ConfigOverrides &overrides)
+{
+    return create_mlcoupling_from_config_file<In, Out>(config_file_path,
+                                                       std::move(input_data),
+                                                       std::move(output_data),
+                                                       std::move(input_data_after_preprocessing),
+                                                       std::move(output_data_before_postprocessing),
+                                                       cast_mode,
+                                                       ConfigParameterMatchMode::Strict,
+                                                       overrides);
+}
+
+template <typename In, typename Out>
+MLCoupling<In, Out> *create_mlcoupling_from_config_file(const std::string &config_file_path,
+                                                        MLCouplingData<In> input_data,
+                                                        MLCouplingData<Out> output_data,
+                                                        MLCouplingData<In> input_data_after_preprocessing,
+                                                        MLCouplingData<Out> output_data_before_postprocessing,
+                                                        ConfigCastMode cast_mode,
+                                                        ConfigParameterMatchMode parameter_match_mode,
                                                         const ConfigOverrides &overrides)
 {
     // Open and read the file content
@@ -989,5 +1173,6 @@ MLCoupling<In, Out> *create_mlcoupling_from_config_file(const std::string &confi
                                                   std::move(input_data_after_preprocessing),
                                                   std::move(output_data_before_postprocessing),
                                                   cast_mode,
+                                                  parameter_match_mode,
                                                   overrides);
 }

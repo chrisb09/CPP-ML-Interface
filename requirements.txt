@@ -1,2 +1,9 @@
 clang==15.0.7   # For compile-time reflection equivalent (only C++26 has actual compile-time reflection, but this is the closest we can get for C++17)
-numpy
+# phydll's python client uses this
+numpy # iirc smartsim also makes use of this (?)
+mpi4py
+cython
+
+# for basic analysis
+pandas
+matplotlib

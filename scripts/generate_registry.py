@@ -987,6 +987,7 @@ def write_type_identification_functions(f, base_classes, template_parameters, fo
 def write_config_param_cast_helper(f):
     """Generate a template helper that casts a typed void* to a target type at runtime."""
     f.write("enum class ConfigCastMode : int { Strict, Relaxed };\n\n")
+    f.write("enum class ConfigParameterMatchMode : int { Strict, Lenient };\n\n")
     f.write("inline ConfigCastMode& config_cast_mode_storage() {\n")
     f.write("    static ConfigCastMode mode = ConfigCastMode::Relaxed;\n")
     f.write("    return mode;\n")
@@ -996,6 +997,24 @@ def write_config_param_cast_helper(f):
     f.write("}\n\n")
     f.write("inline ConfigCastMode get_config_cast_mode() {\n")
     f.write("    return config_cast_mode_storage();\n")
+    f.write("}\n\n")
+    f.write("inline ConfigParameterMatchMode& config_parameter_match_mode_storage() {\n")
+    f.write("    static ConfigParameterMatchMode mode = ConfigParameterMatchMode::Strict;\n")
+    f.write("    return mode;\n")
+    f.write("}\n\n")
+    f.write("inline void set_config_parameter_match_mode(ConfigParameterMatchMode mode) {\n")
+    f.write("    config_parameter_match_mode_storage() = mode;\n")
+    f.write("}\n\n")
+    f.write("inline ConfigParameterMatchMode get_config_parameter_match_mode() {\n")
+    f.write("    return config_parameter_match_mode_storage();\n")
+    f.write("}\n\n")
+    f.write("inline bool config_parameter_names_match(const std::unordered_map<std::string, std::pair<int, void*>>& parameter, const std::vector<std::string>& allowed_names) {\n")
+    f.write("    for (const auto& entry : parameter) {\n")
+    f.write("        if (std::find(allowed_names.begin(), allowed_names.end(), entry.first) == allowed_names.end()) {\n")
+    f.write("            return false;\n")
+    f.write("        }\n")
+    f.write("    }\n")
+    f.write("    return true;\n")
     f.write("}\n\n")
     f.write("inline std::string config_cast_to_lower(std::string value) {\n")
     f.write("    std::transform(value.begin(), value.end(), value.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });\n")
@@ -1231,9 +1250,18 @@ def _write_map_factory(f, base_class, template_str, template_args, category,
             required_checks = ' && '.join([f'parameter.find("{name}") != parameter.end()' for name in required_names])
 
             if params_with_defaults > 0:
-                size_check = f'parameter.size() >= {params_without_defaults} && parameter.size() <= {param_count}'
+                strict_size_check = f'parameter.size() >= {params_without_defaults} && parameter.size() <= {param_count}'
             else:
-                size_check = f'parameter.size() == {param_count}'
+                strict_size_check = f'parameter.size() == {param_count}'
+            allowed_names = ', '.join(f'"{pname}"' for _, pname, _ in ctor)
+            strict_match_check = (
+                f'({strict_size_check}) && '
+                f'config_parameter_names_match(parameter, {{{allowed_names}}})'
+            )
+            size_check = (
+                f'(get_config_parameter_match_mode() == ConfigParameterMatchMode::Lenient || '
+                f'({strict_match_check}))'
+            )
 
             if required_checks:
                 f.write(f'        if ({size_check} && {required_checks}) {{\n')

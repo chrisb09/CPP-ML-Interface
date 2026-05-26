@@ -191,7 +191,17 @@ private:
         int world_rank = 0;
         MPI_Comm_rank(MPI_COMM_WORLD, &world_rank);
 
+        if (world_rank == 0)
+        {
+            std::cout << "[PHYDLL:PHY] Rank 0 starting metadata handshake. Synchronizing with DL side..." << std::endl;
+        }
+
         MPI_Barrier(MPI_COMM_WORLD);
+
+        if (world_rank == 0)
+        {
+            std::cout << "[PHYDLL:PHY] Handshake synchronization complete." << std::endl;
+        }
 
         BcastMetaHeader header;
         std::vector<unsigned char> payload;
@@ -274,6 +284,7 @@ private:
 
         meta_buffer_.assign(static_cast<size_t>(field_size_), 0.0);
         data_buffer_.assign(static_cast<size_t>(field_size_), 0.0);
+        
         initialized_ = true;
 #endif
     }
