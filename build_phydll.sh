@@ -1,7 +1,8 @@
 
 current=$(pwd)
+script_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 
-cd extern/phydll
+cd "${script_dir}/extern/phydll"
 
 mkdir -p ./build
 export BUILD=$(realpath ./build)

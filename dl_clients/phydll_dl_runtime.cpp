@@ -64,8 +64,13 @@ void DlRuntime::initialize() {
     phydll_init(const_cast<char*>("dl"));
     phydll_define_dl(dl_count_);
     phydll_get_field_size(&field_size_);
+    phydll_get_field_counts(&phy_count_, &dl_count_);
+    source_count_ = phydll_get_ndest();
     if (field_size_ <= 0) {
         throw std::runtime_error("PhyDLL returned invalid field size.");
+    }
+    if (phy_count_ <= 0 || dl_count_ <= 0 || source_count_ <= 0) {
+        throw std::runtime_error("PhyDLL returned invalid field counts.");
     }
     
     meta_buffer_.resize(static_cast<size_t>(field_size_));
@@ -135,12 +140,12 @@ void DlRuntime::receive_fields() {
     phydll_wait_irecv();
 
     combined_data_.clear();
-    combined_data_.reserve(static_cast<size_t>(field_size_) * static_cast<size_t>(dl_count_));
+    combined_data_.reserve(static_cast<size_t>(field_size_) * static_cast<size_t>(phy_count_));
 
     double* buffer_ptr = nullptr;
     char label[64] = {0};
 
-    for (int i = 0; i < dl_count_; ++i) {
+    for (int i = 0; i < phy_count_; ++i) {
         buffer_ptr = nullptr; // phydll_get_field will allocate a new buffer via malloc
         std::memset(label, 0, sizeof(label));
         phydll_get_field(&buffer_ptr, label);

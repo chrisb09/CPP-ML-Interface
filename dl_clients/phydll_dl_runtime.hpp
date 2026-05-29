@@ -5,6 +5,13 @@
 #include <string>
 #include <vector>
 
+#ifndef MPICH_SKIP_MPICXX
+#define MPICH_SKIP_MPICXX
+#endif
+#ifndef OMPI_SKIP_MPICXX
+#define OMPI_SKIP_MPICXX
+#endif
+
 extern "C" {
 #include "phydll.h"
     int* phydll_get_dest();
@@ -62,6 +69,8 @@ public:
 
 private:
     int dl_count_ = 1;
+    int phy_count_ = 1;
+    int source_count_ = 1;
     int field_size_ = 0;
     bool initialized_ = false;
 

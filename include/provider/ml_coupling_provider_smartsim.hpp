@@ -36,6 +36,9 @@ class MLCouplingProviderSmartsim : public MLCouplingProviderFlexible<In, Out>
     const int batch_size;
     const int min_batch_size;
     const int min_batch_timeout;
+    const int command_timeout;
+    const int socket_timeout;
+    const int model_timeout;
 
     // TODO: we should have an intermediate abstract/virtual class that adds the requirement for send_data, which smartsim and phydll can do seperately, but which aixelerate cannot.
 
@@ -124,6 +127,14 @@ class MLCouplingProviderSmartsim : public MLCouplingProviderFlexible<In, Out>
         return env_int("MLCOUPLING_SMARTSIM_NUM_GPUS", -1);
     }
 
+    static void set_timeout_env_if_not_set(const char *name, int value)
+    {
+        if (value >= 0 && std::getenv(name) == nullptr)
+        {
+            setenv(name, std::to_string(value).c_str(), 1);
+        }
+    }
+
 private:
     MLCouplingProviderSmartsim(std::string device = std::string(),
                                std::string model_backend = std::string(),
@@ -140,6 +151,9 @@ private:
                                int batch_size = 0,
                                int min_batch_size = 0,
                                int min_batch_timeout = 0,
+                               int command_timeout = -1,
+                               int socket_timeout = -1,
+                               int model_timeout = -1,
                                const std::vector<std::string> &tf_input_labels = {},
                                const std::vector<std::string> &tf_output_labels = {},
                                MLCouplingData<In> *input_after_preprocessing = nullptr,
@@ -152,6 +166,9 @@ private:
           batch_size(batch_size),
           min_batch_size(min_batch_size),
           min_batch_timeout(min_batch_timeout),
+          command_timeout(command_timeout),
+          socket_timeout(socket_timeout),
+          model_timeout(model_timeout),
           input_after_preprocessing(input_after_preprocessing),
           output_before_postprocessing(output_before_postprocessing)
     {
@@ -186,6 +203,9 @@ private:
                            this->batch_size,
                            this->min_batch_size,
                            this->min_batch_timeout,
+                           this->command_timeout,
+                           this->socket_timeout,
+                           this->model_timeout,
                            tf_input_labels,
                            tf_output_labels);
 
@@ -201,10 +221,10 @@ private:
         else if (!hosts.empty() && !ports.empty() && hosts.size() == ports.size())
         {
             ssdb = "";
-            for (int i = 0; i < hosts.size(); i++)
+            for (int i = 0; i < (int)hosts.size(); i++)
             {
                 ssdb += hosts[i] + ":" + std::to_string(ports[i]);
-                if (i < hosts.size() - 1)
+                if (i < (int)hosts.size() - 1)
                 {
                     ssdb += ",";
                 }
@@ -214,6 +234,11 @@ private:
 
         // Setting the database type based on the number of nodes
         setenv("SR_DB_TYPE", resolved_nodes > 1 ? "Clustered" : "Standalone", 1);
+
+        // Setting the SmartRedis timeouts if provided and not already set in the environment
+        set_timeout_env_if_not_set("SR_CMD_TIMEOUT", this->command_timeout);
+        set_timeout_env_if_not_set("SR_SOCKET_TIMEOUT", this->socket_timeout);
+        set_timeout_env_if_not_set("SR_MODEL_TIMEOUT", this->model_timeout);
 
 #if defined(WITH_SMARTSIM)
 
@@ -232,6 +257,9 @@ private:
             logging::debug("Batch Size: " + std::to_string(this->batch_size));
             logging::debug("Min Batch Size: " + std::to_string(this->min_batch_size));
             logging::debug("Min Batch Timeout: " + std::to_string(this->min_batch_timeout) + " ms");
+            if (this->command_timeout >= 0) logging::debug("Command Timeout: " + std::to_string(this->command_timeout) + " s");
+            if (this->socket_timeout >= 0) logging::debug("Socket Timeout: " + std::to_string(this->socket_timeout) + " s");
+            if (this->model_timeout >= 0) logging::debug("Model Timeout: " + std::to_string(this->model_timeout) + " ms");
             if (!ssdb.empty()) {
                 logging::debug("SSDB: " + ssdb);
             }
@@ -289,11 +317,14 @@ public:
                                int batch_size = 0,
                                int min_batch_size = 0,
                                int min_batch_timeout = 0,
+                               int command_timeout = -1,
+                               int socket_timeout = -1,
+                               int model_timeout = -1,
                                const std::vector<std::string> &tf_input_labels = {},
                                const std::vector<std::string> &tf_output_labels = {},
                                MLCouplingData<In> *input_after_preprocessing = nullptr,
                                MLCouplingData<Out> *output_before_postprocessing = nullptr)
-        : MLCouplingProviderSmartsim(std::move(device), std::move(model_backend), std::move(model_path), std::string_view(), std::move(model_name), std::move(host), port, std::vector<std::string>(), std::vector<int>(), nodes, num_gpus, first_gpu, batch_size, min_batch_size, min_batch_timeout, tf_input_labels, tf_output_labels, input_after_preprocessing, output_before_postprocessing) {};
+        : MLCouplingProviderSmartsim(std::move(device), std::move(model_backend), std::move(model_path), std::string_view(), std::move(model_name), std::move(host), port, std::vector<std::string>(), std::vector<int>(), nodes, num_gpus, first_gpu, batch_size, min_batch_size, min_batch_timeout, command_timeout, socket_timeout, model_timeout, tf_input_labels, tf_output_labels, input_after_preprocessing, output_before_postprocessing) {};
 
     MLCouplingProviderSmartsim(std::string device,
                                std::string model_backend,
@@ -307,11 +338,14 @@ public:
                                int batch_size = 0,
                                int min_batch_size = 0,
                                int min_batch_timeout = 0,
+                               int command_timeout = -1,
+                               int socket_timeout = -1,
+                               int model_timeout = -1,
                                const std::vector<std::string> &tf_input_labels = {},
                                const std::vector<std::string> &tf_output_labels = {},
                                MLCouplingData<In> *input_after_preprocessing = nullptr,
                                MLCouplingData<Out> *output_before_postprocessing = nullptr)
-        : MLCouplingProviderSmartsim(std::move(device), std::move(model_backend), std::string(), std::move(model), std::move(model_name), std::move(host), port, std::vector<std::string>(), std::vector<int>(), nodes, num_gpus, first_gpu, batch_size, min_batch_size, min_batch_timeout, tf_input_labels, tf_output_labels, input_after_preprocessing, output_before_postprocessing) {};
+        : MLCouplingProviderSmartsim(std::move(device), std::move(model_backend), std::string(), std::move(model), std::move(model_name), std::move(host), port, std::vector<std::string>(), std::vector<int>(), nodes, num_gpus, first_gpu, batch_size, min_batch_size, min_batch_timeout, command_timeout, socket_timeout, model_timeout, tf_input_labels, tf_output_labels, input_after_preprocessing, output_before_postprocessing) {};
 
     void validate_parameter(const std::string &device,
                             const std::string &model_backend,
@@ -328,6 +362,9 @@ public:
                             int batch_size,
                             int min_batch_size,
                             int min_batch_timeout,
+                            int command_timeout,
+                            int socket_timeout,
+                            int model_timeout,
                             const std::vector<std::string> &tf_input_labels,
                             const std::vector<std::string> &tf_output_labels)
     {
@@ -353,8 +390,11 @@ public:
         guarantee(batch_size >= 0, "batch_size cannot be negative");
         guarantee(min_batch_size >= 0, "min_batch_size cannot be negative");
         guarantee(min_batch_timeout >= 0, "min_batch_timeout cannot be negative");
+        guarantee(command_timeout >= -1, "command_timeout cannot be less than -1");
+        guarantee(socket_timeout >= -1, "socket_timeout cannot be less than -1");
+        guarantee(model_timeout >= -1, "model_timeout cannot be less than -1");
 
-        guarantee((model_backend == "TF" || model_backend == "TFLITE") || (tf_input_labels.empty() && tf_output_labels.empty()), "tf_input_labels and tf_output_labels can only be specified for TF and TFLITE backends");
+        guarantee((model_backend == "TF" || model_backend == "ONNX" || model_backend == "TFLITE" || model_backend == "TORCH") && (tf_input_labels.empty() && tf_output_labels.empty()), "tf_input_labels and tf_output_labels can only be specified for TF and TFLITE backends");
         guarantee(tf_input_labels.empty() == tf_output_labels.empty(), "tf_input_labels and tf_output_labels must be specified together for TF and TFLITE backends");
     }
 

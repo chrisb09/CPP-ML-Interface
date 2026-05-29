@@ -89,20 +89,13 @@ def main():
     world_comm = MPI.COMM_WORLD
     
     # Handle MPMD split (identical logic to C++ client)
-    appnum = world_comm.Get_attr(MPI.APPNUM)
-    app_id = appnum if appnum is not None else 0
-    color = 0 if app_id == 0 else MPI.UNDEFINED
+    # Handle MPMD split
+    # We no longer rely on MPI_APPNUM, because Slurm srun with OpenMPI 5 assigns appnum 0 to both components!
+    # Since this script is ALWAYS the DL client, we unconditionally assign it color MPI_UNDEFINED.
+    color = MPI.UNDEFINED
     local_comm = world_comm.Split(color, 0)
     
     # Check if we are in the DL application group
-    if app_id != 0:
-        # We are probably in the solver app group, just exit or block?
-        # In MPMD run.sh, DL app usually has its own app_id.
-        # But wait, run.sh uses:
-        # mpirun ... solver ... : ... dl_client ...
-        # Usually solver is app 0, dl_client is app 1.
-        # Let's check run.sh: app_id 0 was rank 0, 1, 2 of solver.
-        pass
 
     dl_count = int(os.environ.get("PHYDLL_DL_COUNT", "1"))
     

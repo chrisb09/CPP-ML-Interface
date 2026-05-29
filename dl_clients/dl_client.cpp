@@ -1,4 +1,5 @@
 #include <iostream>
+#include <cstring>
 #include <string>
 #include <vector>
 
@@ -110,17 +111,14 @@ BcastMeta receive_p2p_metadata(int source_rank)
 int main(int argc, char **argv) {
     MPI_Init(&argc, &argv);
 
-    int* appnum_ptr = nullptr;
-    int appnum_flag = 0;
-    MPI_Comm_get_attr(MPI_COMM_WORLD, MPI_APPNUM, &appnum_ptr, &appnum_flag);
-    const int app_id = appnum_flag ? *appnum_ptr : 0;
-
     // Participate in the MPMD split to avoid collective mismatches.
-    const int color = (app_id == 0) ? 0 : MPI_UNDEFINED;
+    // We no longer rely on MPI_APPNUM, because Slurm srun with OpenMPI 5 assigns appnum 0 to both components!
+    // Since this binary is ALWAYS the DL client, we unconditionally assign it color MPI_UNDEFINED.
+    const int color = MPI_UNDEFINED;
     MPI_Comm local_comm = MPI_COMM_NULL;
     MPI_Comm_split(MPI_COMM_WORLD, color, 0, &local_comm);
 
-    const int dl_count = get_env_int("PHYDLL_DL_COUNT", 1);
+    const int dl_count = get_env_int("PHYDLL_DL_FIELD_COUNT", get_env_int("PHYDLL_DL_COUNT", 1));
 
     std::fprintf(stderr, "[PHYDLL:DL] client started argv0=%s dl_count=%d torch=%s\n",
                  (argv && argv[0]) ? argv[0] : "(null)",

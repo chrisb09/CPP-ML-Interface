@@ -11,6 +11,13 @@
 #include <string>
 #include <vector>
 
+#ifndef MPICH_SKIP_MPICXX
+#define MPICH_SKIP_MPICXX
+#endif
+#ifndef OMPI_SKIP_MPICXX
+#define OMPI_SKIP_MPICXX
+#endif
+
 #ifdef WITH_PHYDLL
 #include <mpi.h>
 #endif
