@@ -1,6 +1,6 @@
 #pragma once
 
-#include "ml_coupling_provider_flexible.hpp"
+#include "ml_coupling_provider.hpp"
 #include "../tool.h"
 #include "../data/ml_coupling_data_type.hpp"
 #include "../data/ml_coupling_memory_layout.hpp"
@@ -18,7 +18,7 @@
 // @registry_name: Smartsim
 // @registry_aliases: smartsim, SmartSim
 template <typename In, typename Out>
-class MLCouplingProviderSmartsim : public MLCouplingProviderFlexible<In, Out>
+class MLCouplingProviderSmartsim : public MLCouplingProvider<In, Out>
 {
 
 // local variables
@@ -39,54 +39,6 @@ class MLCouplingProviderSmartsim : public MLCouplingProviderFlexible<In, Out>
     const int command_timeout;
     const int socket_timeout;
     const int model_timeout;
-
-    // TODO: we should have an intermediate abstract/virtual class that adds the requirement for send_data, which smartsim and phydll can do seperately, but which aixelerate cannot.
-
-    /*
-    SmartRedis runtime env vars:
-    https://www.craylabs.org/docs/sr_runtime.html
-
-    export SSDB="10.128.0.153:6379,10.128.0.154:6379,10.128.0.155:6379"
-    // Redis database address list. Use a single host:port for standalone mode,
-    // or a comma-separated host:port list for clustered mode. Prefixes like
-    // "tcp://" are also supported.
-
-    export SR_DB_TYPE="Clustered"
-    // Database type: "Clustered" or "Standalone".
-
-    export SR_CONN_INTERVAL=10
-    // Milliseconds to wait between connection attempts.
-
-    export SR_CONN_TIMEOUT=30
-    // Total time in seconds to keep retrying connection attempts before failing.
-
-    export SR_SOCKET_TIMEOUT=30
-    // Per-attempt socket reply timeout in seconds. This can add to the overall
-    // delay imposed by the connection and command retry timeouts.
-
-    export SR_CMD_INTERVAL=10
-    // Milliseconds to wait between command retry attempts.
-
-    export SR_CMD_TIMEOUT=30
-    // Total time in seconds to keep retrying a command before timing out.
-
-    export SR_MODEL_TIMEOUT=300000
-    // Milliseconds to wait for model execution before timing out.
-
-    export SR_THREAD_COUNT=4
-    // SmartRedis worker-pool thread count. Default is 4; 0 uses hardware concurrency.
-
-    export SR_LOG_FILE="logs/smartredis.log"
-    // Path to the SmartRedis log file.
-
-    export SR_LOG_LEVEL="INFO"
-    // Logging verbosity, e.g. QUIET, INFO, DEBUG, or DEVELOPER.
-    */
-
-    /* Other env vars:
-    SR_MODEL_LOAD_BACKOFF_MS
-    SR_MODEL_LOAD_RETRIES
-    */
 
     static int env_int(const char *name, int fallback)
     {
@@ -398,8 +350,8 @@ public:
         guarantee(tf_input_labels.empty() == tf_output_labels.empty(), "tf_input_labels and tf_output_labels must be specified together for TF and TFLITE backends");
     }
 
-    void inference(MLCouplingData<In> *input_after_preprocessing,
-                   MLCouplingData<Out> *output_before_postprocessing) override
+    void static_inference(MLCouplingData<In> *input_after_preprocessing,
+                          MLCouplingData<Out> *output_before_postprocessing) override
     {
 
         guarantee(input_after_preprocessing != nullptr, "Smartsim inference requires input_after_preprocessing.");
@@ -498,27 +450,6 @@ public:
         }
 
 #endif
-        // TODO
-    }
-
-    void send_data(const std::vector<std::string> &keys, MLCouplingData<In> &input_data_after_preprocessing) override
-    {
-        return; // TODO
-    }
-
-    void inference(std::vector<std::string> input_keys, std::vector<std::string> output_keys) override
-    {
-        return; // TODO
-    }
-
-    void receive_data(std::vector<std::string> keys, MLCouplingData<Out> &output_data) override
-    {
-        return; // TODO
-    }
-
-    bool is_flexible() override
-    {
-        return false; // for now
     }
 
 private:

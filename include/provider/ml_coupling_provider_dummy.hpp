@@ -5,7 +5,7 @@
 #include <string>
 #include <vector>
 
-#include "ml_coupling_provider_flexible.hpp"
+#include "ml_coupling_provider.hpp"
 #include "../tool.h"
 #include "../logging.hpp"
 
@@ -27,8 +27,8 @@ public:
         logging::debug("Initialized dummy provider. This does not implement any actual functionality and is just a placeholder.");
     }
 
-    void inference(MLCouplingData<In> *input_after_preprocessing,
-                   MLCouplingData<Out> *output_before_postprocessing) override
+    void static_inference(MLCouplingData<In> *input_after_preprocessing,
+                          MLCouplingData<Out> *output_before_postprocessing) override
     {
         guarantee(false, "Dummy provider does not implement anything.");
     }

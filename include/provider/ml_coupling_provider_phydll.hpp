@@ -1,6 +1,6 @@
 #pragma once
 
-#include "ml_coupling_provider_flexible.hpp"
+#include "ml_coupling_provider.hpp"
 #include "../data/ml_coupling_data_type.hpp"
 #include "../data/ml_coupling_memory_layout.hpp"
 
@@ -34,7 +34,7 @@ extern "C"
 // @registry_name: Phydll
 // @registry_aliases: phydll, PhyDLL
 template <typename In, typename Out>
-class MLCouplingProviderPhydll : public MLCouplingProviderFlexible<In, Out>
+class MLCouplingProviderPhydll : public MLCouplingProvider<In, Out>
 {
 
 public:
@@ -69,8 +69,8 @@ public:
 #endif
     }
 
-    virtual void inference(MLCouplingData<In> *input_after_preprocessing,
-                           MLCouplingData<Out> *output_before_postprocessing) override
+    void static_inference(MLCouplingData<In> *input_after_preprocessing,
+                          MLCouplingData<Out> *output_before_postprocessing) override
     {
         guarantee(input_after_preprocessing != nullptr, "PhyDLL inference requires input_after_preprocessing.");
         guarantee(output_before_postprocessing != nullptr, "PhyDLL inference requires output_before_postprocessing.");
@@ -110,26 +110,6 @@ public:
         unpack_output_buffer();
         metadata_sent_ = true;
 #endif
-    }
-
-    void send_data(const std::vector<std::string> &keys, MLCouplingData<In> &input_data_after_preprocessing) override
-    {
-        return; // TODO
-    }
-
-    void inference(std::vector<std::string> input_keys, std::vector<std::string> output_keys) override
-    {
-        return; // TODO
-    }
-
-    void receive_data(std::vector<std::string> keys, MLCouplingData<Out> &output_data) override
-    {
-        return; // TODO
-    }
-
-    bool is_flexible() override
-    {
-        return false; // for now
     }
 
 private:

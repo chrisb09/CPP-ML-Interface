@@ -6,7 +6,7 @@
 #include <vector>
 #include <mpi.h>
 
-#include "ml_coupling_provider_flexible.hpp"
+#include "ml_coupling_provider.hpp"
 #include "../tool.h"
 
 // for debugging and to disabled greyed out code in some IDEs
@@ -69,8 +69,8 @@ public:
         }
     }
 
-    void inference(MLCouplingData<In> *input_after_preprocessing,
-                   MLCouplingData<Out> *output_before_postprocessing) override
+    void static_inference(MLCouplingData<In> *input_after_preprocessing,
+                          MLCouplingData<Out> *output_before_postprocessing) override
     {
         guarantee(input_after_preprocessing != nullptr, "AIxelerator inference requires input_after_preprocessing.");
         guarantee(output_before_postprocessing != nullptr, "AIxelerator inference requires output_before_postprocessing.");
