@@ -353,7 +353,7 @@ public:
          */
         OrderedProxy &inference()
         {
-            parent->provider->flex_ordered_inference();
+            parent->provider->flex_ordered_inference(&(parent->application->output_data_before_postprocessing));
             return *this;
         }
 
@@ -432,7 +432,7 @@ public:
          */
         KeyedProxy &inference(const std::vector<std::string> &in_keys, const std::vector<std::string> &out_keys)
         {
-            parent->provider->flex_keyed_inference(in_keys, out_keys);
+            parent->provider->flex_keyed_inference(in_keys, out_keys, &(parent->application->output_data_before_postprocessing));
             return *this;
         }
 

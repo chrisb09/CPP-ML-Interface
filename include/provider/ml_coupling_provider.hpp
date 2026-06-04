@@ -76,34 +76,38 @@ public:
 
     virtual void flex_ordered_get(MLCouplingData<Out> *data)
     {
-        staged_outputs.push_back(data);
+        // Fallback is a no-op because flex_ordered_inference populates the fallback_output directly.
+        (void)data;
     }
 
-    virtual void flex_ordered_inference()
+    virtual void flex_ordered_inference(MLCouplingData<Out> *fallback_output = nullptr)
     {
-        if (staged_inputs.size() == 1 && staged_outputs.size() == 1)
+        if (staged_inputs.size() > 0 && fallback_output != nullptr)
         {
-            static_inference(&(staged_inputs[0]), staged_outputs[0]);
+            MLCouplingData<In> merged_in = merge_data(staged_inputs);
+            static_inference(&merged_in, fallback_output);
             staged_inputs.clear();
-            staged_outputs.clear();
+            staged_targets.clear();
         }
         else
         {
-            throw std::runtime_error("flex_ordered_inference fallback only supports exactly 1 staged input and 1 staged output.");
+            throw std::runtime_error("flex_ordered_inference fallback requires at least 1 staged input and a valid fallback_output.");
         }
     }
 
     virtual std::map<std::string, double> flex_ordered_train(long long step_id)
     {
         (void)step_id;
-        if (staged_inputs.size() == 1 && staged_targets.size() == 1)
+        if (staged_inputs.size() > 0 && staged_targets.size() > 0)
         {
-            auto res = static_train(&(staged_inputs[0]), &(staged_targets[0]));
+            MLCouplingData<In> merged_in = merge_data(staged_inputs);
+            MLCouplingData<Out> merged_targets = merge_data(staged_targets);
+            auto res = static_train(&merged_in, &merged_targets);
             staged_inputs.clear();
             staged_targets.clear();
             return res;
         }
-        throw std::runtime_error("flex_ordered_train fallback expects 1 staged input and 1 staged target.");
+        throw std::runtime_error("flex_ordered_train fallback expects at least 1 staged input and 1 staged target.");
     }
 
     // --- Tier 2: Keyed Flexible (Optional, with Fallback) ---
@@ -119,19 +123,24 @@ public:
 
     virtual void flex_keyed_get(const std::string &key, MLCouplingData<Out> *data)
     {
-        keyed_outputs[key] = data;
+        // Fallback is a no-op because flex_keyed_inference populates the fallback_output directly.
+        (void)key;
+        (void)data;
     }
 
     virtual void flex_keyed_inference(const std::vector<std::string> &in_keys,
-                                      const std::vector<std::string> &out_keys)
+                                      const std::vector<std::string> &out_keys,
+                                      MLCouplingData<Out> *fallback_output = nullptr)
     {
-        if (in_keys.size() == 1 && out_keys.size() == 1)
+        (void)out_keys; // The fallback maps all expected outputs to the static buffer
+        if (in_keys.size() > 0 && fallback_output != nullptr)
         {
-            static_inference(&(keyed_inputs.at(in_keys[0])), keyed_outputs.at(out_keys[0]));
+            MLCouplingData<In> merged_in = merge_data(in_keys, keyed_inputs);
+            static_inference(&merged_in, fallback_output);
         }
         else
         {
-            throw std::runtime_error("flex_keyed_inference fallback only supports exactly 1 input key and 1 output key.");
+            throw std::runtime_error("flex_keyed_inference fallback requires at least 1 input key and a valid fallback_output.");
         }
     }
 
@@ -140,14 +149,52 @@ public:
                                                            const std::vector<std::string> &target_keys)
     {
         (void)step_id;
-        if (in_keys.size() == 1 && target_keys.size() == 1)
+        if (in_keys.size() > 0 && target_keys.size() > 0)
         {
-            return static_train(&(keyed_inputs.at(in_keys[0])), &(keyed_targets.at(target_keys[0])));
+            MLCouplingData<In> merged_in = merge_data(in_keys, keyed_inputs);
+            MLCouplingData<Out> merged_targets = merge_data(target_keys, keyed_targets);
+            return static_train(&merged_in, &merged_targets);
         }
-        throw std::runtime_error("flex_keyed_train fallback expects 1 input key and 1 target key.");
+        throw std::runtime_error("flex_keyed_train fallback expects at least 1 input key and 1 target key.");
     }
 
 protected:
+    template <typename T>
+    MLCouplingData<T> merge_data(const std::vector<MLCouplingData<T>> &data_list)
+    {
+        MLCouplingData<T> merged;
+        for (const auto &data : data_list)
+        {
+            for (const auto &tensor : data)
+            {
+                merged.add_tensor(tensor);
+            }
+        }
+        return merged;
+    }
+
+    template <typename T>
+    MLCouplingData<T> merge_data(const std::vector<std::string> &keys, const std::map<std::string, MLCouplingData<T>> &data_map)
+    {
+        MLCouplingData<T> merged;
+        for (const auto &key : keys)
+        {
+            auto it = data_map.find(key);
+            if (it != data_map.end())
+            {
+                for (const auto &tensor : it->second)
+                {
+                    merged.add_tensor(tensor);
+                }
+            }
+            else
+            {
+                throw std::runtime_error("flex_keyed fallback: key '" + key + "' not found.");
+            }
+        }
+        return merged;
+    }
+
     std::vector<MLCouplingData<In>> staged_inputs;
     std::vector<MLCouplingData<Out>> staged_targets;
     std::vector<MLCouplingData<Out> *> staged_outputs;
