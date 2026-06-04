@@ -7,3 +7,6 @@ cython
 # for basic analysis
 pandas
 matplotlib
+
+# for measuring
+pynvml
