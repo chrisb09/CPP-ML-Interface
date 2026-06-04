@@ -80,7 +80,19 @@ auto metrics = coupling->keyed()
     .train(current_iteration, {"features"}, {"labels"});
 ```
 
-## 4. Training Tracking
+## 4. Flexible API Fallback (Merge Logic)
+
+The `MLCoupling` interface provides robust backward compatibility. You can use the flexible `.ordered()` and `.keyed()` proxy views **even if the backend provider is strictly static** (i.e., it only implements `static_inference`).
+
+If a static provider encounters multiple `.set()` calls (e.g., staging multiple features sequentially or under different keys), the `MLCouplingProvider` base class automatically executes a **Merge-by-Concatenation fallback**:
+
+1. **Staging:** All staged data objects are held in memory buffers.
+2. **Merging:** When `.inference()` or `.train()` is invoked, the fallback concatenates the internal lists of tensors from all staged `MLCouplingData` objects into a single, unified `MLCouplingData` object. It maintains the canonical order defined by the sequential `.set()` calls or the list of keys provided to `.inference({"key1", "key2"}, ...)`.
+3. **Execution:** This single, merged `MLCouplingData` object is then passed to the provider's `static_inference` or `static_train` method.
+
+This allows you to write clean, multi-step staging logic in your solvers without having to worry if the underlying provider supports native multi-step data transfer.
+
+## 5. Training Tracking
 
 The `MLCoupling` interface includes a built-in `TrainingTracker` to monitor metadata returned during training steps (like loss or accuracy).
 
