@@ -5,6 +5,9 @@ cmake_policy(SET CMP0074 NEW)
 
 project(PhyDLLDlClient LANGUAGES CXX)
 
+set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+
 option(PHYDLL_DL_WITH_TORCH "Build DL client with libtorch" ON)
 set(LIBTORCH_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../extern/libtorch" CACHE PATH "Path to libtorch root (contains share/cmake/Torch)")
 

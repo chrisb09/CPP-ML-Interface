@@ -257,6 +257,8 @@ if(WITH_PHYDLL)
 endif()
 
 if (MPI_FOUND)
+    target_compile_definitions(${LIBRARY_NAME} PUBLIC MPI_FOUND)
+    target_compile_definitions(cpp_ml_interface_headers INTERFACE MPI_FOUND)
     target_link_libraries(${LIBRARY_NAME} PUBLIC MPI::MPI_CXX)
     target_link_libraries(${EXECUTABLE_NAME} PRIVATE MPI::MPI_CXX)
     target_link_libraries(cpp_ml_interface_headers INTERFACE MPI::MPI_CXX)
