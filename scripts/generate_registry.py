@@ -1320,12 +1320,22 @@ def _write_map_factory(f, base_class, template_str, template_args, category,
                         param_args.append(f'config_param_cast<{cast_type}>(parameter.at("{pname}"))')
                         debug_outputs.append(f'"{pname}=" << config_param_cast<{cast_type}>(parameter.at("{pname}"))')
                 elif pdefault:
-                    # Opaque/non-primitive parameter with default: pass via typed pointer, fallback to default expression
-                    param_args.append(f'parameter.find("{pname}") != parameter.end() ? *reinterpret_cast<{storage_type}*>(parameter.at("{pname}").second) : ({storage_type}){pdefault}')
+                    # Opaque/non-primitive parameter with default: pass via typed pointer.
+                    # Special case: If it's a pointer type (ends with *), we don't dereference it
+                    # since our reflection system passes opaque pointers directly in .second.
+                    is_ptr = storage_type.strip().endswith('*') or storage_type.strip() == 'MPI_Comm'
+                    if is_ptr:
+                        param_args.append(f'parameter.find("{pname}") != parameter.end() ? reinterpret_cast<{storage_type}>(parameter.at("{pname}").second) : ({storage_type}){pdefault}')
+                    else:
+                        param_args.append(f'parameter.find("{pname}") != parameter.end() ? *reinterpret_cast<{storage_type}*>(parameter.at("{pname}").second) : ({storage_type}){pdefault}')
                     debug_outputs.append(f'"{pname}=<" << (parameter.find("{pname}") != parameter.end() ? "provided" : "default") << ">"')
                 else:
                     # Opaque/non-primitive required parameter: pass via typed pointer
-                    param_args.append(f'*reinterpret_cast<{storage_type}*>(parameter.at("{pname}").second)')
+                    is_ptr = storage_type.strip().endswith('*') or storage_type.strip() == 'MPI_Comm'
+                    if is_ptr:
+                        param_args.append(f'reinterpret_cast<{storage_type}>(parameter.at("{pname}").second)')
+                    else:
+                        param_args.append(f'*reinterpret_cast<{storage_type}*>(parameter.at("{pname}").second)')
                     debug_outputs.append(f'"{pname}=<provided>"')
             
             params_str = ', '.join(param_args)
@@ -1340,6 +1350,8 @@ def _write_map_factory(f, base_class, template_str, template_args, category,
             f.write(f'                {debug_line}\n')
             f.write('                logging::debug(create_log_stream.str());\n')
             f.write(f'                return new {cls_inst}({params_str});\n')
+            f.write(f'            }} catch (const std::exception& e) {{\n')
+            f.write(f'                logging::error(std::string("Exception in factory for class {cls}: ") + e.what());\n')
             f.write(f'            }} catch (...) {{\n')
             f.write(f'                // Handle exceptions if necessary\n')
             f.write(f'            }}\n')

@@ -305,6 +305,9 @@ inline void upsert_override_value(
         } else if constexpr (std::is_same_v<ValueType, std::vector<std::string>>) {
             type_params[4].push_back(std::any(typed_value));
             sections_temp_ids[section][key] = std::make_pair(5, static_cast<int>(type_params[4].size() - 1));
+        } else if constexpr (std::is_same_v<ValueType, void*>) {
+            type_params[5].push_back(std::any(typed_value));
+            sections_temp_ids[section][key] = std::make_pair(6, static_cast<int>(type_params[5].size() - 1));
         } }, value);
 }
 
@@ -339,9 +342,9 @@ MLCoupling<In, Out> *create_mlcoupling_from_config_impl(const std::string &confi
         std::vector<std::vector<std::string>> vector_string_params;
 
         std::vector<std::vector<std::any>> type_params;
-        type_params.reserve(5);
+        type_params.reserve(6);
         type_params.push_back(std::vector<std::any>());
-        // type_params.push_back(int_params);
+        type_params.push_back(std::vector<std::any>());
         type_params.push_back(std::vector<std::any>());
         type_params.push_back(std::vector<std::any>());
         type_params.push_back(std::vector<std::any>());
@@ -356,6 +359,7 @@ MLCoupling<In, Out> *create_mlcoupling_from_config_impl(const std::string &confi
          * 3: std::string
          * 4: bool
          * 5: std::vector<std::string>
+         * 6: void* (opaque pointer)
          */
 
         std::optional<std::string> coupling_type_value;
@@ -432,8 +436,8 @@ MLCoupling<In, Out> *create_mlcoupling_from_config_impl(const std::string &confi
             }
         }
 
-        int64_t *int64_t_array = new int64_t[type_params[0].size()];
-        double *double_array = new double[type_params[1].size()];
+        std::vector<int64_t> int64_t_array(type_params[0].size());
+        std::vector<double> double_array(type_params[1].size());
 
         // Calculate total string buffer size
         int string_array_size = 0;
@@ -441,13 +445,14 @@ MLCoupling<In, Out> *create_mlcoupling_from_config_impl(const std::string &confi
         for (size_t i = 0; i < type_params[2].size(); ++i)
         {
             string_array_offsets.push_back(string_array_size);
-            string_array_size += std::any_cast<std::string>(type_params[2][i]).size() + 1;
+            string_array_size += static_cast<int>(std::any_cast<std::string>(type_params[2][i]).size()) + 1;
         }
 
         // Allocate as char array for string storage
-        char *string_array = new char[string_array_size];
-        bool *bool_array = new bool[type_params[3].size()];
+        std::vector<char> string_array(string_array_size);
+        std::unique_ptr<bool[]> bool_array(new bool[type_params[3].size()]);
         std::vector<std::vector<std::string>> vector_string_array(type_params[4].size());
+        std::vector<void*> void_ptr_array(type_params[5].size());
 
         for (size_t i = 0; i < type_params[0].size(); ++i)
         {
@@ -463,12 +468,22 @@ MLCoupling<In, Out> *create_mlcoupling_from_config_impl(const std::string &confi
         for (size_t i = 0; i < type_params[2].size(); ++i)
         {
             const std::string &str = std::any_cast<std::string>(type_params[2][i]);
-            std::strcpy(string_array + string_array_offsets[i], str.c_str());
+            std::strcpy(string_array.data() + string_array_offsets[i], str.c_str());
         }
 
         for (size_t i = 0; i < type_params[3].size(); ++i)
         {
             bool_array[i] = std::any_cast<bool>(type_params[3][i]);
+        }
+
+        for (size_t i = 0; i < type_params[4].size(); ++i)
+        {
+            vector_string_array[i] = std::any_cast<std::vector<std::string>>(type_params[4][i]);
+        }
+
+        for (size_t i = 0; i < type_params[5].size(); ++i)
+        {
+            void_ptr_array[i] = std::any_cast<void *>(type_params[5][i]);
         }
 
         for (size_t i = 0; i < type_params[4].size(); ++i)
@@ -567,11 +582,10 @@ MLCoupling<In, Out> *create_mlcoupling_from_config_impl(const std::string &confi
                 }
                 else if (type_index == 3)
                 {
-                    message += " -> Value: ";
-                    message += (string_array + string_array_offsets[index_in_type]);
+                    message += " -> Value: " + std::string(string_array.data() + string_array_offsets[index_in_type]);
                     if (params_map)
                     {
-                        (*params_map)[key] = std::pair<int, void *>(3, string_array + string_array_offsets[index_in_type]);
+                        (*params_map)[key] = std::pair<int, void *>(3, string_array.data() + string_array_offsets[index_in_type]);
                     }
                 }
                 else if (type_index == 4)
@@ -596,6 +610,14 @@ MLCoupling<In, Out> *create_mlcoupling_from_config_impl(const std::string &confi
                     if (params_map)
                     {
                         (*params_map)[key] = std::pair<int, void *>(5, &vector_string_array[index_in_type]);
+                    }
+                }
+                else if (type_index == 6)
+                {
+                    message += " -> Value: opaque pointer (" + std::to_string(reinterpret_cast<uintptr_t>(void_ptr_array[index_in_type])) + ")";
+                    if (params_map)
+                    {
+                        (*params_map)[key] = std::pair<int, void *>(-1, void_ptr_array[index_in_type]);
                     }
                 }
                 logging::debug(message);

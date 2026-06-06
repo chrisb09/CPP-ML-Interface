@@ -6,7 +6,7 @@
 #include <variant>
 #include <vector>
 
-using ConfigOverrideValue = std::variant<int64_t, double, std::string, bool, std::vector<std::string>>;
+using ConfigOverrideValue = std::variant<int64_t, double, std::string, bool, std::vector<std::string>, void*>;
 using ConfigSectionOverrides = std::unordered_map<std::string, std::unordered_map<std::string, ConfigOverrideValue>>;
 using ConfigDottedOverrides = std::unordered_map<std::string, ConfigOverrideValue>;
 
