@@ -440,12 +440,21 @@ public:
             void *data = tensor.root();
             MLCouplingDataType ml_type = to_ml_coupling_data_type<Out>();
             SRTensorType sr_type = to_srtensor_type(ml_type);
-            std::vector<size_t> dims = to_size_t_dims(tensor.dimensions());
+            SRMemoryLayout sr_layout = to_sr_memory_layout(tensor.layout());
+            std::vector<size_t> dims;
+            if (sr_layout == SRMemLayoutContiguous)
+            {
+                dims = { tensor.numel() };
+            }
+            else
+            {
+                dims = to_size_t_dims(tensor.dimensions());
+            }
             client->unpack_tensor(output_name,
                                   data,
                                   dims,
                                   sr_type,
-                                  to_sr_memory_layout(tensor.layout()));
+                                  sr_layout);
             logging::debug("  " + tensor.to_string("Tensor " + std::to_string(tensor_index)));
         }
 
