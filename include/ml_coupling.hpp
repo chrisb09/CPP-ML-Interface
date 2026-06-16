@@ -15,6 +15,8 @@
 #include "config_overrides.hpp"
 #include "tool.h"
 #include "training_tracker.hpp"
+#include <optional>
+#include "logging.hpp"
 
 // To avoid circular dependency issues with the config, we forward declare the MLCoupling class here and include the config at the end of this file
 enum class ConfigCastMode : int;
@@ -210,8 +212,17 @@ public:
     MLCoupling<In, Out>(
         MLCouplingProvider<In, Out> *provider,
         MLCouplingApplication<In, Out> *application,
-        MLCouplingBehavior *behavior = nullptr)
+        MLCouplingBehavior *behavior = nullptr,
+        std::string log_level = "",
+        std::optional<bool> error_separate = std::nullopt)
     {
+        if (!log_level.empty()) {
+            logging::set_level(logging::get_level(log_level));
+        }
+        if (error_separate.has_value()) {
+            logging::set_error_seperate(*error_separate);
+        }
+
         this->provider.reset(provider);
         this->application.reset(application);
         this->coupling_type = CouplingType::STATIC;
@@ -239,8 +250,17 @@ public:
         MLCouplingBehavior *behavior,
         CouplingType coupling_type,
         MLCouplingData<In> *input_after_preprocessing,
-        MLCouplingData<Out> *output_before_postprocessing)
+        MLCouplingData<Out> *output_before_postprocessing,
+        std::string log_level = "",
+        std::optional<bool> error_separate = std::nullopt)
     {
+        if (!log_level.empty()) {
+            logging::set_level(logging::get_level(log_level));
+        }
+        if (error_separate.has_value()) {
+            logging::set_error_seperate(*error_separate);
+        }
+
         this->provider.reset(provider);
         this->application.reset(application);
         this->coupling_type = coupling_type;

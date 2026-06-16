@@ -55,7 +55,10 @@ BcastMeta receive_p2p_metadata(int source_rank)
 
     BcastMetaHeader header;
     MPI_Status status;
+    std::fprintf(stderr, "[PHYDLL:DL] MPI_Recv header from source_rank=%d\n", source_rank); std::fflush(stderr);
     MPI_Recv(&header, sizeof(header), MPI_BYTE, source_rank, source_rank, MPI_COMM_WORLD, &status);
+    std::fprintf(stderr, "[PHYDLL:DL] MPI_Recv header from source_rank=%d DONE (magic=%x)\n", source_rank, header.magic); std::fflush(stderr);
+
     if (header.magic != kBcastMetaMagic || header.version != kBcastMetaVersion)
     {
         return {};
@@ -63,10 +66,13 @@ BcastMeta receive_p2p_metadata(int source_rank)
 
     const size_t payload_size = static_cast<size_t>(header.model_len + header.backend_len + header.device_len) +
                                 (static_cast<size_t>(header.num_inputs + header.num_outputs) * sizeof(int64_t));
+    std::fprintf(stderr, "[PHYDLL:DL] Allocating payload size %zu\n", payload_size); std::fflush(stderr);
     std::vector<unsigned char> payload(payload_size);
     if (payload_size > 0)
     {
+        std::fprintf(stderr, "[PHYDLL:DL] MPI_Recv payload from source_rank=%d\n", source_rank); std::fflush(stderr);
         MPI_Recv(payload.data(), static_cast<int>(payload.size()), MPI_BYTE, source_rank, source_rank, MPI_COMM_WORLD, &status);
+        std::fprintf(stderr, "[PHYDLL:DL] MPI_Recv payload from source_rank=%d DONE\n", source_rank); std::fflush(stderr);
     }
 
     BcastMeta meta;
@@ -148,11 +154,14 @@ int main(int argc, char **argv) {
 
     MPI_Barrier(MPI_COMM_WORLD);
 
+    std::fprintf(stderr, "[PHYDLL:DL] Past MPI_Barrier, getting ndest\n"); std::fflush(stderr);
     int ndest = phydll_get_ndest();
     int *dests = phydll_get_dest();
+    std::fprintf(stderr, "[PHYDLL:DL] ndest=%d, dests=%p\n", ndest, (void*)dests); std::fflush(stderr);
     for (int i = 0; i < ndest; ++i)
     {
         int source_rank = dests[i];
+        std::fprintf(stderr, "[PHYDLL:DL] receiving metadata from dests[%d] = %d\n", i, source_rank); std::fflush(stderr);
         const auto p2p_meta = receive_p2p_metadata(source_rank);
         if (p2p_meta.valid)
         {
@@ -166,9 +175,14 @@ int main(int argc, char **argv) {
             total_output_size += p2p_meta.total_output;
         }
     }
+    std::fprintf(stderr, "[PHYDLL:DL] Finished receiving metadata from all %d sources\n", ndest); std::fflush(stderr);
     std::uint64_t frame_id = 0;
     while (runtime.is_running()) {
+        std::fprintf(stderr, "[PHYDLL:DL] Waiting for frame %llu\n", (unsigned long long)frame_id); std::fflush(stderr);
         const auto frame = runtime.receive_frame();
+        std::fprintf(stderr, "[PHYDLL:DL] Received frame %llu (has_meta=%d, data_size=%zu)\n", 
+                     (unsigned long long)frame_id, frame.has_meta, frame.data.size()); 
+        std::fflush(stderr);
 
         if (frame.has_meta && !meta_initialized && frame.meta.phase == phydll_dl::MetaPhase::Init) {
             model_path = frame.meta.entries.empty() ? std::string() : frame.meta.entries.front().model_path;
@@ -242,11 +256,17 @@ int main(int argc, char **argv) {
             const long long input_per_rank_used = static_cast<long long>(total_input_size) / batch_size;
             const long long output_per_rank = runtime.field_size() / batch_size;
 
+            std::fprintf(stderr, "[PHYDLL:DL] Frame %llu extracting data: total_input_size=%lld, batch=%lld, total/rank=%lld, used/rank=%lld\n",
+                         (unsigned long long)frame_id, (long long)total_input_size, batch_size, input_per_rank_total, input_per_rank_used);
+            std::fflush(stderr);
+
             for (long long b = 0; b < batch_size; ++b) {
                 for (long long j = 0; j < input_per_rank_used; ++j) {
                     input[b * input_per_rank_used + j] = static_cast<float>(frame.data[b * input_per_rank_total + j]);
                 }
             }
+
+            std::fprintf(stderr, "[PHYDLL:DL] Frame %llu running inference\n", (unsigned long long)frame_id); std::fflush(stderr);
 
             auto options = torch::TensorOptions().dtype(torch::kFloat32);
             auto input_tensor = torch::from_blob(input.data(), {batch_size, input_per_rank_used}, options).clone();

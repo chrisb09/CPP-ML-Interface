@@ -415,14 +415,19 @@ public:
             logging::debug("  " + name);
         }
 
-        if (this->device == "GPU")
-        {
-            const int offset = this->rank >= 0 ? this->rank : 0;
-            client->run_model_multigpu(this->model_name, input_tensor_names, output_tensor_names, offset, this->first_gpu, this->num_gpus);
-        }
-        else
-        {
-            client->run_model(this->model_name, input_tensor_names, output_tensor_names);
+        try {
+            if (this->device == "GPU")
+            {
+                const int offset = this->rank >= 0 ? this->rank : 0;
+                client->run_model_multigpu(this->model_name, input_tensor_names, output_tensor_names, offset, this->first_gpu, this->num_gpus);
+            }
+            else
+            {
+                client->run_model(this->model_name, input_tensor_names, output_tensor_names);
+            }
+        } catch (const std::exception& ex) {
+            std::cerr << "run_model failed: " << ex.what() << std::endl;
+            throw;
         }
 
         /*
@@ -450,11 +455,16 @@ public:
             {
                 dims = to_size_t_dims(tensor.dimensions());
             }
-            client->unpack_tensor(output_name,
-                                  data,
-                                  dims,
-                                  sr_type,
-                                  sr_layout);
+            try {
+                client->unpack_tensor(output_name,
+                                      data,
+                                      dims,
+                                      sr_type,
+                                      sr_layout);
+            } catch (const std::exception& ex) {
+                std::cerr << "unpack_tensor failed for " << output_name << ": " << ex.what() << std::endl;
+                throw;
+            }
             logging::debug("  " + tensor.to_string("Tensor " + std::to_string(tensor_index)));
         }
 

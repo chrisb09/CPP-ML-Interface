@@ -63,6 +63,11 @@ public:
         throw std::runtime_error("static_train not implemented for this provider");
     }
 
+    virtual std::size_t get_synchronized_iterations(std::size_t local_iterations) const
+    {
+        return local_iterations;
+    }
+
     // --- Tier 1: Ordered Flexible (Optional, with Fallback) ---
     virtual void flex_ordered_set(MLCouplingData<In> data)
     {

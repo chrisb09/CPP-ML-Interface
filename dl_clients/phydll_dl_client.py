@@ -101,7 +101,9 @@ def main():
     
     dll = PhyDLL()
     dll.init("dl")
+    print(f"[DL {world_comm.rank}] Calling dll.define_dl...", flush=True)
     dll.define_dl(count=dl_count)
+    print(f"[DL {world_comm.rank}] Returned from dll.define_dl.", flush=True)
     
     dist_info = dll.get_distribution_info()
     ndest = dist_info["ndest"]
@@ -109,7 +111,9 @@ def main():
     field_size = dll.get_field_size()
     
     # C++ client has a Barrier here
+    print(f"[DL {world_comm.rank}] Entering world_comm.Barrier...", flush=True)
     world_comm.Barrier()
+    print(f"[DL {world_comm.rank}] Exited world_comm.Barrier.", flush=True)
     
     meta_initialized = False
     model_loaded = False
@@ -137,7 +141,9 @@ def main():
     while dll.is_phy_signal():
         # Receive fields from PhyDLL
         # With dl_count=1, pyphydll.recv() returns a dict with one entry
+        print(f"[DL {world_comm.rank}] Calling dll.recv()...", flush=True)
         fields = dll.recv()
+        print(f"[DL {world_comm.rank}] Returned from dll.recv().", flush=True)
         combined_data = fields.get("PHY-DATA", None)
         if combined_data is None:
             # Fallback

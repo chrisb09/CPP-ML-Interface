@@ -120,6 +120,19 @@ public:
 #endif
     }
 
+    std::size_t get_synchronized_iterations(std::size_t local_iterations) const override
+    {
+#if defined(MLCOUPLING_PROVIDER_HAS_MPI)
+        if (app_comm != MPI_COMM_NULL) {
+            unsigned long long local_iter_ull = local_iterations;
+            unsigned long long global_iter_ull = 0;
+            MPI_Allreduce(&local_iter_ull, &global_iter_ull, 1, MPI_UNSIGNED_LONG_LONG, MPI_MAX, app_comm);
+            return static_cast<std::size_t>(global_iter_ull);
+        }
+#endif
+        return local_iterations;
+    }
+
 private:
     void initialize_service(MLCouplingData<In> *input_after_preprocessing,
                             MLCouplingData<Out> *output_before_postprocessing)

@@ -132,38 +132,27 @@ inline void print_failed_constructor(std::string class_name, std::unordered_map<
     logging::error("Note: The config parsing uses types that may be automatically cast to fit the constructor parameters. For example, all integer values in the config are parsed as int64_t, but if the constructor expects an int, it will be cast accordingly. If there is a type mismatch that cannot be resolved, the constructor will fail.");
 }
 
-inline void apply_logging_settings(const toml::v3::table &config)
+inline std::pair<std::string, std::optional<bool>> extract_logging_settings(const toml::v3::table &config)
 {
+    std::string log_level = "";
+    std::optional<bool> error_separate = std::nullopt;
+
     if (const auto *logging_table = config.get_as<toml::v3::table>("logging"))
     {
         if (const auto *level_node = logging_table->get_as<std::string>("level"))
         {
-            try
-            {
-                logging::set_level(logging::get_level(level_node->get()));
-            }
-            catch (const std::exception &e)
-            {
-                logging::warning("Invalid logging.level value: " + std::string(e.what()));
-            }
+            log_level = level_node->get();
         }
         if (const auto *separate_node = logging_table->get_as<bool>("error_separate"))
         {
-            logging::set_error_seperate(separate_node->get());
+            error_separate = separate_node->get();
         }
     }
 
     const char *env_level = std::getenv("MLCOUPLING_LOG_LEVEL");
     if (env_level != nullptr && std::strlen(env_level) > 0)
     {
-        try
-        {
-            logging::set_level(logging::get_level(env_level));
-        }
-        catch (const std::exception &e)
-        {
-            logging::warning("Invalid MLCOUPLING_LOG_LEVEL value: " + std::string(e.what()));
-        }
+        log_level = env_level;
     }
 
     const char *env_separate = std::getenv("MLCOUPLING_LOG_ERROR_SEPARATE");
@@ -172,9 +161,10 @@ inline void apply_logging_settings(const toml::v3::table &config)
         std::string value = env_separate;
         std::transform(value.begin(), value.end(), value.begin(), [](unsigned char c)
                        { return static_cast<char>(std::tolower(c)); });
-        const bool separate = (value == "1" || value == "true" || value == "yes" || value == "on");
-        logging::set_error_seperate(separate);
+        error_separate = (value == "1" || value == "true" || value == "yes" || value == "on");
     }
+    
+    return {log_level, error_separate};
 }
 
 template <typename In, typename Out>
@@ -328,7 +318,7 @@ MLCoupling<In, Out> *create_mlcoupling_from_config_impl(const std::string &confi
     try
     {
         toml::v3::table config = toml::parse(config_str);
-        apply_logging_settings(config);
+        auto [log_level, error_separate] = extract_logging_settings(config);
 
         // Let's iterate through the configs "sections" or "categories" or whatever you want to call them (like [provider], [application], etc. but not hardcoded but all that is in the config)
 
@@ -799,7 +789,9 @@ MLCoupling<In, Out> *create_mlcoupling_from_config_impl(const std::string &confi
                                        behavior,
                                        coupling_type,
                                        input_after_preprocessing_ptr,
-                                       output_before_postprocessing_ptr);
+                                       output_before_postprocessing_ptr,
+                                       log_level,
+                                       error_separate);
     }
     catch (const toml::parse_error &err)
     {
