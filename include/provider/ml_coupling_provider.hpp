@@ -16,11 +16,23 @@
 #endif
 #endif
 
+
+enum class MLCouplingMergeStrategy {
+    List,
+    Stack
+};
+
 // @category: provider
 template <typename In, typename Out>
 class MLCouplingProvider
 {
 public:
+    MLCouplingMergeStrategy merge_strategy = MLCouplingMergeStrategy::List;
+
+    void set_merge_strategy(MLCouplingMergeStrategy strategy) {
+        merge_strategy = strategy;
+    }
+
     int rank = 0;
 
     MLCouplingProvider()
@@ -163,10 +175,88 @@ public:
         throw std::runtime_error("flex_keyed_train fallback expects at least 1 input key and 1 target key.");
     }
 
+
 protected:
+    template <typename T>
+    MLCouplingData<T> stack_data(const std::vector<MLCouplingData<T>> &data_list)
+    {
+        if (data_list.empty()) return MLCouplingData<T>();
+        
+        size_t num_tensors = data_list[0].size();
+        size_t m = data_list.size();
+        
+        MLCouplingData<T> stacked_data;
+        
+        for (size_t t_idx = 0; t_idx < num_tensors; ++t_idx) {
+            auto first_dim = data_list[0][t_idx].dimensions();
+            if (first_dim.empty()) {
+                throw std::runtime_error("Cannot stack scalar tensors.");
+            }
+            int B = first_dim[0];
+            
+            for (size_t i = 1; i < m; ++i) {
+                if (data_list[i].size() != num_tensors) {
+                    throw std::runtime_error("Stack fallback: Tensor count mismatch.");
+                }
+                if (data_list[i][t_idx].dimensions() != first_dim) {
+                    throw std::runtime_error("Stack fallback: Tensor shape mismatch.");
+                }
+            }
+            
+            std::vector<int> new_dims;
+            new_dims.push_back(B);
+            new_dims.push_back(static_cast<int>(m));
+            for (size_t d = 1; d < first_dim.size(); ++d) {
+                new_dims.push_back(first_dim[d]);
+            }
+            
+            size_t slice_numel = 1;
+            for (size_t d = 1; d < first_dim.size(); ++d) {
+                slice_numel *= first_dim[d];
+            }
+            
+            size_t total_numel = static_cast<size_t>(B) * m * slice_numel;
+            T* buffer = new T[total_numel];
+            
+            for (size_t i = 0; i < m; ++i) {
+                const auto& tensor = data_list[i][t_idx];
+                if (tensor.is_contiguous()) {
+                    const T* src = static_cast<const T*>(tensor.root());
+                    for (int b = 0; b < B; ++b) {
+                        std::copy(
+                            src + b * slice_numel,
+                            src + (b + 1) * slice_numel,
+                            buffer + (b * m + i) * slice_numel
+                        );
+                    }
+                } else {
+                    std::vector<T> flat = tensor.as_flat_vector();
+                    for (int b = 0; b < B; ++b) {
+                        std::copy(
+                            flat.begin() + b * slice_numel,
+                            flat.begin() + (b + 1) * slice_numel,
+                            buffer + (b * m + i) * slice_numel
+                        );
+                    }
+                }
+            }
+            
+            auto new_tensor = MLCouplingTensor<T>::wrap_flat(
+                buffer, new_dims, MLCouplingMemLayoutContiguous, MLCouplingOwnershipOwned
+            );
+            
+            stacked_data.add_tensor(std::move(new_tensor));
+        }
+        return stacked_data;
+    }
+
     template <typename T>
     MLCouplingData<T> merge_data(const std::vector<MLCouplingData<T>> &data_list)
     {
+        if (merge_strategy == MLCouplingMergeStrategy::Stack) {
+            return stack_data(data_list);
+        }
+
         MLCouplingData<T> merged;
         for (const auto &data : data_list)
         {
@@ -181,6 +271,19 @@ protected:
     template <typename T>
     MLCouplingData<T> merge_data(const std::vector<std::string> &keys, const std::map<std::string, MLCouplingData<T>> &data_map)
     {
+        if (merge_strategy == MLCouplingMergeStrategy::Stack) {
+            std::vector<MLCouplingData<T>> ordered_list;
+            for (const auto &key : keys) {
+                auto it = data_map.find(key);
+                if (it != data_map.end()) {
+                    ordered_list.push_back(it->second);
+                } else {
+                    throw std::runtime_error("flex_keyed fallback: key '" + key + "' not found.");
+                }
+            }
+            return stack_data(ordered_list);
+        }
+
         MLCouplingData<T> merged;
         for (const auto &key : keys)
         {

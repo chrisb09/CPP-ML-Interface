@@ -311,6 +311,18 @@ public:
     void ml_step() { step(); } // Backward compatibility
 
     /**
+     * @brief Configures the fallback merge strategy for flexible execution.
+     * @param strategy The strategy to use (List or Stack).
+     */
+    void set_merge_strategy(MLCouplingMergeStrategy strategy)
+    {
+        if (provider)
+        {
+            provider->set_merge_strategy(strategy);
+        }
+    }
+
+    /**
      * @brief Performs a standard static training step.
      * Applies preprocessing to inputs, runs static training, and logs any tracked metadata.
      * @param step_id An identifier for the current training step/iteration.
