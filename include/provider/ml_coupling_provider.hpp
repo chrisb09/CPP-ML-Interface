@@ -251,56 +251,73 @@ protected:
     }
 
     template <typename T>
+    MLCouplingData<T> list_data(const std::vector<MLCouplingData<T>> &data_list)
+    {
+        if (data_list.empty()) return MLCouplingData<T>();
+
+        // Calculate total elements
+        size_t total_numel = 0;
+        for (const auto &data : data_list) {
+            for (const auto &tensor : data) {
+                total_numel += tensor.numel();
+            }
+        }
+
+        if (total_numel == 0) return MLCouplingData<T>();
+
+        // Allocate flat buffer
+        T* buffer = new T[total_numel];
+        size_t cursor = 0;
+
+        for (const auto &data : data_list) {
+            for (const auto &tensor : data) {
+                if (tensor.is_contiguous()) {
+                    const T* src = static_cast<const T*>(tensor.root());
+                    std::copy(src, src + tensor.numel(), buffer + cursor);
+                } else {
+                    std::vector<T> flat = tensor.as_flat_vector();
+                    std::copy(flat.begin(), flat.end(), buffer + cursor);
+                }
+                cursor += tensor.numel();
+            }
+        }
+
+        MLCouplingData<T> merged;
+        merged.add_tensor(MLCouplingTensor<T>::wrap_flat(
+            buffer, 
+            {static_cast<int>(total_numel)}, // 1D shape
+            MLCouplingMemLayoutContiguous, 
+            MLCouplingOwnershipOwned
+        ));
+
+        return merged;
+    }
+
+    template <typename T>
     MLCouplingData<T> merge_data(const std::vector<MLCouplingData<T>> &data_list)
     {
         if (merge_strategy == MLCouplingMergeStrategy::Stack) {
             return stack_data(data_list);
         }
-
-        MLCouplingData<T> merged;
-        for (const auto &data : data_list)
-        {
-            for (const auto &tensor : data)
-            {
-                merged.add_tensor(tensor);
-            }
-        }
-        return merged;
+        return list_data(data_list);
     }
 
     template <typename T>
     MLCouplingData<T> merge_data(const std::vector<std::string> &keys, const std::map<std::string, MLCouplingData<T>> &data_map)
     {
-        if (merge_strategy == MLCouplingMergeStrategy::Stack) {
-            std::vector<MLCouplingData<T>> ordered_list;
-            for (const auto &key : keys) {
-                auto it = data_map.find(key);
-                if (it != data_map.end()) {
-                    ordered_list.push_back(it->second);
-                } else {
-                    throw std::runtime_error("flex_keyed fallback: key '" + key + "' not found.");
-                }
-            }
-            return stack_data(ordered_list);
-        }
-
-        MLCouplingData<T> merged;
-        for (const auto &key : keys)
-        {
+        std::vector<MLCouplingData<T>> ordered_list;
+        for (const auto &key : keys) {
             auto it = data_map.find(key);
-            if (it != data_map.end())
-            {
-                for (const auto &tensor : it->second)
-                {
-                    merged.add_tensor(tensor);
-                }
-            }
-            else
-            {
+            if (it != data_map.end()) {
+                ordered_list.push_back(it->second);
+            } else {
                 throw std::runtime_error("flex_keyed fallback: key '" + key + "' not found.");
             }
         }
-        return merged;
+        if (merge_strategy == MLCouplingMergeStrategy::Stack) {
+            return stack_data(ordered_list);
+        }
+        return list_data(ordered_list);
     }
 
     std::vector<MLCouplingData<In>> staged_inputs;

@@ -83,51 +83,67 @@ int main(int argc, char** argv) {
     std::cout << "Testing Flexible Fallback Merging Logic...\n\n";
 
     // 1. Create Data
-    // Let's create two tensors of shape [1, 2, 3] (Batch=1, Rows=2, Cols=3)
-    std::vector<float> data1_flat = {1, 2, 3, 4, 5, 6};
-    std::vector<float> data2_flat = {11, 12, 13, 14, 15, 16};
+    // For List Strategy: tensors of varying shapes and dimensions
+    std::vector<float> data_list_1 = {1, 2};
+    std::vector<float> data_list_2 = {3, 4, 5};
+    std::vector<float> data_list_3 = {6, 7, 8, 9}; // 2x2
     
-    MLCouplingTensor<float> tensor1 = MLCouplingTensor<float>::from_flat_copy(data1_flat, {1, 2, 3});
-    MLCouplingTensor<float> tensor2 = MLCouplingTensor<float>::from_flat_copy(data2_flat, {1, 2, 3});
+    MLCouplingTensor<float> tensor_list_1 = MLCouplingTensor<float>::from_flat_copy(data_list_1, {1, 2});
+    MLCouplingTensor<float> tensor_list_2 = MLCouplingTensor<float>::from_flat_copy(data_list_2, {1, 3});
+    MLCouplingTensor<float> tensor_list_3 = MLCouplingTensor<float>::from_flat_copy(data_list_3, {2, 2});
     
-    print_tensor_2d(tensor1, "Original Tensor 1");
-    print_tensor_2d(tensor2, "Original Tensor 2");
-
-    // 2. Setup Provider
-    MLCouplingProviderTest<float, float> provider;
-    
-    MLCouplingData<float> fallback_out; // dummy
+    // For Stack Strategy: tensors of same shape
+    std::vector<float> data_stack_1 = {1, 2, 3, 4, 5, 6};
+    std::vector<float> data_stack_2 = {11, 12, 13, 14, 15, 16};
+    MLCouplingTensor<float> tensor_stack_1 = MLCouplingTensor<float>::from_flat_copy(data_stack_1, {1, 2, 3});
+    MLCouplingTensor<float> tensor_stack_2 = MLCouplingTensor<float>::from_flat_copy(data_stack_2, {1, 2, 3});
     
     std::cout << "==========================================\n";
     std::cout << "        TESTING LIST MERGE STRATEGY       \n";
     std::cout << "==========================================\n";
+    print_tensor_2d(tensor_list_1, "Original List Tensor 1 [1, 2]");
+    print_tensor_2d(tensor_list_2, "Original List Tensor 2 [1, 3]");
+    print_tensor_2d(tensor_list_3, "Original List Tensor 3 [2, 2]");
+    
+    MLCouplingProviderTest<float, float> provider;
+    MLCouplingData<float> fallback_out; // dummy
     
     provider.set_merge_strategy(MLCouplingMergeStrategy::List);
     
-    MLCouplingData<float> cdata1; cdata1.add_tensor(tensor1);
-    MLCouplingData<float> cdata2; cdata2.add_tensor(tensor2);
+    MLCouplingData<float> cdata_list_1; cdata_list_1.add_tensor(tensor_list_1);
+    MLCouplingData<float> cdata_list_2; cdata_list_2.add_tensor(tensor_list_2);
+    MLCouplingData<float> cdata_list_3; cdata_list_3.add_tensor(tensor_list_3);
     
-    provider.flex_ordered_set(cdata1);
-    provider.flex_ordered_set(cdata2);
+    provider.flex_ordered_set(cdata_list_1);
+    provider.flex_ordered_set(cdata_list_2);
+    provider.flex_ordered_set(cdata_list_3);
     
     provider.flex_ordered_inference(&fallback_out);
     
     std::cout << "Merged List Result contains " << provider.received_input.size() << " tensors.\n";
-    assert(provider.received_input.size() == 2);
-    for (size_t i = 0; i < provider.received_input.size(); ++i) {
-        print_tensor_2d(provider.received_input[i], "List Output Tensor " + std::to_string(i + 1));
-    }
-    std::cout << "SUCCESS: List Strategy concatenated the Data objects correctly.\n\n";
+    assert(provider.received_input.size() == 1);
+    print_tensor_2d(provider.received_input[0], "List Output Tensor (1D Flattened)");
+    
+    assert(provider.received_input[0].numel() == 9);
+    assert(provider.received_input[0].at_linear(0) == 1);
+    assert(provider.received_input[0].at_linear(4) == 5);
+    assert(provider.received_input[0].at_linear(8) == 9);
+    std::cout << "SUCCESS: List Strategy flattened and concatenated the Data objects correctly.\n\n";
     
     
     std::cout << "==========================================\n";
     std::cout << "        TESTING STACK MERGE STRATEGY      \n";
     std::cout << "==========================================\n";
+    print_tensor_2d(tensor_stack_1, "Original Stack Tensor 1");
+    print_tensor_2d(tensor_stack_2, "Original Stack Tensor 2");
     
     provider.set_merge_strategy(MLCouplingMergeStrategy::Stack);
     
-    provider.flex_ordered_set(cdata1);
-    provider.flex_ordered_set(cdata2);
+    MLCouplingData<float> cdata_stack_1; cdata_stack_1.add_tensor(tensor_stack_1);
+    MLCouplingData<float> cdata_stack_2; cdata_stack_2.add_tensor(tensor_stack_2);
+    
+    provider.flex_ordered_set(cdata_stack_1);
+    provider.flex_ordered_set(cdata_stack_2);
     
     provider.flex_ordered_inference(&fallback_out);
     
