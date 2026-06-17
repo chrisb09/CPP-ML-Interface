@@ -32,6 +32,7 @@ cmake -S . -B build \
 	-DUSE_PYTHON_TORCH_CMAKE_PREFIX=OFF \
 	-DTorch_DIR="" \
 	-DTORCH_VERSION="2.4.0" \
+	-DTORCH_CUDA_ARCH_LIST="9.0" \
 	-DCPPML_RUN_REGISTRY_TESTS="${run_registry_tests}" \
 	-DWITH_SMARTSIM="${with_smartsim}" \
 	-DWITH_AIX="${with_aix}" \
