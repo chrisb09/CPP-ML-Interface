@@ -19,7 +19,8 @@
 
 enum class MLCouplingMergeStrategy {
     List,
-    Stack
+    Stack,
+    Auto
 };
 
 // @category: provider
@@ -27,7 +28,7 @@ template <typename In, typename Out>
 class MLCouplingProvider
 {
 public:
-    MLCouplingMergeStrategy merge_strategy = MLCouplingMergeStrategy::List;
+    MLCouplingMergeStrategy merge_strategy = MLCouplingMergeStrategy::Auto;
 
     void set_merge_strategy(MLCouplingMergeStrategy strategy) {
         merge_strategy = strategy;
@@ -101,8 +102,8 @@ public:
     {
         if (staged_inputs.size() > 0 && fallback_output != nullptr)
         {
-            MLCouplingData<In> merged_in = merge_data(staged_inputs);
-            static_inference(&merged_in, fallback_output);
+            merge_data(staged_inputs, last_merged_input);
+            static_inference(&last_merged_input, fallback_output);
             staged_inputs.clear();
             staged_targets.clear();
         }
@@ -117,9 +118,9 @@ public:
         (void)step_id;
         if (staged_inputs.size() > 0 && staged_targets.size() > 0)
         {
-            MLCouplingData<In> merged_in = merge_data(staged_inputs);
-            MLCouplingData<Out> merged_targets = merge_data(staged_targets);
-            auto res = static_train(&merged_in, &merged_targets);
+            merge_data(staged_inputs, last_merged_input);
+            merge_data(staged_targets, last_merged_target);
+            auto res = static_train(&last_merged_input, &last_merged_target);
             staged_inputs.clear();
             staged_targets.clear();
             return res;
@@ -152,8 +153,8 @@ public:
         (void)out_keys; // The fallback maps all expected outputs to the static buffer
         if (in_keys.size() > 0 && fallback_output != nullptr)
         {
-            MLCouplingData<In> merged_in = merge_data(in_keys, keyed_inputs);
-            static_inference(&merged_in, fallback_output);
+            merge_data(in_keys, keyed_inputs, last_merged_input);
+            static_inference(&last_merged_input, fallback_output);
         }
         else
         {
@@ -168,9 +169,9 @@ public:
         (void)step_id;
         if (in_keys.size() > 0 && target_keys.size() > 0)
         {
-            MLCouplingData<In> merged_in = merge_data(in_keys, keyed_inputs);
-            MLCouplingData<Out> merged_targets = merge_data(target_keys, keyed_targets);
-            return static_train(&merged_in, &merged_targets);
+            merge_data(in_keys, keyed_inputs, last_merged_input);
+            merge_data(target_keys, keyed_targets, last_merged_target);
+            return static_train(&last_merged_input, &last_merged_target);
         }
         throw std::runtime_error("flex_keyed_train fallback expects at least 1 input key and 1 target key.");
     }
@@ -178,7 +179,7 @@ public:
 
 protected:
     template <typename T>
-    MLCouplingData<T> stack_data(const std::vector<MLCouplingData<T>> &data_list)
+    MLCouplingData<T> stack_data(const std::vector<MLCouplingData<T>> &data_list, MLCouplingData<T> &existing_data)
     {
         if (data_list.empty()) return MLCouplingData<T>();
         
@@ -216,7 +217,15 @@ protected:
             }
             
             size_t total_numel = static_cast<size_t>(B) * m * slice_numel;
-            T* buffer = new T[total_numel];
+            T* buffer = nullptr;
+            bool reuse_buffer = false;
+
+            if (existing_data.size() > t_idx && existing_data[t_idx].dimensions() == new_dims && existing_data[t_idx].is_contiguous()) {
+                buffer = static_cast<T*>(existing_data[t_idx].root());
+                reuse_buffer = true;
+            } else {
+                buffer = new T[total_numel];
+            }
             
             for (size_t i = 0; i < m; ++i) {
                 const auto& tensor = data_list[i][t_idx];
@@ -241,69 +250,150 @@ protected:
                 }
             }
             
-            auto new_tensor = MLCouplingTensor<T>::wrap_flat(
-                buffer, new_dims, MLCouplingMemLayoutContiguous, MLCouplingOwnershipOwned
-            );
-            
-            stacked_data.add_tensor(std::move(new_tensor));
+            if (reuse_buffer) {
+                stacked_data.add_tensor(existing_data[t_idx]);
+            } else {
+                auto new_tensor = MLCouplingTensor<T>::wrap_flat(
+                    buffer, new_dims, MLCouplingMemLayoutContiguous, MLCouplingOwnershipOwned
+                );
+                stacked_data.add_tensor(std::move(new_tensor));
+            }
         }
         return stacked_data;
     }
 
     template <typename T>
-    MLCouplingData<T> list_data(const std::vector<MLCouplingData<T>> &data_list)
+    MLCouplingData<T> list_data(const std::vector<MLCouplingData<T>> &data_list, MLCouplingData<T> &existing_data)
     {
         if (data_list.empty()) return MLCouplingData<T>();
 
-        // Calculate total elements
-        size_t total_numel = 0;
-        for (const auto &data : data_list) {
-            for (const auto &tensor : data) {
-                total_numel += tensor.numel();
-            }
+        // If there's only one item in the list, just deep-copy it to preserve its shape.
+        if (data_list.size() == 1) {
+            return data_list[0].deep_copy();
         }
 
-        if (total_numel == 0) return MLCouplingData<T>();
+        size_t num_tensors = data_list[0].size();
+        size_t m = data_list.size();  // number of staged inputs
 
-        // Allocate flat buffer
-        T* buffer = new T[total_numel];
-        size_t cursor = 0;
+        MLCouplingData<T> merged_data;
 
-        for (const auto &data : data_list) {
-            for (const auto &tensor : data) {
-                if (tensor.is_contiguous()) {
-                    const T* src = static_cast<const T*>(tensor.root());
-                    std::copy(src, src + tensor.numel(), buffer + cursor);
-                } else {
-                    std::vector<T> flat = tensor.as_flat_vector();
-                    std::copy(flat.begin(), flat.end(), buffer + cursor);
+        // Each element of data_list is one staged input. Each staged input has
+        // num_tensors tensors (usually 1). For each tensor index t_idx we:
+        //   1. Check all staged inputs share the same batch size B (dim 0).
+        //   2. Compute each input's per-batch-item slice size (product of dims[1..]).
+        //   3. For every batch item b, concatenate the slices from all m inputs
+        //      into a flat [total_slice_numel] row.
+        // Output tensor shape: [B, TotalFeaturesPerBatch].
+
+        for (size_t t_idx = 0; t_idx < num_tensors; ++t_idx) {
+            auto first_dim = data_list[0][t_idx].dimensions();
+            if (first_dim.empty()) {
+                throw std::runtime_error("List fallback: Cannot merge scalar tensors. Expected at least a batch dimension.");
+            }
+
+            int B = first_dim[0];
+            size_t total_slice_numel = 0;
+            std::vector<size_t> slice_numels(m);
+
+            for (size_t i = 0; i < m; ++i) {
+                if (data_list[i].size() != num_tensors) {
+                    throw std::runtime_error("List fallback: Tensor count mismatch across staged inputs.");
                 }
-                cursor += tensor.numel();
+                auto cur_dim = data_list[i][t_idx].dimensions();
+                if (cur_dim.empty()) {
+                    throw std::runtime_error("List fallback: Encountered a scalar tensor, expected a batch dimension.");
+                }
+                if (cur_dim[0] != B) {
+                    throw std::runtime_error(
+                        "List fallback: Batch size mismatch. All staged inputs must share the same batch size (dim 0).");
+                }
+
+                // Slice numel = product of all dims except dim 0 (the batch dim).
+                size_t slice_numel = 1;
+                for (size_t d = 1; d < cur_dim.size(); ++d) {
+                    slice_numel *= static_cast<size_t>(cur_dim[d]);
+                }
+                slice_numels[i] = slice_numel;
+                total_slice_numel += slice_numel;
+            }
+
+            // Output shape: [B, total_slice_numel]
+            std::vector<int> new_dims = {B, static_cast<int>(total_slice_numel)};
+            size_t total_numel = static_cast<size_t>(B) * total_slice_numel;
+
+            T* buffer = nullptr;
+            bool reuse_buffer = false;
+            if (existing_data.size() > t_idx &&
+                existing_data[t_idx].dimensions() == new_dims &&
+                existing_data[t_idx].is_contiguous()) {
+                buffer = static_cast<T*>(existing_data[t_idx].root());
+                reuse_buffer = true;
+            } else {
+                buffer = new T[total_numel];
+            }
+
+            // For each batch item b, copy the per-slice data from each input i.
+            for (int b = 0; b < B; ++b) {
+                size_t row_offset = static_cast<size_t>(b) * total_slice_numel;
+                size_t col_offset = 0;
+                for (size_t i = 0; i < m; ++i) {
+                    const auto& tensor = data_list[i][t_idx];
+                    size_t sn = slice_numels[i];
+                    if (tensor.is_contiguous()) {
+                        const T* src = static_cast<const T*>(tensor.root());
+                        std::copy(src + b * sn, src + (b + 1) * sn, buffer + row_offset + col_offset);
+                    } else {
+                        std::vector<T> flat = tensor.as_flat_vector();
+                        std::copy(flat.begin() + b * sn, flat.begin() + (b + 1) * sn,
+                                  buffer + row_offset + col_offset);
+                    }
+                    col_offset += sn;
+                }
+            }
+
+            if (reuse_buffer) {
+                merged_data.add_tensor(existing_data[t_idx]);
+            } else {
+                auto new_tensor = MLCouplingTensor<T>::wrap_flat(
+                    buffer, new_dims, MLCouplingMemLayoutContiguous, MLCouplingOwnershipOwned);
+                merged_data.add_tensor(std::move(new_tensor));
             }
         }
-
-        MLCouplingData<T> merged;
-        merged.add_tensor(MLCouplingTensor<T>::wrap_flat(
-            buffer, 
-            {static_cast<int>(total_numel)}, // 1D shape
-            MLCouplingMemLayoutContiguous, 
-            MLCouplingOwnershipOwned
-        ));
-
-        return merged;
+        return merged_data;
     }
 
+
     template <typename T>
-    MLCouplingData<T> merge_data(const std::vector<MLCouplingData<T>> &data_list)
+    bool can_stack(const std::vector<MLCouplingData<T>> &data_list) const
     {
-        if (merge_strategy == MLCouplingMergeStrategy::Stack) {
-            return stack_data(data_list);
+        if (data_list.empty()) return false;
+        size_t num_tensors = data_list[0].size();
+        for (const auto& data : data_list) {
+            if (data.size() != num_tensors) return false;
         }
-        return list_data(data_list);
+        for (size_t t_idx = 0; t_idx < num_tensors; ++t_idx) {
+            auto first_dim = data_list[0][t_idx].dimensions();
+            if (first_dim.empty()) return false; // Cannot stack scalars
+            for (size_t i = 1; i < data_list.size(); ++i) {
+                if (data_list[i][t_idx].dimensions() != first_dim) return false;
+            }
+        }
+        return true;
     }
 
     template <typename T>
-    MLCouplingData<T> merge_data(const std::vector<std::string> &keys, const std::map<std::string, MLCouplingData<T>> &data_map)
+    void merge_data(const std::vector<MLCouplingData<T>> &data_list, MLCouplingData<T> &existing_data)
+    {
+        if (merge_strategy == MLCouplingMergeStrategy::Stack || 
+            (merge_strategy == MLCouplingMergeStrategy::Auto && can_stack(data_list))) {
+            existing_data = stack_data(data_list, existing_data);
+        } else {
+            existing_data = list_data(data_list, existing_data);
+        }
+    }
+
+    template <typename T>
+    void merge_data(const std::vector<std::string> &keys, const std::map<std::string, MLCouplingData<T>> &data_map, MLCouplingData<T> &existing_data)
     {
         std::vector<MLCouplingData<T>> ordered_list;
         for (const auto &key : keys) {
@@ -314,10 +404,12 @@ protected:
                 throw std::runtime_error("flex_keyed fallback: key '" + key + "' not found.");
             }
         }
-        if (merge_strategy == MLCouplingMergeStrategy::Stack) {
-            return stack_data(ordered_list);
+        if (merge_strategy == MLCouplingMergeStrategy::Stack || 
+            (merge_strategy == MLCouplingMergeStrategy::Auto && can_stack(ordered_list))) {
+            existing_data = stack_data(ordered_list, existing_data);
+        } else {
+            existing_data = list_data(ordered_list, existing_data);
         }
-        return list_data(ordered_list);
     }
 
     std::vector<MLCouplingData<In>> staged_inputs;
@@ -326,4 +418,7 @@ protected:
     std::map<std::string, MLCouplingData<In>> keyed_inputs;
     std::map<std::string, MLCouplingData<Out>> keyed_targets;
     std::map<std::string, MLCouplingData<Out> *> keyed_outputs;
+
+    MLCouplingData<In> last_merged_input;
+    MLCouplingData<Out> last_merged_target;
 };

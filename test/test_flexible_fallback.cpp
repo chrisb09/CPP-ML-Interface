@@ -83,26 +83,26 @@ int main(int argc, char** argv) {
     std::cout << "Testing Flexible Fallback Merging Logic...\n\n";
 
     // 1. Create Data
-    // For List Strategy: tensors of varying shapes and dimensions
-    std::vector<float> data_list_1 = {1, 2};
-    std::vector<float> data_list_2 = {3, 4, 5};
-    std::vector<float> data_list_3 = {6, 7, 8, 9}; // 2x2
+    // For List Strategy: tensors of IDENTICAL batch sizes but varying non-batch dimensions
+    std::vector<float> data_list_1 = {1, 2, 3,   4, 5, 6};                            // B=2, D1=3
+    std::vector<float> data_list_2 = {7, 8, 9, 10,   11, 12, 13, 14};                 // B=2, D1=2, D2=2 (slice=4)
+    std::vector<float> data_list_3 = {15, 16,   17, 18};                              // B=2, D1=2
     
-    MLCouplingTensor<float> tensor_list_1 = MLCouplingTensor<float>::from_flat_copy(data_list_1, {1, 2});
-    MLCouplingTensor<float> tensor_list_2 = MLCouplingTensor<float>::from_flat_copy(data_list_2, {1, 3});
+    MLCouplingTensor<float> tensor_list_1 = MLCouplingTensor<float>::from_flat_copy(data_list_1, {2, 3});
+    MLCouplingTensor<float> tensor_list_2 = MLCouplingTensor<float>::from_flat_copy(data_list_2, {2, 2, 2});
     MLCouplingTensor<float> tensor_list_3 = MLCouplingTensor<float>::from_flat_copy(data_list_3, {2, 2});
     
-    // For Stack Strategy: tensors of same shape
-    std::vector<float> data_stack_1 = {1, 2, 3, 4, 5, 6};
-    std::vector<float> data_stack_2 = {11, 12, 13, 14, 15, 16};
-    MLCouplingTensor<float> tensor_stack_1 = MLCouplingTensor<float>::from_flat_copy(data_stack_1, {1, 2, 3});
-    MLCouplingTensor<float> tensor_stack_2 = MLCouplingTensor<float>::from_flat_copy(data_stack_2, {1, 2, 3});
+    // For Stack Strategy: tensors of exact same shape, with batch size > 1
+    std::vector<float> data_stack_1 = {1, 2, 3, 4, 5, 6}; // 2x3
+    std::vector<float> data_stack_2 = {11, 12, 13, 14, 15, 16}; // 2x3
+    MLCouplingTensor<float> tensor_stack_1 = MLCouplingTensor<float>::from_flat_copy(data_stack_1, {2, 3});
+    MLCouplingTensor<float> tensor_stack_2 = MLCouplingTensor<float>::from_flat_copy(data_stack_2, {2, 3});
     
     std::cout << "==========================================\n";
     std::cout << "        TESTING LIST MERGE STRATEGY       \n";
     std::cout << "==========================================\n";
-    print_tensor_2d(tensor_list_1, "Original List Tensor 1 [1, 2]");
-    print_tensor_2d(tensor_list_2, "Original List Tensor 2 [1, 3]");
+    print_tensor_2d(tensor_list_1, "Original List Tensor 1 [2, 3]");
+    print_tensor_2d(tensor_list_2, "Original List Tensor 2 [2, 2, 2]");
     print_tensor_2d(tensor_list_3, "Original List Tensor 3 [2, 2]");
     
     MLCouplingProviderTest<float, float> provider;
@@ -122,20 +122,32 @@ int main(int argc, char** argv) {
     
     std::cout << "Merged List Result contains " << provider.received_input.size() << " tensors.\n";
     assert(provider.received_input.size() == 1);
-    print_tensor_2d(provider.received_input[0], "List Output Tensor (1D Flattened)");
+    print_tensor_2d(provider.received_input[0], "List Output Tensor [2, 9]");
     
-    assert(provider.received_input[0].numel() == 9);
+    assert(provider.received_input[0].numel() == 18);
+    auto list_dims = provider.received_input[0].dimensions();
+    assert(list_dims.size() == 2);
+    assert(list_dims[0] == 2);
+    assert(list_dims[1] == 9); // 3 + 4 + 2
+    
+    // Batch 0
     assert(provider.received_input[0].at_linear(0) == 1);
-    assert(provider.received_input[0].at_linear(4) == 5);
-    assert(provider.received_input[0].at_linear(8) == 9);
-    std::cout << "SUCCESS: List Strategy flattened and concatenated the Data objects correctly.\n\n";
+    assert(provider.received_input[0].at_linear(2) == 3);
+    assert(provider.received_input[0].at_linear(3) == 7);
+    assert(provider.received_input[0].at_linear(6) == 10);
+    assert(provider.received_input[0].at_linear(7) == 15);
+    // Batch 1
+    assert(provider.received_input[0].at_linear(9) == 4);
+    assert(provider.received_input[0].at_linear(12) == 11);
+    assert(provider.received_input[0].at_linear(17) == 18);
+    std::cout << "SUCCESS: List Strategy concatenated the Data objects correctly per batch item.\n\n";
     
     
     std::cout << "==========================================\n";
     std::cout << "        TESTING STACK MERGE STRATEGY      \n";
     std::cout << "==========================================\n";
-    print_tensor_2d(tensor_stack_1, "Original Stack Tensor 1");
-    print_tensor_2d(tensor_stack_2, "Original Stack Tensor 2");
+    print_tensor_2d(tensor_stack_1, "Original Stack Tensor 1 [2, 3]");
+    print_tensor_2d(tensor_stack_2, "Original Stack Tensor 2 [2, 3]");
     
     provider.set_merge_strategy(MLCouplingMergeStrategy::Stack);
     
@@ -152,26 +164,31 @@ int main(int argc, char** argv) {
     
     MLCouplingTensor<float>& stacked_tensor = provider.received_input[0];
     
-    print_tensor_2d(stacked_tensor, "Stacked Tensor [B, m, D1, D2]");
+    print_tensor_2d(stacked_tensor, "Stacked Tensor [B, m, D1]");
     
     auto dims = stacked_tensor.dimensions();
-    assert(dims.size() == 4);
-    assert(dims[0] == 1); // B = 1
+    assert(dims.size() == 3);
+    assert(dims[0] == 2); // B = 2
     assert(dims[1] == 2); // m = 2
-    assert(dims[2] == 2); // D1 = 2
-    assert(dims[3] == 3); // D2 = 3
+    assert(dims[2] == 3); // D1 = 3
     
     // Verify values were interleaved correctly
     // Batch 0, Step 0
-    assert(stacked_tensor.at({0, 0, 0, 0}) == 1);
-    assert(stacked_tensor.at({0, 0, 0, 1}) == 2);
-    assert(stacked_tensor.at({0, 0, 0, 2}) == 3);
-    assert(stacked_tensor.at({0, 0, 1, 0}) == 4);
+    assert(stacked_tensor.at({0, 0, 0}) == 1);
+    assert(stacked_tensor.at({0, 0, 1}) == 2);
+    assert(stacked_tensor.at({0, 0, 2}) == 3);
     // Batch 0, Step 1
-    assert(stacked_tensor.at({0, 1, 0, 0}) == 11);
-    assert(stacked_tensor.at({0, 1, 0, 1}) == 12);
-    assert(stacked_tensor.at({0, 1, 0, 2}) == 13);
-    assert(stacked_tensor.at({0, 1, 1, 0}) == 14);
+    assert(stacked_tensor.at({0, 1, 0}) == 11);
+    assert(stacked_tensor.at({0, 1, 1}) == 12);
+    assert(stacked_tensor.at({0, 1, 2}) == 13);
+    // Batch 1, Step 0
+    assert(stacked_tensor.at({1, 0, 0}) == 4);
+    assert(stacked_tensor.at({1, 0, 1}) == 5);
+    assert(stacked_tensor.at({1, 0, 2}) == 6);
+    // Batch 1, Step 1
+    assert(stacked_tensor.at({1, 1, 0}) == 14);
+    assert(stacked_tensor.at({1, 1, 1}) == 15);
+    assert(stacked_tensor.at({1, 1, 2}) == 16);
     
     std::cout << "SUCCESS: Stack Strategy interleaved the tensors perfectly!\n";
     
