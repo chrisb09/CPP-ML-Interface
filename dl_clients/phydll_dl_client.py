@@ -42,18 +42,18 @@ def receive_p2p_metadata(comm, source_rank):
     #     int32_t layout;          // 52
     # } (Total: 56 bytes)
     
-    header_size = 56
+    header_size = 64
     header_buf = bytearray(header_size)
     status = MPI.Status()
     # Tag is source_rank to match C++ provider
     comm.Recv([header_buf, MPI.BYTE], source=source_rank, tag=source_rank, status=status)
     
-    magic, version, m_len, b_len, d_len, n_in, n_out, t_in, t_out, dtype, layout = struct.unpack("=7i 4x 2q 2i", header_buf)
+    magic, version, m_len, b_len, d_len, n_in, n_out, t_in, t_out, dtype, layout, n_in_dims, n_out_dims = struct.unpack("=7i 4x 2q 4i", header_buf)
     
     if magic != 0x4D4C434D or version != 1:
         return {'valid': False}
         
-    payload_size = m_len + b_len + d_len + (n_in + n_out) * 8
+    payload_size = m_len + b_len + d_len + (n_in_dims + n_out_dims) * 8
     payload_buf = bytearray(payload_size)
     if payload_size > 0:
         comm.Recv([payload_buf, MPI.BYTE], source=source_rank, tag=source_rank)
@@ -66,13 +66,38 @@ def receive_p2p_metadata(comm, source_rank):
     device = payload_buf[offset:offset+d_len].decode('utf-8') if d_len > 0 else ""
     offset += d_len
     
-    in_sizes = []
-    if n_in > 0:
-        in_sizes = list(struct.unpack(f"={n_in}q", payload_buf[offset:offset+n_in*8]))
-        offset += n_in*8
-    out_sizes = []
-    if n_out > 0:
-        out_sizes = list(struct.unpack(f"={n_out}q", payload_buf[offset:offset+n_out*8]))
+    in_shapes = []
+    if n_in_dims > 0:
+        flat_in_dims = list(struct.unpack(f"={n_in_dims}q", payload_buf[offset:offset+n_in_dims*8]))
+        offset += n_in_dims*8
+        
+        d_idx = 0
+        for _ in range(n_in):
+            if d_idx >= len(flat_in_dims): break
+            ndim = flat_in_dims[d_idx]
+            d_idx += 1
+            shape = []
+            for _ in range(ndim):
+                if d_idx >= len(flat_in_dims): break
+                shape.append(flat_in_dims[d_idx])
+                d_idx += 1
+            in_shapes.append(shape)
+            
+    out_shapes = []
+    if n_out_dims > 0:
+        flat_out_dims = list(struct.unpack(f"={n_out_dims}q", payload_buf[offset:offset+n_out_dims*8]))
+        
+        d_idx = 0
+        for _ in range(n_out):
+            if d_idx >= len(flat_out_dims): break
+            ndim = flat_out_dims[d_idx]
+            d_idx += 1
+            shape = []
+            for _ in range(ndim):
+                if d_idx >= len(flat_out_dims): break
+                shape.append(flat_out_dims[d_idx])
+                d_idx += 1
+            out_shapes.append(shape)
         
     return {
         'valid': True,
@@ -81,8 +106,8 @@ def receive_p2p_metadata(comm, source_rank):
         'device': device,
         'total_input': t_in,
         'total_output': t_out,
-        'in_sizes': in_sizes,
-        'out_sizes': out_sizes
+        'in_shapes': in_shapes,
+        'out_shapes': out_shapes
     }
 
 def main():
@@ -97,11 +122,23 @@ def main():
     
     # Check if we are in the DL application group
 
+    # Configure Torch threading
+    intra_threads = int(os.environ.get("MLCOUPLING_INTRA_OP_THREADS", os.environ.get("SLURM_CPUS_PER_TASK", "-1")))
+    inter_threads = int(os.environ.get("MLCOUPLING_INTER_OP_THREADS", "-1"))
+
+    if intra_threads > 0:
+        torch.set_num_threads(intra_threads)
+    if inter_threads > 0:
+        torch.set_num_interop_threads(inter_threads)
+
     dl_count = int(os.environ.get("PHYDLL_DL_COUNT", "1"))
     
     dll = PhyDLL()
     dll.init("dl")
     print(f"[DL {world_comm.rank}] Calling dll.define_dl...", flush=True)
+    if intra_threads > 0 or inter_threads > 0:
+        print(f"[DL {world_comm.rank}] torch threads: intra={torch.get_num_threads()}, inter={torch.get_num_interop_threads()}", flush=True)
+    
     dll.define_dl(count=dl_count)
     print(f"[DL {world_comm.rank}] Returned from dll.define_dl.", flush=True)
     
@@ -121,17 +158,19 @@ def main():
     device_name = ""
     total_input_size = 0
     total_output_size = 0
+    final_meta = None
     
     # Receive metadata from each connected physical rank
     for source_rank in dests:
         p2p_meta = receive_p2p_metadata(world_comm, source_rank)
         if p2p_meta['valid']:
             if not meta_initialized:
-                model_path = p2p_meta['model_path']
-                device_name = p2p_meta['device']
+                model_path = p2p_meta.get('model_path', '')
+                device_name = p2p_meta.get('device', '')
+                final_meta = p2p_meta
                 meta_initialized = True
-            total_input_size += p2p_meta['total_input']
-            total_output_size += p2p_meta['total_output']
+            total_input_size += p2p_meta.get('total_input', 0)
+            total_output_size += p2p_meta.get('total_output', 0)
 
     torch_device = torch.device('cpu')
     model = None
@@ -191,7 +230,19 @@ def main():
                 input_flat[b * input_per_rank_used : (b+1) * input_per_rank_used] = \
                     combined_data[b * input_per_rank_total : b * input_per_rank_total + input_per_rank_used]
             
-            input_tensor = torch.from_numpy(input_flat).reshape(batch_size, input_per_rank_used).to(torch_device)
+            actual_shape = [batch_size]
+            if final_meta and final_meta.get('in_shapes'):
+                shape = final_meta['in_shapes'][0]
+                if len(shape) > 1:
+                    actual_shape.extend(shape[1:])
+                else:
+                    actual_shape.append(input_per_rank_used)
+            else:
+                actual_shape.append(input_per_rank_used)
+                
+            input_tensor = torch.from_numpy(input_flat).reshape(batch_size, input_per_rank_used)
+            input_tensor = input_tensor.view(*actual_shape)
+            input_tensor = input_tensor.to(torch_device)
             
             try:
                 with torch.no_grad():

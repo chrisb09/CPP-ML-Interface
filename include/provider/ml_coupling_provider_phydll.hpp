@@ -158,7 +158,27 @@ private:
         int64_t total_output = 0;
         int32_t dtype = 0;
         int32_t layout = 0;
+        int32_t num_input_dims = 0;
+        int32_t num_output_dims = 0;
     };
+
+    std::vector<int64_t> input_dims_;
+    std::vector<int64_t> output_dims_;
+
+    template <typename T>
+    std::vector<int64_t> collect_dims(const MLCouplingData<T> &data)
+    {
+        std::vector<int64_t> dims;
+        for (size_t i = 0; i < data.size(); ++i)
+        {
+            auto tensor_dims = data[i].dimensions();
+            dims.push_back(static_cast<int64_t>(tensor_dims.size()));
+            for (auto d : tensor_dims) {
+                dims.push_back(static_cast<int64_t>(d));
+            }
+        }
+        return dims;
+    }
 
     void broadcast_metadata_once()
     {
@@ -203,7 +223,10 @@ private:
         header.dtype = static_cast<int32_t>(to_ml_coupling_data_type<In>());
         header.layout = static_cast<int32_t>(MLCouplingMemLayoutContiguous);
 
-        const size_t sizes_bytes = (input_sizes_.size() + output_sizes_.size()) * sizeof(int64_t);
+        header.num_input_dims = static_cast<int32_t>(input_dims_.size());
+        header.num_output_dims = static_cast<int32_t>(output_dims_.size());
+
+        const size_t sizes_bytes = (input_dims_.size() + output_dims_.size()) * sizeof(int64_t);
         payload.resize(static_cast<size_t>(header.model_len + header.backend_len + header.device_len) + sizes_bytes);
         size_t offset = 0;
         if (header.model_len > 0)
@@ -221,14 +244,14 @@ private:
             std::memcpy(payload.data() + offset, device.data(), header.device_len);
             offset += static_cast<size_t>(header.device_len);
         }
-        if (!input_sizes_.empty())
+        if (!input_dims_.empty())
         {
-            std::memcpy(payload.data() + offset, input_sizes_.data(), input_sizes_.size() * sizeof(int64_t));
-            offset += input_sizes_.size() * sizeof(int64_t);
+            std::memcpy(payload.data() + offset, input_dims_.data(), input_dims_.size() * sizeof(int64_t));
+            offset += input_dims_.size() * sizeof(int64_t);
         }
-        if (!output_sizes_.empty())
+        if (!output_dims_.empty())
         {
-            std::memcpy(payload.data() + offset, output_sizes_.data(), output_sizes_.size() * sizeof(int64_t));
+            std::memcpy(payload.data() + offset, output_dims_.data(), output_dims_.size() * sizeof(int64_t));
         }
 
         int ndest = phydll_get_ndest();
@@ -257,6 +280,8 @@ private:
 
         input_sizes_ = collect_sizes(*input_after_preprocessing);
         output_sizes_ = collect_sizes(*output_before_postprocessing);
+        input_dims_ = collect_dims(*input_after_preprocessing);
+        output_dims_ = collect_dims(*output_before_postprocessing);
 
         const int64_t total_input = sum_sizes(input_sizes_);
         const int64_t total_output = sum_sizes(output_sizes_);

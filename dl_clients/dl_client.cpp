@@ -34,6 +34,8 @@ struct BcastMetaHeader
     int64_t total_output = 0;
     int32_t dtype = 0;
     int32_t layout = 0;
+    int32_t num_input_dims = 0;
+    int32_t num_output_dims = 0;
 };
 
 struct BcastMeta
@@ -42,8 +44,8 @@ struct BcastMeta
     std::string model_path;
     std::string backend;
     std::string device;
-    std::vector<int64_t> input_sizes;
-    std::vector<int64_t> output_sizes;
+    std::vector<std::vector<int64_t>> input_shapes;
+    std::vector<std::vector<int64_t>> output_shapes;
     int64_t total_input = 0;
     int64_t total_output = 0;
 };
@@ -65,7 +67,7 @@ BcastMeta receive_p2p_metadata(int source_rank)
     }
 
     const size_t payload_size = static_cast<size_t>(header.model_len + header.backend_len + header.device_len) +
-                                (static_cast<size_t>(header.num_inputs + header.num_outputs) * sizeof(int64_t));
+                                (static_cast<size_t>(header.num_input_dims + header.num_output_dims) * sizeof(int64_t));
     std::fprintf(stderr, "[PHYDLL:DL] Allocating payload size %zu\n", payload_size); std::fflush(stderr);
     std::vector<unsigned char> payload(payload_size);
     if (payload_size > 0)
@@ -97,17 +99,36 @@ BcastMeta receive_p2p_metadata(int source_rank)
         offset += static_cast<size_t>(header.device_len);
     }
 
-    meta.input_sizes.resize(static_cast<size_t>(header.num_inputs));
-    meta.output_sizes.resize(static_cast<size_t>(header.num_outputs));
+    if (header.num_input_dims > 0)
+    {
+        std::vector<int64_t> flat_in_dims(header.num_input_dims);
+        std::memcpy(flat_in_dims.data(), payload.data() + offset, header.num_input_dims * sizeof(int64_t));
+        offset += static_cast<size_t>(header.num_input_dims) * sizeof(int64_t);
 
-    if (header.num_inputs > 0)
-    {
-        std::memcpy(meta.input_sizes.data(), payload.data() + offset, header.num_inputs * sizeof(int64_t));
-        offset += static_cast<size_t>(header.num_inputs) * sizeof(int64_t);
+        size_t d_idx = 0;
+        for (int i = 0; i < header.num_inputs && d_idx < flat_in_dims.size(); ++i) {
+            int64_t ndim = flat_in_dims[d_idx++];
+            std::vector<int64_t> shape;
+            for (int64_t d = 0; d < ndim && d_idx < flat_in_dims.size(); ++d) {
+                shape.push_back(flat_in_dims[d_idx++]);
+            }
+            meta.input_shapes.push_back(shape);
+        }
     }
-    if (header.num_outputs > 0)
+    if (header.num_output_dims > 0)
     {
-        std::memcpy(meta.output_sizes.data(), payload.data() + offset, header.num_outputs * sizeof(int64_t));
+        std::vector<int64_t> flat_out_dims(header.num_output_dims);
+        std::memcpy(flat_out_dims.data(), payload.data() + offset, header.num_output_dims * sizeof(int64_t));
+        
+        size_t d_idx = 0;
+        for (int i = 0; i < header.num_outputs && d_idx < flat_out_dims.size(); ++i) {
+            int64_t ndim = flat_out_dims[d_idx++];
+            std::vector<int64_t> shape;
+            for (int64_t d = 0; d < ndim && d_idx < flat_out_dims.size(); ++d) {
+                shape.push_back(flat_out_dims[d_idx++]);
+            }
+            meta.output_shapes.push_back(shape);
+        }
     }
 
     return meta;
@@ -126,6 +147,18 @@ int main(int argc, char **argv) {
 
     const int dl_count = get_env_int("PHYDLL_DL_FIELD_COUNT", get_env_int("PHYDLL_DL_COUNT", 1));
 
+#ifdef PHYDLL_DL_USE_TORCH
+    const int intra_threads = get_env_int("MLCOUPLING_INTRA_OP_THREADS", get_env_int("SLURM_CPUS_PER_TASK", -1));
+    const int inter_threads = get_env_int("MLCOUPLING_INTER_OP_THREADS", -1);
+
+    if (intra_threads > 0) {
+        torch::set_num_threads(intra_threads);
+    }
+    if (inter_threads > 0) {
+        torch::set_num_interop_threads(inter_threads);
+    }
+#endif
+
     std::fprintf(stderr, "[PHYDLL:DL] client started argv0=%s dl_count=%d torch=%s\n",
                  (argv && argv[0]) ? argv[0] : "(null)",
                  dl_count,
@@ -135,6 +168,12 @@ int main(int argc, char **argv) {
                  "off"
 #endif
     );
+#ifdef PHYDLL_DL_USE_TORCH
+    if (intra_threads > 0 || inter_threads > 0) {
+        std::fprintf(stderr, "[PHYDLL:DL] torch threads: intra=%d, inter=%d\n", 
+                     (int)torch::get_num_threads(), (int)torch::get_num_interop_threads());
+    }
+#endif
     std::fflush(stderr);
 
     bool meta_initialized = false;
@@ -143,6 +182,7 @@ int main(int argc, char **argv) {
     int64_t total_input_size = 0;
     int64_t total_output_size = 0;
     std::string device_name;
+    BcastMeta final_meta;
 
 #ifdef PHYDLL_DL_USE_TORCH
     torch::jit::script::Module model;
@@ -169,6 +209,7 @@ int main(int argc, char **argv) {
             {
                 model_path = p2p_meta.model_path;
                 device_name = p2p_meta.device;
+                final_meta = p2p_meta;
                 meta_initialized = true;
             }
             total_input_size += p2p_meta.total_input;
@@ -189,6 +230,9 @@ int main(int argc, char **argv) {
             device_name = frame.meta.entries.empty() ? std::string() : frame.meta.entries.front().device;
             total_input_size = 0;
             total_output_size = 0;
+            // Note: frame.meta uses old flattened sizes. 
+            // In a complete implementation we'd update frame.meta.entries parsing too, 
+            // but forSTATIC api mode, total_input_size is already populated correctly via p2p_meta.
             for (const auto& entry : frame.meta.entries) {
                 for (const auto size : entry.input_sizes) {
                     total_input_size += size;
@@ -269,7 +313,25 @@ int main(int argc, char **argv) {
             std::fprintf(stderr, "[PHYDLL:DL] Frame %llu running inference\n", (unsigned long long)frame_id); std::fflush(stderr);
 
             auto options = torch::TensorOptions().dtype(torch::kFloat32);
+            std::vector<int64_t> actual_shape = {batch_size};
+            if (!final_meta.input_shapes.empty()) {
+                const auto& shape = final_meta.input_shapes.front();
+                // shape contains the dimensions of the first input tensor.
+                // It might include a batch dimension of 1 from the PHY side, which we replace with batch_size.
+                // Assuming shape[0] is the batch dimension.
+                if (shape.size() > 1) {
+                    for (size_t d = 1; d < shape.size(); ++d) {
+                        actual_shape.push_back(shape[d]);
+                    }
+                } else {
+                    actual_shape.push_back(input_per_rank_used);
+                }
+            } else {
+                actual_shape.push_back(input_per_rank_used);
+            }
+
             auto input_tensor = torch::from_blob(input.data(), {batch_size, input_per_rank_used}, options).clone();
+            input_tensor = input_tensor.view(actual_shape);
             input_tensor = input_tensor.to(torch_device);
             try {
                 auto output_tensor = model.forward({input_tensor}).toTensor();
