@@ -20,7 +20,8 @@
 enum class MLCouplingMergeStrategy {
     List,
     Stack,
-    Auto
+    Auto,
+    None
 };
 
 // @category: provider
@@ -267,9 +268,39 @@ protected:
     {
         if (data_list.empty()) return MLCouplingData<T>();
 
-        // If there's only one item in the list, just deep-copy it to preserve its shape.
+        // If there's only one item in the list, copy it into existing_data to preserve its shape and reuse the buffer.
         if (data_list.size() == 1) {
-            return data_list[0].deep_copy();
+            MLCouplingData<T> merged_data;
+            size_t num_tensors = data_list[0].size();
+            for (size_t t_idx = 0; t_idx < num_tensors; ++t_idx) {
+                const auto& tensor = data_list[0][t_idx];
+                const auto& dims = tensor.dimensions();
+                
+                T* buffer = nullptr;
+                bool reuse_buffer = false;
+                if (existing_data.size() > t_idx && existing_data[t_idx].dimensions() == dims && existing_data[t_idx].is_contiguous()) {
+                    buffer = static_cast<T*>(existing_data[t_idx].root());
+                    reuse_buffer = true;
+                } else {
+                    buffer = new T[tensor.numel()];
+                }
+                
+                if (tensor.is_contiguous()) {
+                    std::copy(static_cast<const T*>(tensor.root()), static_cast<const T*>(tensor.root()) + tensor.numel(), buffer);
+                } else {
+                    std::vector<T> flat = tensor.as_flat_vector();
+                    std::copy(flat.begin(), flat.end(), buffer);
+                }
+                
+                if (reuse_buffer) {
+                    merged_data.add_tensor(existing_data[t_idx]);
+                } else {
+                    merged_data.add_tensor(MLCouplingTensor<T>::wrap_flat(
+                        buffer, dims, MLCouplingMemLayoutContiguous, MLCouplingOwnershipOwned
+                    ));
+                }
+            }
+            return merged_data;
         }
 
         size_t num_tensors = data_list[0].size();
@@ -384,8 +415,34 @@ protected:
     template <typename T>
     void merge_data(const std::vector<MLCouplingData<T>> &data_list, MLCouplingData<T> &existing_data)
     {
+        if (data_list.empty()) return;
+
+        // Optimization: If there's exactly 1 input, and it's already contiguous, just pass it through by reference.
+        if (data_list.size() == 1 && merge_strategy != MLCouplingMergeStrategy::Stack) {
+            bool all_contiguous = true;
+            for (size_t i = 0; i < data_list[0].size(); ++i) {
+                if (!data_list[0][i].is_contiguous()) {
+                    all_contiguous = false;
+                    break;
+                }
+            }
+            if (all_contiguous) {
+                existing_data = data_list[0];
+                return;
+            }
+        }
+
+        if (merge_strategy == MLCouplingMergeStrategy::None) {
+            existing_data = MLCouplingData<T>();
+            for (const auto& data : data_list) {
+                for (size_t i = 0; i < data.size(); ++i) {
+                    existing_data.add_tensor(data[i]);
+                }
+            }
+            return;
+        }
         if (merge_strategy == MLCouplingMergeStrategy::Stack || 
-            (merge_strategy == MLCouplingMergeStrategy::Auto && can_stack(data_list))) {
+            (merge_strategy == MLCouplingMergeStrategy::Auto && data_list.size() > 1 && can_stack(data_list))) {
             existing_data = stack_data(data_list, existing_data);
         } else {
             existing_data = list_data(data_list, existing_data);
@@ -403,6 +460,15 @@ protected:
             } else {
                 throw std::runtime_error("flex_keyed fallback: key '" + key + "' not found.");
             }
+        }
+        if (merge_strategy == MLCouplingMergeStrategy::None) {
+            existing_data = MLCouplingData<T>();
+            for (const auto& data : ordered_list) {
+                for (size_t i = 0; i < data.size(); ++i) {
+                    existing_data.add_tensor(data[i]);
+                }
+            }
+            return;
         }
         if (merge_strategy == MLCouplingMergeStrategy::Stack || 
             (merge_strategy == MLCouplingMergeStrategy::Auto && can_stack(ordered_list))) {

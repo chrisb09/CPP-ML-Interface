@@ -211,7 +211,15 @@ def main() -> int:
 
     if not args.silent:
         print("Solver done signaled. Shutting down database.", flush=True)
-    exp.stop(db)
+    
+    import threading
+    stop_thread = threading.Thread(target=exp.stop, args=(db,))
+    stop_thread.start()
+    stop_thread.join(timeout=15.0)
+    
+    if stop_thread.is_alive():
+        if not args.silent:
+            print("Warning: Database shutdown timed out.", flush=True)
     
     try:
         done_file.unlink()

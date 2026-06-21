@@ -125,6 +125,25 @@ target_include_directories(cpp_ml_interface_executable PRIVATE "${CMAKE_CURRENT_
 
 An actually working example project can be found in the [`module_test`](https://github.com/chrisb09/smartsim_playground/tree/master/module_test) directory of the `smartsim_playground` repository, which includes a custom provider and behavior, and demonstrates how to set up the CMakeLists.txt file to generate the merged registry and use the library in a project with custom subclasses.
 
+## CPU Inference Strategies & Threading
+
+The different providers supported by this interface employ varying strategies for CPU inference, which impacts how you should allocate resources in your job scripts.
+
+| Provider | Strategy | Execution Model | Parallelism Control |
+| :--- | :--- | :--- | :--- |
+| **AIxelerator** | Per-rank | In-process; one model instance inside every simulation rank. | Framework-level (OpenMP/MKL) |
+| **SmartSim** | Per-node | Remote; one model in an external Redis database serves many simulation ranks. | Managed by RedisAI thread pool |
+| **PhyDLL** | Batched MPMD | Separate MPI ranks; one DL rank aggregates data from multiple simulation ranks into a single batch. | Explicitly configurable via environment variables |
+
+### PhyDLL Threading Configuration
+
+When running the PhyDLL DL clients (either the C++ `dl_client` or the Python `phydll_dl_client.py`), you can control Torch's internal parallelism using the following environment variables:
+
+- `MLCOUPLING_INTRA_OP_THREADS`: Number of threads used for parallelizing individual operations (e.g., matrix multiplications). Defaults to `SLURM_CPUS_PER_TASK` if running under Slurm.
+- `MLCOUPLING_INTER_OP_THREADS`: Number of threads used for parallelizing independent operations in the model graph.
+
+**Best Practice**: For CPU inference with PhyDLL, it is recommended to launch fewer DL ranks than simulation ranks (e.g., one DL rank per node) and give each DL rank multiple cores via Slurm's `--cpus-per-task`. The clients will automatically respect this allocation to ensure efficient execution without oversubscribing the CPU.
+
 ## Diagram
 
 ![MLCoupling UML](documentation/CPP_NEW_ML_Interface.svg)

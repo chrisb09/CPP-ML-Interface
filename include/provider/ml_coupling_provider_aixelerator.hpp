@@ -109,7 +109,16 @@ public:
                                                                    enable_hybrid,
                                                                    host_fraction);
             }
+            
+
+            std::cerr << "DEBUG AIX SHAPE: ";
+            for (auto d : input_data_after_preprocessing[0].dimensions_as_int64()) {
+                std::cerr << d << " ";
+            }
+            std::cerr << std::endl;
             service->inference();
+
+
         }
         else
         {

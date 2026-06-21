@@ -1,5 +1,19 @@
 #!/bin/sh
 
+# Source the main environment script from the project root
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+BASE_DIR="$(realpath "${SCRIPT_DIR}/..")"
+source "${BASE_DIR}/set_env_claix23_cuda12.4.sh"
+
+# Usage:
+#   ./build.sh          - build the project (tests excluded)
+
+#   ./build.sh test     - build the project including tests, then run them
+#   ./build.sh test <name>  - build and run only the named test (e.g. test_flexible_fallback)
+
+mode="${1:-}"
+test_filter="${2:-}"
+
 run_registry_tests="${CPPML_RUN_REGISTRY_TESTS:-OFF}"
 with_smartsim="${WITH_SMARTSIM:-ON}"
 with_aix="${WITH_AIX:-ON}"
@@ -9,6 +23,14 @@ with_torch="${WITH_TORCH:-ON}"
 with_tensorflow="${WITH_TENSORFLOW:-OFF}"
 with_onnx="${WITH_ONNX:-OFF}"
 force_aix_rebuild="${FORCE_AIX_REBUILD:-OFF}"
+
+# Only compile tests when explicitly requested
+if [ "$mode" = "test" ]; then
+    build_testing="ON"
+else
+    build_testing="OFF"
+fi
+
 # Set up environment for clang and CUDA
 USER_PYTHON_ENV="${PWD}/extern/python/smartsim_cuda-12"
 USER_PYTHON="$USER_PYTHON_ENV/bin/python"
@@ -41,13 +63,23 @@ cmake -S . -B build \
 	-DWITH_TORCH="${with_torch}" \
 	-DWITH_TENSORFLOW="${with_tensorflow}" \
 	-DWITH_ONNX="${with_onnx}" \
-	-DFORCE_AIX_REBUILD="${force_aix_rebuild}" || { echo "CMake configuration failed"; exit 1; }
-##cmake -S . -B build_release -DCMAKE_BUILD_TYPE=Release
+	-DFORCE_AIX_REBUILD="${force_aix_rebuild}" \
+	-DBUILD_TESTING="${build_testing}" \
+	-DTEST_PYTHON_EXECUTABLE="${USER_PYTHON}" || { echo "CMake configuration failed"; exit 1; }
 
 # build (generator-agnostic; passes -j to underlying tool)
 cmake --build build -- -j8 || { echo "Build failed"; exit 1; }
-##cmake --build build_release -- -j"$(nproc)"
 
+# run tests if requested
+if [ "$mode" = "test" ]; then
+    # Ensure bundled GCC 13 runtime libs are on the path
+    . ./env.sh
 
-# Example of how to run the registry parser tests if they are enabled
-# CPPML_RUN_REGISTRY_TESTS=ON WITH_SMARTSIM=ON WITH_AIX=ON WITH_TORCH=ON ./build.sh
+    echo ""
+    echo "=== Running tests ==="
+    if [ -n "$test_filter" ]; then
+        ctest --test-dir build --output-on-failure -R "$test_filter"
+    else
+        ctest --test-dir build --output-on-failure
+    fi
+fi

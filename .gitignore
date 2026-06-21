@@ -1,7 +1,6 @@
 .*
 !.gitignore
 !*/.gitignore
-/test
 /build
 /build_release
 __pycache__

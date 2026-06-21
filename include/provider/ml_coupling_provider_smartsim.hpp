@@ -39,6 +39,9 @@ class MLCouplingProviderSmartsim : public MLCouplingProvider<In, Out>
     const int command_timeout;
     const int socket_timeout;
     const int model_timeout;
+    const std::vector<std::string> tf_input_labels;
+    const std::vector<std::string> tf_output_labels;
+    const std::vector<std::string> tf_input_keys; // Added new member
 
     static int env_int(const char *name, int fallback)
     {
@@ -108,11 +111,12 @@ private:
                                int model_timeout = -1,
                                const std::vector<std::string> &tf_input_labels = {},
                                const std::vector<std::string> &tf_output_labels = {},
-                               MLCouplingData<In> *input_after_preprocessing = nullptr,
+                               const std::vector<std::string> &tf_input_keys = {}, // New parameter
+                               MLCouplingData<In>* input_after_preprocessing = nullptr,
                                MLCouplingData<Out> *output_before_postprocessing = nullptr)
-        : device(device),
-          model_backend(model_backend),
-          model_name(model_name),
+        : device(std::move(device)),
+          model_backend(std::move(model_backend)),
+          model_name(std::move(model_name)),
           num_gpus(resolve_num_gpus(device, num_gpus)),
           first_gpu(first_gpu),
           batch_size(batch_size),
@@ -121,6 +125,9 @@ private:
           command_timeout(command_timeout),
           socket_timeout(socket_timeout),
           model_timeout(model_timeout),
+          tf_input_labels(std::move(tf_input_labels)),
+          tf_output_labels(std::move(tf_output_labels)),
+          tf_input_keys(std::move(tf_input_keys)), // Initialize new parameter
           input_after_preprocessing(input_after_preprocessing),
           output_before_postprocessing(output_before_postprocessing)
     {
@@ -159,7 +166,8 @@ private:
                            this->socket_timeout,
                            this->model_timeout,
                            tf_input_labels,
-                           tf_output_labels);
+                           tf_output_labels,
+                           tf_input_keys);
 
         // Before creating a smartsim client (SmartRedis to be exact), we need to set the appropriate env vars
 
@@ -274,9 +282,10 @@ public:
                                int model_timeout = -1,
                                const std::vector<std::string> &tf_input_labels = {},
                                const std::vector<std::string> &tf_output_labels = {},
-                               MLCouplingData<In> *input_after_preprocessing = nullptr,
+                               const std::vector<std::string>& tf_input_keys = {},
+                               MLCouplingData<In>* input_after_preprocessing = nullptr,
                                MLCouplingData<Out> *output_before_postprocessing = nullptr)
-        : MLCouplingProviderSmartsim(std::move(device), std::move(model_backend), std::move(model_path), std::string_view(), std::move(model_name), std::move(host), port, std::vector<std::string>(), std::vector<int>(), nodes, num_gpus, first_gpu, batch_size, min_batch_size, min_batch_timeout, command_timeout, socket_timeout, model_timeout, tf_input_labels, tf_output_labels, input_after_preprocessing, output_before_postprocessing) {};
+        : MLCouplingProviderSmartsim(std::move(device), std::move(model_backend), std::move(model_path), std::string_view(), std::move(model_name), std::move(host), port, std::vector<std::string>(), std::vector<int>(), nodes, num_gpus, first_gpu, batch_size, min_batch_size, min_batch_timeout, command_timeout, socket_timeout, model_timeout, tf_input_labels, tf_output_labels, tf_input_keys, input_after_preprocessing, output_before_postprocessing) {};
 
     MLCouplingProviderSmartsim(std::string device,
                                std::string model_backend,
@@ -295,9 +304,10 @@ public:
                                int model_timeout = -1,
                                const std::vector<std::string> &tf_input_labels = {},
                                const std::vector<std::string> &tf_output_labels = {},
-                               MLCouplingData<In> *input_after_preprocessing = nullptr,
+                               const std::vector<std::string>& tf_input_keys = {},
+                               MLCouplingData<In>* input_after_preprocessing = nullptr,
                                MLCouplingData<Out> *output_before_postprocessing = nullptr)
-        : MLCouplingProviderSmartsim(std::move(device), std::move(model_backend), std::string(), std::move(model), std::move(model_name), std::move(host), port, std::vector<std::string>(), std::vector<int>(), nodes, num_gpus, first_gpu, batch_size, min_batch_size, min_batch_timeout, command_timeout, socket_timeout, model_timeout, tf_input_labels, tf_output_labels, input_after_preprocessing, output_before_postprocessing) {};
+        : MLCouplingProviderSmartsim(std::move(device), std::move(model_backend), std::string(), std::move(model), std::move(model_name), std::move(host), port, std::vector<std::string>(), std::vector<int>(), nodes, num_gpus, first_gpu, batch_size, min_batch_size, min_batch_timeout, command_timeout, socket_timeout, model_timeout, tf_input_labels, tf_output_labels, tf_input_keys, input_after_preprocessing, output_before_postprocessing) {};
 
     void validate_parameter(const std::string &device,
                             const std::string &model_backend,
@@ -318,7 +328,8 @@ public:
                             int socket_timeout,
                             int model_timeout,
                             const std::vector<std::string> &tf_input_labels,
-                            const std::vector<std::string> &tf_output_labels)
+                            const std::vector<std::string>& tf_output_labels,
+                            const std::vector<std::string>& tf_input_keys)
     {
         guarantee(!model_name.empty(), "model_name must be specified");
         guarantee(!(model_path.empty() && model.empty()), "Either model_path or model must be specified");
@@ -373,99 +384,161 @@ public:
             return converted_dims;
         };
 
-        logging::debug("Write these tensors to SmartSim:");
+        size_t max_bytes = 500ULL * 1024 * 1024; // 500 MiB limit
+        size_t num_chunks = 1;
 
-        std::vector<std::string> input_tensor_names;
-        // loop over tensors
-        for (size_t tensor_index = 0; tensor_index < input_data_after_preprocessing.size(); ++tensor_index)
-        {
-            std::string input_name = "input_" + std::to_string(this->rank) + "_" + std::to_string(tensor_index);
-            // client->put_tensor(name, data, dims, type, mem_layout);
-            auto &tensor = input_data_after_preprocessing[tensor_index];
-            void *data = tensor.root();
-            MLCouplingDataType ml_type = to_ml_coupling_data_type<In>();
-            SRTensorType sr_type = to_srtensor_type(ml_type);
-            std::vector<size_t> dims = to_size_t_dims(tensor.dimensions());
-            logging::debug("  " + tensor.to_string("Tensor " + std::to_string(tensor_index)));
-
-            client->put_tensor(input_name,
-                               data,
-                               dims,
-                               sr_type,
-                               to_sr_memory_layout(tensor.layout()));
-            input_tensor_names.push_back(input_name);
-        }
-
-        logging::debug("Input tensor names sent to SmartSim:");
-        for (const auto &name : input_tensor_names)
-        {
-            logging::debug("  " + name);
-        }
-
-        std::vector<std::string> output_tensor_names;
-        for (size_t tensor_index = 0; tensor_index < output_data_before_postprocessing.size(); ++tensor_index)
-        {
-            std::string output_name = "output_" + std::to_string(this->rank) + "_" + std::to_string(tensor_index);
-            output_tensor_names.push_back(output_name);
-        }
-
-        logging::debug("Output tensor names expected from SmartSim:");
-        for (const auto &name : output_tensor_names)
-        {
-            logging::debug("  " + name);
-        }
-
-        try {
-            if (this->device == "GPU")
-            {
-                const int offset = this->rank >= 0 ? this->rank : 0;
-                client->run_model_multigpu(this->model_name, input_tensor_names, output_tensor_names, offset, this->first_gpu, this->num_gpus);
+        for (size_t i = 0; i < input_data_after_preprocessing.size(); ++i) {
+            auto &tensor = input_data_after_preprocessing[i];
+            size_t bytes = tensor.numel() * tensor.element_size();
+            if (bytes > max_bytes) {
+                size_t chunks = (bytes + max_bytes - 1) / max_bytes;
+                if (chunks > num_chunks) num_chunks = chunks;
             }
-            else
-            {
-                client->run_model(this->model_name, input_tensor_names, output_tensor_names);
+        }
+        for (size_t i = 0; i < output_data_before_postprocessing.size(); ++i) {
+            auto &tensor = output_data_before_postprocessing[i];
+            size_t bytes = tensor.numel() * tensor.element_size();
+            if (bytes > max_bytes) {
+                size_t chunks = (bytes + max_bytes - 1) / max_bytes;
+                if (chunks > num_chunks) num_chunks = chunks;
             }
-        } catch (const std::exception& ex) {
-            std::cerr << "run_model failed: " << ex.what() << std::endl;
-            throw;
         }
 
-        /*
-        void unpack_tensor(const std::string& name,
-                           void* data,
-                           const std::vector<size_t>& dims,
-                           const SRTensorType type,
-                           const SRMemoryLayout mem_layout);
-        */
-        logging::debug("Retrieve these tensors from SmartSim:");
-        for (size_t tensor_index = 0; tensor_index < output_data_before_postprocessing.size(); ++tensor_index)
-        {
-            std::string output_name = "output_" + std::to_string(this->rank) + "_" + std::to_string(tensor_index);
-            auto &tensor = output_data_before_postprocessing[tensor_index];
-            void *data = tensor.root();
-            MLCouplingDataType ml_type = to_ml_coupling_data_type<Out>();
-            SRTensorType sr_type = to_srtensor_type(ml_type);
-            SRMemoryLayout sr_layout = to_sr_memory_layout(tensor.layout());
-            std::vector<size_t> dims;
-            if (sr_layout == SRMemLayoutContiguous)
-            {
-                dims = { tensor.numel() };
+        if (num_chunks > 1) {
+            for (size_t i = 0; i < input_data_after_preprocessing.size(); ++i) {
+                auto &tensor = input_data_after_preprocessing[i];
+                std::vector<size_t> dims = to_size_t_dims(tensor.dimensions());
+                size_t dim0 = dims.empty() ? 1 : dims[0];
+                if (num_chunks > dim0) {
+                    throw std::runtime_error("Cannot chunk input tensor " + std::to_string(i) + ": single batch element size exceeds SmartSim 500 MiB limit.");
+                }
             }
-            else
-            {
-                dims = to_size_t_dims(tensor.dimensions());
+            for (size_t i = 0; i < output_data_before_postprocessing.size(); ++i) {
+                auto &tensor = output_data_before_postprocessing[i];
+                std::vector<size_t> dims = to_size_t_dims(tensor.dimensions());
+                size_t dim0 = dims.empty() ? 1 : dims[0];
+                if (num_chunks > dim0) {
+                    throw std::runtime_error("Cannot chunk output tensor " + std::to_string(i) + ": single batch element size exceeds SmartSim 500 MiB limit.");
+                }
             }
+            logging::debug("Tensor size exceeds 500 MiB limit. Splitting inference into " + std::to_string(num_chunks) + " chunks.");
+        }
+
+        for (size_t chunk_idx = 0; chunk_idx < num_chunks; ++chunk_idx) {
+            if (num_chunks > 1) logging::debug("Write these tensors to SmartSim (chunk " + std::to_string(chunk_idx+1) + "/" + std::to_string(num_chunks) + "):");
+            else logging::debug("Write these tensors to SmartSim:");
+
+            std::vector<std::string> input_tensor_names;
+            for (size_t tensor_index = 0; tensor_index < input_data_after_preprocessing.size(); ++tensor_index)
+            {
+                std::string input_name;
+                if (this->tf_input_keys.empty()) {
+                    input_name = "input_" + std::to_string(this->rank) + "_" + std::to_string(tensor_index);
+                } else {
+                    guarantee(tensor_index < this->tf_input_keys.size(), "Not enough tf_input_keys provided for multi-input model.");
+                    input_name = this->tf_input_keys[tensor_index];
+                }
+                
+                auto &tensor = input_data_after_preprocessing[tensor_index];
+                
+                if (num_chunks > 1 && !tensor.is_contiguous()) {
+                    throw std::runtime_error("Chunking of tensors > 500MiB is currently only supported for contiguous memory layouts.");
+                }
+
+                std::vector<size_t> dims = to_size_t_dims(tensor.dimensions());
+                size_t dim0 = dims.empty() ? 1 : dims[0];
+                size_t start_dim0 = (dim0 * chunk_idx) / num_chunks;
+                size_t end_dim0 = (dim0 * (chunk_idx + 1)) / num_chunks;
+                size_t cur_dim0 = end_dim0 - start_dim0;
+                if (!dims.empty()) dims[0] = cur_dim0;
+                
+                size_t offset_elements = start_dim0 * (tensor.numel() / dim0);
+                void *data = (void*)((char*)tensor.root() + offset_elements * tensor.element_size());
+
+                MLCouplingDataType ml_type = to_ml_coupling_data_type<In>();
+                SRTensorType sr_type = to_srtensor_type(ml_type);
+                logging::debug("  " + tensor.to_string("Tensor " + std::to_string(tensor_index)));
+
+                client->put_tensor(input_name, data, dims, sr_type, to_sr_memory_layout(tensor.layout()));
+                input_tensor_names.push_back(input_name);
+
+                std::cout << "DEBUG: put_tensor " << input_name << " dims=[";
+                for (size_t i = 0; i < dims.size(); ++i) std::cout << dims[i] << (i+1==dims.size()?"":",");
+                std::cout << "]" << std::endl;
+            }
+
+            logging::debug("Input tensor names sent to SmartSim:");
+            for (const auto &name : input_tensor_names) { logging::debug("  " + name); }
+
+            std::vector<std::string> output_tensor_names;
+            for (size_t tensor_index = 0; tensor_index < output_data_before_postprocessing.size(); ++tensor_index)
+            {
+                std::string output_name = "output_" + std::to_string(this->rank) + "_" + std::to_string(tensor_index);
+                output_tensor_names.push_back(output_name);
+            }
+
+            logging::debug("Output tensor names expected from SmartSim:");
+            for (const auto &name : output_tensor_names) { logging::debug("  " + name); }
+
             try {
-                client->unpack_tensor(output_name,
-                                      data,
-                                      dims,
-                                      sr_type,
-                                      sr_layout);
+                if (this->device == "GPU") {
+                    const int offset = this->rank >= 0 ? this->rank : 0;
+                    if (this->tf_input_keys.empty()) {
+                        client->run_model_multigpu(this->model_name, input_tensor_names, output_tensor_names, offset, this->first_gpu, this->num_gpus);
+                    } else {
+                        client->run_model_multigpu(this->model_name, this->tf_input_keys, output_tensor_names, offset, this->first_gpu, this->num_gpus);
+                    }
+                } else {
+                    if (this->tf_input_keys.empty()) {
+                        client->run_model(this->model_name, input_tensor_names, output_tensor_names);
+                    } else {
+                        client->run_model(this->model_name, this->tf_input_keys, output_tensor_names);
+                    }
+                }
             } catch (const std::exception& ex) {
-                std::cerr << "unpack_tensor failed for " << output_name << ": " << ex.what() << std::endl;
+                std::cerr << "run_model failed: " << ex.what() << std::endl;
                 throw;
             }
-            logging::debug("  " + tensor.to_string("Tensor " + std::to_string(tensor_index)));
+
+            logging::debug("Retrieve these tensors from SmartSim:");
+            for (size_t tensor_index = 0; tensor_index < output_data_before_postprocessing.size(); ++tensor_index)
+            {
+                std::string output_name = "output_" + std::to_string(this->rank) + "_" + std::to_string(tensor_index);
+                auto &tensor = output_data_before_postprocessing[tensor_index];
+                
+                if (num_chunks > 1 && !tensor.is_contiguous()) {
+                    throw std::runtime_error("Chunking of tensors > 500MiB is currently only supported for contiguous memory layouts.");
+                }
+
+                std::vector<size_t> full_dims = to_size_t_dims(tensor.dimensions());
+                size_t dim0 = full_dims.empty() ? 1 : full_dims[0];
+                size_t start_dim0 = (dim0 * chunk_idx) / num_chunks;
+                size_t end_dim0 = (dim0 * (chunk_idx + 1)) / num_chunks;
+                size_t cur_dim0 = end_dim0 - start_dim0;
+                
+                std::vector<size_t> dims = full_dims;
+                if (!dims.empty()) dims[0] = cur_dim0;
+
+                size_t offset_elements = start_dim0 * (tensor.numel() / dim0);
+                void *data = (void*)((char*)tensor.root() + offset_elements * tensor.element_size());
+
+                MLCouplingDataType ml_type = to_ml_coupling_data_type<Out>();
+                SRTensorType sr_type = to_srtensor_type(ml_type);
+                SRMemoryLayout sr_layout = to_sr_memory_layout(tensor.layout());
+                
+                if (sr_layout == SRMemLayoutContiguous) {
+                    size_t cur_numel = cur_dim0 * (tensor.numel() / dim0);
+                    dims = { cur_numel };
+                }
+
+                try {
+                    client->unpack_tensor(output_name, data, dims, sr_type, sr_layout);
+                } catch (const std::exception& ex) {
+                    std::cerr << "unpack_tensor failed for " << output_name << ": " << ex.what() << std::endl;
+                    throw;
+                }
+                logging::debug("  " + tensor.to_string("Tensor " + std::to_string(tensor_index)));
+            }
         }
 
 #endif
