@@ -10,6 +10,8 @@
 #include "sr_enums.h"
 #endif
 
+
+
 typedef enum
 {
     MLCouplingDataTypeInvalid = 0, // Invalid or uninitialized tensor type
@@ -22,6 +24,12 @@ typedef enum
     MLCouplingDataTypeUint8 = 7,   // 8-bit unsigned integer tensor type
     MLCouplingDataTypeUint16 = 8   // 16-bit unsigned integer tensor type
 } MLCouplingDataType;
+
+typedef enum
+{
+    MLCouplingCAPIDataTypeDouble = 1, // Double-precision floating point tensor type
+    MLCouplingCAPIDataTypeFloat = 2,  // Floating point tensor type
+} MLCouplingCAPIDataType; // To prevent excessive compile times, we limit the types that are exposed in the C API, as due to the template-based design, we have to otherwise create n*n combinations of input/output types, where n is the number of supported types. So going from 8 to 2 types reduces the combinations from 64 to 4.
 
 inline constexpr const char *to_string(MLCouplingDataType type)
 {
@@ -73,6 +81,28 @@ inline MLCouplingSupportedTypes ml_coupling_data_type_to_supported_type(MLCoupli
 inline MLCouplingSupportedTypes get_type_tag(int selection)
 {
     return ml_coupling_data_type_to_supported_type(static_cast<MLCouplingDataType>(selection));
+}
+
+using MLCouplingCAPISupportedTypes = std::variant<
+    TypeTag<double>,
+    TypeTag<float>>;
+
+inline MLCouplingCAPISupportedTypes ml_coupling_capi_data_type_to_supported_type(MLCouplingCAPIDataType type)
+{
+    switch (type)
+    {
+    case MLCouplingCAPIDataTypeDouble:
+        return TypeTag<double>{};
+    case MLCouplingCAPIDataTypeFloat:
+        return TypeTag<float>{};
+    default:
+        throw std::invalid_argument("Invalid MLCouplingCAPIDataType");
+    }
+}
+
+inline MLCouplingCAPISupportedTypes get_capi_type_tag(int selection)
+{
+    return ml_coupling_capi_data_type_to_supported_type(static_cast<MLCouplingCAPIDataType>(selection));
 }
 
 // Define a mapping from C++ types to MLCouplingDataType

@@ -17,8 +17,8 @@ void* create_provider(const char* name, int in_selection, int out_selection, cha
     }
 
     // 1. Convert integers to compile-time tags
-    MLCouplingSupportedTypes in_tag = get_type_tag(in_selection);
-    MLCouplingSupportedTypes out_tag = get_type_tag(out_selection);
+    MLCouplingCAPISupportedTypes in_tag = get_capi_type_tag(in_selection);
+    MLCouplingCAPISupportedTypes out_tag = get_capi_type_tag(out_selection);
 
     // 2. Visit BOTH tags simultaneously
     return std::visit([&](auto in_t, auto out_t) -> void* {
