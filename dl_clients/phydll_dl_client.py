@@ -33,14 +33,16 @@ def receive_p2p_metadata(comm, source_rank):
     #     int32_t model_len;       // 8
     #     int32_t backend_len;     // 12
     #     int32_t device_len;      // 16
-    #     int32_t num_inputs;      // 20
-    #     int32_t num_outputs;     // 24
-    #     // 4 bytes padding for 8-byte alignment of next field
+    #     int32_t batch_size;      // 20
+    #     int32_t num_inputs;      // 24
+    #     int32_t num_outputs;     // 28
     #     int64_t total_input;     // 32
     #     int64_t total_output;    // 40
     #     int32_t dtype;           // 48
     #     int32_t layout;          // 52
-    # } (Total: 56 bytes)
+    #     int32_t num_input_dims;  // 56
+    #     int32_t num_output_dims; // 60
+    # } (Total: 64 bytes)
     
     header_size = 64
     header_buf = bytearray(header_size)
@@ -48,7 +50,7 @@ def receive_p2p_metadata(comm, source_rank):
     # Tag is source_rank to match C++ provider
     comm.Recv([header_buf, MPI.BYTE], source=source_rank, tag=source_rank, status=status)
     
-    magic, version, m_len, b_len, d_len, n_in, n_out, t_in, t_out, dtype, layout, n_in_dims, n_out_dims = struct.unpack("=7i 4x 2q 4i", header_buf)
+    magic, version, m_len, b_len, d_len, batch_size_arg, n_in, n_out, t_in, t_out, dtype, layout, n_in_dims, n_out_dims = struct.unpack("=8i 2q 4i", header_buf)
     
     if magic != 0x4D4C434D or version != 1:
         return {'valid': False}
@@ -104,6 +106,7 @@ def receive_p2p_metadata(comm, source_rank):
         'model_path': model_path,
         'backend': backend,
         'device': device,
+        'batch_size': batch_size_arg,
         'total_input': t_in,
         'total_output': t_out,
         'in_shapes': in_shapes,

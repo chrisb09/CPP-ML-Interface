@@ -41,11 +41,13 @@ public:
     MLCouplingProviderPhydll(std::string model_file,
                              std::string backend = "TORCH",
                              std::string device = "GPU",
+                             int batch_size = 0,
                              MLCouplingData<In> *input_after_preprocessing = nullptr,
                              MLCouplingData<Out> *output_before_postprocessing = nullptr)
                 : model_file(std::move(model_file)),
                     backend(std::move(backend)),
                     device(std::move(device)),
+                    batch_size(batch_size),
                     input_after_preprocessing(input_after_preprocessing),
                     output_before_postprocessing(output_before_postprocessing)
     {
@@ -129,6 +131,7 @@ private:
     std::string model_file;
     std::string backend;
     std::string device;
+    int batch_size = 0;
 
     int field_size_ = 0;
     bool initialized_ = false;
@@ -152,6 +155,7 @@ private:
         int32_t model_len = 0;
         int32_t backend_len = 0;
         int32_t device_len = 0;
+        int32_t batch_size = 0;
         int32_t num_inputs = 0;
         int32_t num_outputs = 0;
         int64_t total_input = 0;
@@ -216,6 +220,7 @@ private:
         header.model_len = static_cast<int32_t>(model_file.size());
         header.backend_len = static_cast<int32_t>(backend.size());
         header.device_len = static_cast<int32_t>(device.size());
+        header.batch_size = static_cast<int32_t>(batch_size);
         header.num_inputs = static_cast<int32_t>(input_sizes_.size());
         header.num_outputs = static_cast<int32_t>(output_sizes_.size());
         header.total_input = sum_sizes(input_sizes_);

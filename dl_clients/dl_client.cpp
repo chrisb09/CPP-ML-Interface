@@ -28,6 +28,7 @@ struct BcastMetaHeader
     int32_t model_len = 0;
     int32_t backend_len = 0;
     int32_t device_len = 0;
+    int32_t batch_size = 0;
     int32_t num_inputs = 0;
     int32_t num_outputs = 0;
     int64_t total_input = 0;
@@ -44,6 +45,7 @@ struct BcastMeta
     std::string model_path;
     std::string backend;
     std::string device;
+    int batch_size = 0;
     std::vector<std::vector<int64_t>> input_shapes;
     std::vector<std::vector<int64_t>> output_shapes;
     int64_t total_input = 0;
@@ -81,6 +83,7 @@ BcastMeta receive_p2p_metadata(int source_rank)
     meta.valid = true;
     meta.total_input = header.total_input;
     meta.total_output = header.total_output;
+    meta.batch_size = header.batch_size;
 
     size_t offset = 0;
     if (header.model_len > 0)
