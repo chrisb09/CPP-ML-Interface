@@ -298,18 +298,24 @@ int main(int argc, char **argv) {
         if (!model_path.empty()) {
             std::vector<float> input(static_cast<size_t>(total_input_size));
             int ndest = phydll_get_ndest();
-            const long long batch_size = std::max(1LL, static_cast<long long>(ndest));
-            const long long input_per_rank_total = runtime.field_size() / batch_size;
+            long long client_batch_size = 1;
+            if (!final_meta.input_shapes.empty() && !final_meta.input_shapes.front().empty()) {
+                client_batch_size = final_meta.input_shapes.front().front();
+            }
+            const long long batch_size = std::max(1LL, static_cast<long long>(ndest) * client_batch_size);
+            const long long field_size_per_rank = runtime.field_size() / std::max(1, ndest);
             const long long input_per_rank_used = static_cast<long long>(total_input_size) / batch_size;
-            const long long output_per_rank = runtime.field_size() / batch_size;
 
-            std::fprintf(stderr, "[PHYDLL:DL] Frame %llu extracting data: total_input_size=%lld, batch=%lld, total/rank=%lld, used/rank=%lld\n",
-                         (unsigned long long)frame_id, (long long)total_input_size, batch_size, input_per_rank_total, input_per_rank_used);
+            std::fprintf(stderr, "[PHYDLL:DL] Frame %llu extracting data: total_input_size=%lld, batch=%lld, client_batch=%lld, field/rank=%lld, used/rank=%lld\n",
+                         (unsigned long long)frame_id, (long long)total_input_size, batch_size, client_batch_size, field_size_per_rank, input_per_rank_used);
             std::fflush(stderr);
 
             for (long long b = 0; b < batch_size; ++b) {
+                long long client_id = b / client_batch_size;
+                long long sample_id = b % client_batch_size;
+                long long src_start = client_id * field_size_per_rank + sample_id * input_per_rank_used;
                 for (long long j = 0; j < input_per_rank_used; ++j) {
-                    input[b * input_per_rank_used + j] = static_cast<float>(frame.data[b * input_per_rank_total + j]);
+                    input[b * input_per_rank_used + j] = static_cast<float>(frame.data[src_start + j]);
                 }
             }
 
@@ -319,8 +325,7 @@ int main(int argc, char **argv) {
             std::vector<int64_t> actual_shape = {batch_size};
             if (!final_meta.input_shapes.empty()) {
                 const auto& shape = final_meta.input_shapes.front();
-                // shape contains the dimensions of the first input tensor.
-                // It might include a batch dimension of 1 from the PHY side, which we replace with batch_size.
+                // It might include a batch dimension from the PHY side, which we replace with batch_size.
                 // Assuming shape[0] is the batch dimension.
                 if (shape.size() > 1) {
                     for (size_t d = 1; d < shape.size(); ++d) {
@@ -337,15 +342,25 @@ int main(int argc, char **argv) {
             input_tensor = input_tensor.view(actual_shape);
             input_tensor = input_tensor.to(torch_device);
             try {
-                auto output_tensor = model.forward({input_tensor}).toTensor();
+                torch::NoGradGuard no_grad;
+                long long max_chunk_size = final_meta.batch_size > 0 ? static_cast<long long>(final_meta.batch_size) : batch_size;
+                std::vector<torch::Tensor> outputs;
+                for (long long chunk_idx = 0; chunk_idx < batch_size; chunk_idx += max_chunk_size) {
+                    long long chunk_size = std::min(max_chunk_size, batch_size - chunk_idx);
+                    auto chunk_tensor = input_tensor.slice(0, chunk_idx, chunk_idx + chunk_size);
+                    outputs.push_back(model.forward({chunk_tensor}).toTensor());
+                }
+                auto output_tensor = torch::cat(outputs, 0);
                 output_tensor = output_tensor.to(torch::kCPU).contiguous().view({-1});
 
                 auto output_ptr = output_tensor.data_ptr<float>();
                 const long long outputs_per_rank_used = static_cast<long long>(total_output_size) / batch_size;
-                const long long output_stride = static_cast<long long>(runtime.field_size()) / batch_size;
                 for (long long b = 0; b < batch_size; ++b) {
+                    long long client_id = b / client_batch_size;
+                    long long sample_id = b % client_batch_size;
+                    long long dest_start = client_id * field_size_per_rank + sample_id * outputs_per_rank_used;
                     for (long long j = 0; j < outputs_per_rank_used; ++j) {
-                        output[b * output_stride + j] = static_cast<double>(output_ptr[b * outputs_per_rank_used + j]);
+                        output[dest_start + j] = static_cast<double>(output_ptr[b * outputs_per_rank_used + j]);
                     }
                 }
                 used_model = true;

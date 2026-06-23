@@ -43,6 +43,7 @@ def receive_p2p_metadata(comm, source_rank):
     #     int32_t num_input_dims;  // 56
     #     int32_t num_output_dims; // 60
     # } (Total: 64 bytes)
+    # } (Total: 56 bytes)
     
     header_size = 64
     header_buf = bytearray(header_size)
@@ -221,17 +222,23 @@ def main():
         used_model = False
         
         if model_loaded and model is not None:
-            batch_size = max(1, ndest)
-            input_per_rank_total = field_size // batch_size
+            client_batch_size = 1
+            if final_meta and final_meta.get('in_shapes') and len(final_meta['in_shapes']) > 0 and len(final_meta['in_shapes'][0]) > 0:
+                client_batch_size = final_meta['in_shapes'][0][0]
+            
+            batch_size = max(1, ndest * client_batch_size)
+            field_size_per_rank = field_size // max(1, ndest)
             input_per_rank_used = total_input_size // batch_size
-            output_stride = field_size // batch_size
             outputs_per_rank_used = total_output_size // batch_size
             
             # Pack batch
             input_flat = np.zeros(total_input_size, dtype=np.float32)
             for b in range(batch_size):
+                client_id = b // client_batch_size
+                sample_id = b % client_batch_size
+                src_start = client_id * field_size_per_rank + sample_id * input_per_rank_used
                 input_flat[b * input_per_rank_used : (b+1) * input_per_rank_used] = \
-                    combined_data[b * input_per_rank_total : b * input_per_rank_total + input_per_rank_used]
+                    combined_data[src_start : src_start + input_per_rank_used]
             
             actual_shape = [batch_size]
             if final_meta and final_meta.get('in_shapes'):
@@ -249,13 +256,24 @@ def main():
             
             try:
                 with torch.no_grad():
-                    output_tensor = model(input_tensor)
+                    max_chunk_size = final_meta.get('batch_size', 0)
+                    if max_chunk_size <= 0:
+                        max_chunk_size = batch_size
+                    outputs = []
+                    for chunk_idx in range(0, batch_size, max_chunk_size):
+                        end_idx = min(chunk_idx + max_chunk_size, batch_size)
+                        chunk_tensor = input_tensor[chunk_idx:end_idx]
+                        outputs.append(model(chunk_tensor))
+                    output_tensor = torch.cat(outputs, dim=0)
                     # Result is [batch_size, outputs_per_rank_used]
                     output_np = output_tensor.cpu().contiguous().numpy().flatten()
                     
                 # Scatter back to output buffer
                 for b in range(batch_size):
-                    output[b * output_stride : b * output_stride + outputs_per_rank_used] = \
+                    client_id = b // client_batch_size
+                    sample_id = b % client_batch_size
+                    dest_start = client_id * field_size_per_rank + sample_id * outputs_per_rank_used
+                    output[dest_start : dest_start + outputs_per_rank_used] = \
                         output_np[b * outputs_per_rank_used : (b+1) * outputs_per_rank_used]
                 used_model = True
             except Exception as e:
