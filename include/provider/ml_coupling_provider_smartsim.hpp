@@ -206,22 +206,26 @@ private:
 
         client = new SmartRedis::Client("solver_" + std::to_string(world_rank));
 
-        if (this->rank == 0)
+        bool is_multi = (std::getenv("MLCOUPLING_MULTI_MODEL") != nullptr);
+        if (this->rank == 0 || is_multi)
         {
-            logging::debug("SmartSim Coupling Provider initialized with the following parameters:");
-            logging::debug("Device: " + this->device);
-            logging::debug("Model Backend: " + this->model_backend);
-            logging::debug("SmartSim DB Nodes: " + std::to_string(resolved_nodes));
-            logging::debug("Number of GPUs: " + std::to_string(this->num_gpus));
-            logging::debug("First GPU: " + std::to_string(this->first_gpu));
-            logging::debug("Batch Size: " + std::to_string(this->batch_size));
-            logging::debug("Min Batch Size: " + std::to_string(this->min_batch_size));
-            logging::debug("Min Batch Timeout: " + std::to_string(this->min_batch_timeout) + " ms");
-            if (this->command_timeout >= 0) logging::debug("Command Timeout: " + std::to_string(this->command_timeout) + " s");
-            if (this->socket_timeout >= 0) logging::debug("Socket Timeout: " + std::to_string(this->socket_timeout) + " s");
-            if (this->model_timeout >= 0) logging::debug("Model Timeout: " + std::to_string(this->model_timeout) + " ms");
-            if (!ssdb.empty()) {
-                logging::debug("SSDB: " + ssdb);
+            if (this->rank == 0)
+            {
+                logging::debug("SmartSim Coupling Provider initialized with the following parameters:");
+                logging::debug("Device: " + this->device);
+                logging::debug("Model Backend: " + this->model_backend);
+                logging::debug("SmartSim DB Nodes: " + std::to_string(resolved_nodes));
+                logging::debug("Number of GPUs: " + std::to_string(this->num_gpus));
+                logging::debug("First GPU: " + std::to_string(this->first_gpu));
+                logging::debug("Batch Size: " + std::to_string(this->batch_size));
+                logging::debug("Min Batch Size: " + std::to_string(this->min_batch_size));
+                logging::debug("Min Batch Timeout: " + std::to_string(this->min_batch_timeout) + " ms");
+                if (this->command_timeout >= 0) logging::debug("Command Timeout: " + std::to_string(this->command_timeout) + " s");
+                if (this->socket_timeout >= 0) logging::debug("Socket Timeout: " + std::to_string(this->socket_timeout) + " s");
+                if (this->model_timeout >= 0) logging::debug("Model Timeout: " + std::to_string(this->model_timeout) + " ms");
+                if (!ssdb.empty()) {
+                    logging::debug("SSDB: " + ssdb);
+                }
             }
 
             // Load the model into the database
