@@ -68,7 +68,9 @@ cmake -S . -B build \
 	-DTEST_PYTHON_EXECUTABLE="${USER_PYTHON}" || { echo "CMake configuration failed"; exit 1; }
 
 # build (generator-agnostic; passes -j to underlying tool)
-cmake --build build -- -j8 || { echo "Build failed"; exit 1; }
+build_jobs="${SLURM_CPUS_ON_NODE:-8}"
+echo "Building with -j${build_jobs} parallel jobs..."
+cmake --build build -j ${build_jobs} || { echo "Build failed"; exit 1; }
 
 # run tests if requested
 if [ "$mode" = "test" ]; then
