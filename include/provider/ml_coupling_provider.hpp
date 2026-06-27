@@ -3,6 +3,8 @@
 #include <map>
 #include <string>
 #include <vector>
+#include <cstdlib>
+#include <sstream>
 #include <stdexcept>
 #include "../data/ml_coupling_data.hpp"
 
@@ -99,11 +101,42 @@ public:
         (void)data;
     }
 
+    // Simple FNV-1a 64-bit hash for data comparison
+    static unsigned long long fnv1a(const void* data, size_t bytes) {
+        unsigned long long h = 14695981039346656037ULL;
+        const unsigned char* p = static_cast<const unsigned char*>(data);
+        for (size_t i = 0; i < bytes; ++i) {
+            h ^= p[i];
+            h *= 1099511628211ULL;
+        }
+        return h;
+    }
+
+    static void debug_log_merged(const std::string& label, MLCouplingData<In>& data, int rank) {
+        if (!std::getenv("DEBUG_PROVIDER_INPUT")) return;
+        for (size_t ti = 0; ti < data.size(); ++ti) {
+            auto &t = data[ti];
+            int n = static_cast<int>(t.numel());
+            unsigned long long h = fnv1a(t.root(), n * sizeof(In));
+            double sum = 0;
+            float first = 0, last = 0;
+            if constexpr (std::is_same_v<In, float>) {
+                const float* raw = static_cast<const float*>(t.root());
+                first = raw[0]; last = raw[n-1];
+                for (int i = 0; i < n; ++i) sum += raw[i];
+            }
+            std::cerr << label << " rank=" << rank << " tensor=" << ti << " shape=";
+            for (int d : t.dimensions()) std::cerr << d << " ";
+            std::cerr << " numel=" << n << " sum=" << sum << " fnv1a=" << h << " first=" << first << " last=" << last << std::endl;
+        }
+    }
+
     virtual void flex_ordered_inference(MLCouplingData<Out> *fallback_output = nullptr)
     {
         if (staged_inputs.size() > 0 && fallback_output != nullptr)
         {
             merge_data(staged_inputs, last_merged_input);
+            debug_log_merged("DEBUG MERGED INPUT", last_merged_input, this->rank);
             static_inference(&last_merged_input, fallback_output);
             staged_inputs.clear();
             staged_targets.clear();
@@ -155,6 +188,7 @@ public:
         if (in_keys.size() > 0 && fallback_output != nullptr)
         {
             merge_data(in_keys, keyed_inputs, last_merged_input);
+            debug_log_merged("DEBUG MERGED INPUT", last_merged_input, this->rank);
             static_inference(&last_merged_input, fallback_output);
         }
         else
@@ -179,6 +213,49 @@ public:
 
 
 protected:
+    // Defensive guard for the flex-fallback merge path. When the provider is
+    // configured with coupling_type=FLEXIBLE, last_merged_input starts empty and
+    // the merge allocates its own (owned) buffer, which the service is then
+    // lazily bound to. This guard exists to catch the misuse case where a user
+    // configures coupling_type=STATIC (passing a user-managed external input
+    // buffer to the constructor) but then *also* calls the flex API
+    // (ordered()/keyed()). In that scenario the merge would write into the
+    // user's external buffer; if that buffer is not sized for the post-merge
+    // layout, silently reallocating would disconnect the service from the data
+    // (the anomaly we fixed). We throw loudly instead. Owned buffers (from a
+    // previous merge) may always be replaced.
+    template <typename T>
+    static void guarantee_fallback_buffer_fit(const MLCouplingData<T> &existing_data,
+                                              size_t t_idx,
+                                              const std::vector<int> &new_dims)
+    {
+        if (existing_data.size() <= t_idx)
+            return; // no buffer present at this tensor index -> merge allocates freely
+        const auto &existing_tensor = existing_data[t_idx];
+        if (existing_tensor.ownership() != MLCouplingOwnershipExternal)
+            return; // merge-allocated buffer from a previous step: may be replaced
+        if (existing_tensor.dimensions() == new_dims && existing_tensor.is_contiguous())
+            return; // fits -> will be reused by the merge
+
+        std::ostringstream existing_shape, expected_shape;
+        for (size_t i = 0; i < existing_tensor.dimensions().size(); ++i)
+            existing_shape << (i ? "x" : "") << existing_tensor.dimensions()[i];
+        if (existing_tensor.dimensions().empty()) existing_shape << "scalar";
+        for (size_t i = 0; i < new_dims.size(); ++i)
+            expected_shape << (i ? "x" : "") << new_dims[i];
+        if (new_dims.empty()) expected_shape << "scalar";
+
+        throw std::runtime_error(
+            "MLCoupling flex-fallback merge: the user-provided (static-coupling) "
+            "input buffer has shape [" + existing_shape.str() + "] but merging the "
+            "staged inputs requires shape [" + expected_shape.str() + "]. "
+            "When using the flexible API with a static-fallback buffer, you must size "
+            "that buffer for the *post-merge* layout (e.g. [batch, num_inputs, ...] "
+            "for STACK merging), not for a single staged input. Either provide a "
+            "correctly-sized buffer, change the merge strategy, or use the flexible "
+            "API with coupling_type=FLEXIBLE (recommended).");
+    }
+
     template <typename T>
     MLCouplingData<T> stack_data(const std::vector<MLCouplingData<T>> &data_list, MLCouplingData<T> &existing_data)
     {
@@ -220,6 +297,8 @@ protected:
             size_t total_numel = static_cast<size_t>(B) * m * slice_numel;
             T* buffer = nullptr;
             bool reuse_buffer = false;
+
+            guarantee_fallback_buffer_fit(existing_data, t_idx, new_dims);
 
             if (existing_data.size() > t_idx && existing_data[t_idx].dimensions() == new_dims && existing_data[t_idx].is_contiguous()) {
                 buffer = static_cast<T*>(existing_data[t_idx].root());
@@ -278,6 +357,7 @@ protected:
                 
                 T* buffer = nullptr;
                 bool reuse_buffer = false;
+                guarantee_fallback_buffer_fit(existing_data, t_idx, dims);
                 if (existing_data.size() > t_idx && existing_data[t_idx].dimensions() == dims && existing_data[t_idx].is_contiguous()) {
                     buffer = static_cast<T*>(existing_data[t_idx].root());
                     reuse_buffer = true;
@@ -354,6 +434,7 @@ protected:
 
             T* buffer = nullptr;
             bool reuse_buffer = false;
+            guarantee_fallback_buffer_fit(existing_data, t_idx, new_dims);
             if (existing_data.size() > t_idx &&
                 existing_data[t_idx].dimensions() == new_dims &&
                 existing_data[t_idx].is_contiguous()) {

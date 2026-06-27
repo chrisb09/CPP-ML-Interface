@@ -428,6 +428,27 @@ public:
             logging::debug("Tensor size exceeds 500 MiB limit. Splitting inference into " + std::to_string(num_chunks) + " chunks.");
         }
 
+        if (std::getenv("DEBUG_PROVIDER_INPUT")) {
+            for (size_t ti = 0; ti < input_data_after_preprocessing.size(); ++ti) {
+                auto &t = input_data_after_preprocessing[ti];
+                int n = static_cast<int>(t.numel());
+                double sum = 0, ssq = 0;
+                float first = 0, last = 0;
+                if constexpr (std::is_same_v<In, float>) {
+                    const float* raw = static_cast<const float*>(t.root());
+                    first = raw[0]; last = raw[n-1];
+                    for (int i = 0; i < n; ++i) { sum += raw[i]; ssq += raw[i]*raw[i]; }
+                } else if constexpr (std::is_same_v<In, double>) {
+                    const double* raw = static_cast<const double*>(t.root());
+                    first = raw[0]; last = raw[n-1];
+                    for (int i = 0; i < n; ++i) { sum += raw[i]; ssq += raw[i]*raw[i]; }
+                }
+                std::cerr << "DEBUG SMARTSIM INPUT rank=" << this->rank << " tensor=" << ti << " shape=";
+                for (int d : t.dimensions()) std::cerr << d << " ";
+                std::cerr << " numel=" << n << " sum=" << sum << " sumSq=" << ssq << " first=" << first << " last=" << last << std::endl;
+            }
+        }
+
         for (size_t chunk_idx = 0; chunk_idx < num_chunks; ++chunk_idx) {
             if (num_chunks > 1) logging::debug("Write these tensors to SmartSim (chunk " + std::to_string(chunk_idx+1) + "/" + std::to_string(num_chunks) + "):");
             else logging::debug("Write these tensors to SmartSim:");

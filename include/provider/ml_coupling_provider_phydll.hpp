@@ -5,6 +5,7 @@
 #include "../data/ml_coupling_memory_layout.hpp"
 
 #include <algorithm>
+#include <cstdlib>
 #include <cstring>
 #include <iostream>
 #include <numeric>
@@ -83,6 +84,28 @@ public:
         initialize_if_needed();
 
         prepare_data_buffer();
+
+        if (std::getenv("DEBUG_PROVIDER_INPUT")) {
+            auto &in = *this->input_after_preprocessing;
+            for (size_t ti = 0; ti < in.size(); ++ti) {
+                auto &t = in[ti];
+                int n = static_cast<int>(t.numel());
+                double sum = 0, ssq = 0;
+                float first = 0, last = 0;
+                if constexpr (std::is_same_v<In, float>) {
+                    const float* raw = static_cast<const float*>(t.root());
+                    first = raw[0]; last = raw[n-1];
+                    for (int i = 0; i < n; ++i) { sum += raw[i]; ssq += raw[i]*raw[i]; }
+                } else if constexpr (std::is_same_v<In, double>) {
+                    const double* raw = static_cast<const double*>(t.root());
+                    first = raw[0]; last = raw[n-1];
+                    for (int i = 0; i < n; ++i) { sum += raw[i]; ssq += raw[i]*raw[i]; }
+                }
+                std::cerr << "DEBUG PHYDLL INPUT rank=" << this->rank << " tensor=" << ti << " shape=";
+                for (int d : t.dimensions()) std::cerr << d << " ";
+                std::cerr << " numel=" << n << " sum=" << sum << " sumSq=" << ssq << " first=" << first << " last=" << last << std::endl;
+            }
+        }
 
         double *data_ptr = data_buffer_.data();
         char data_label[] = "PHY-DATA";
