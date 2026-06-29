@@ -131,7 +131,7 @@ The library includes optional **manual Score-P instrumentation** that can be ena
 
 ### Prerequisites
 
-- **Score-P 8.4** (built against `gompi/2022a`: GCC 11.3 + OpenMPI 4.1.4)
+- **Score-P 8.4** (built against `gompi/2022a`: GCC 11.3 + OpenMPI 4.1.4), module name: `Score-P/8.4`
 - **PAPI 7.0.0** (optional, for hardware counter metrics)
 
 The cluster environment script [set_env_claix23_cuda12.4.sh](set_env_claix23_cuda12.4.sh) loads these modules automatically when `USE_SCOREP=1` is exported before sourcing it:
