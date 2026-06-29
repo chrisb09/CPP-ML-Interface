@@ -125,6 +125,73 @@ target_include_directories(cpp_ml_interface_executable PRIVATE "${CMAKE_CURRENT_
 
 An actually working example project can be found in the [`module_test`](https://github.com/chrisb09/smartsim_playground/tree/master/module_test) directory of the `smartsim_playground` repository, which includes a custom provider and behavior, and demonstrates how to set up the CMakeLists.txt file to generate the merged registry and use the library in a project with custom subclasses.
 
+## Score-P Profiling Instrumentation
+
+The library includes optional **manual Score-P instrumentation** that can be enabled at build time. When active, it produces CUBE4 profiles (`.cubex` files) viewable in `cube4` or `Vampir`, giving a per-phase breakdown of the ML coupling overhead.
+
+### Prerequisites
+
+- **Score-P 8.4** (built against `gompi/2022a`: GCC 11.3 + OpenMPI 4.1.4)
+- **PAPI 7.0.0** (optional, for hardware counter metrics)
+
+The cluster environment script [set_env_claix23_cuda12.4.sh](set_env_claix23_cuda12.4.sh) loads these modules automatically when `USE_SCOREP=1` is exported before sourcing it:
+
+```bash
+export USE_SCOREP=1
+source set_env_claix23_cuda12.4.sh
+```
+
+> **Note:** Do not set `SCOREP_METRIC_PAPI` to hardware counter events (e.g. `PAPI_TOT_INS`) on standard compute nodes — `perf_event_paranoid` restrictions will cause a fatal PAPI initialization crash. Keep it empty:
+> ```bash
+> export SCOREP_METRIC_PAPI=""
+> ```
+
+### Enabling in CMake
+
+Pass `-DWITH_SCOREP=ON` to the CMake configure step. This activates the `USE_SCOREP` compile definition throughout the library and switches the compiler to the `scorep-mpicxx` wrapper:
+
+```bash
+cmake -B build -DWITH_SCOREP=ON
+cmake --build build
+```
+
+Or via the build script:
+
+```bash
+USE_SCOREP=1 ./build.sh
+```
+
+### Instrumented Regions
+
+When built with `WITH_SCOREP=ON`, the following `SCOREP_USER_REGION` regions are available in the profiles:
+
+| Region | Location | Description |
+|--------|----------|-------------|
+| `cppml_prepare_input` | `ml_coupling.hpp` | Input data preparation before inference |
+| `cppml_static_inference` | `ml_coupling.hpp` | Provider dispatch + inference call |
+| `cppml_finalize_output` | `ml_coupling.hpp` | Output copy after inference |
+| `smartsim_put_tensor` | SmartSim provider | Per-tensor `put_tensor` call to the Redis DB |
+| `smartsim_run_model` | SmartSim provider | `run_model` call to the Redis DB |
+| `smartsim_unpack_tensor` | SmartSim provider | Per-tensor `unpack_tensor` from the Redis DB |
+| `phydll_prepack` | PhyDLL provider | Float→double cast + buffer preparation |
+| `phydll_send` | PhyDLL provider | `phydll_set_field` + `phydll_send` |
+| `phydll_recv` | PhyDLL provider | `phydll_recv` + `phydll_get_field` loop |
+| `phydll_unpack` | PhyDLL provider | Double→float cast + output unpack |
+| `aix_inference` | AIxelerator provider | Wraps the AIxeleratorService `inference()` call |
+
+### Enabling in a Downstream Project
+
+If your project uses `add_subdirectory` to consume this library, propagate the flag:
+
+```cmake
+set(WITH_SCOREP ON CACHE BOOL "Enable Score-P instrumentation" FORCE)
+add_subdirectory("${CPP_MODULE_DIR}" "${CMAKE_CURRENT_BINARY_DIR}/cpp-ml-interface-build")
+```
+
+This ensures the library's compile definitions and Score-P wrapper flags are applied consistently across your project and the CPP-ML-Interface build.
+
+---
+
 ## CPU Inference Strategies & Threading
 
 The different providers supported by this interface employ varying strategies for CPU inference, which impacts how you should allocate resources in your job scripts.
