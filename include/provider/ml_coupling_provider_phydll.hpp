@@ -23,6 +23,10 @@
 #include <mpi.h>
 #endif
 
+#ifdef USE_SCOREP
+#include <scorep/SCOREP_User.h>
+#endif
+
 #ifdef WITH_PHYDLL
 extern "C"
 {
@@ -83,7 +87,14 @@ public:
         this->output_before_postprocessing = output_before_postprocessing;
         initialize_if_needed();
 
+#ifdef USE_SCOREP
+        SCOREP_USER_REGION_DEFINE(handle_phydll_prepack)
+        SCOREP_USER_REGION_BEGIN(handle_phydll_prepack, "phydll_prepack", SCOREP_USER_REGION_TYPE_COMMON)
+#endif
         prepare_data_buffer();
+#ifdef USE_SCOREP
+        SCOREP_USER_REGION_END(handle_phydll_prepack)
+#endif
 
         if (std::getenv("DEBUG_PROVIDER_INPUT")) {
             auto &in = *this->input_after_preprocessing;
@@ -107,11 +118,31 @@ public:
             }
         }
 
+#ifdef USE_SCOREP
+        SCOREP_USER_METRIC_LOCAL(bytes_sent_logical);
+        SCOREP_USER_METRIC_INIT(bytes_sent_logical, "bytes_sent_logical", "bytes", SCOREP_USER_METRIC_TYPE_UINT64, SCOREP_USER_METRIC_CONTEXT_CALLPATH);
+        SCOREP_USER_METRIC_LOCAL(bytes_sent_actual);
+        SCOREP_USER_METRIC_INIT(bytes_sent_actual, "bytes_sent_actual", "bytes", SCOREP_USER_METRIC_TYPE_UINT64, SCOREP_USER_METRIC_CONTEXT_CALLPATH);
+        SCOREP_USER_METRIC_UINT64(bytes_sent_logical, sum_sizes(input_sizes_) * sizeof(float));
+        SCOREP_USER_METRIC_UINT64(bytes_sent_actual, sum_sizes(input_sizes_) * sizeof(double));
+        SCOREP_USER_REGION_DEFINE(handle_phydll_send)
+        SCOREP_USER_REGION_BEGIN(handle_phydll_send, "phydll_send", SCOREP_USER_REGION_TYPE_COMMON)
+#endif
         double *data_ptr = data_buffer_.data();
         char data_label[] = "PHY-DATA";
 
         phydll_set_field(&data_ptr, data_label);
         phydll_send();
+#ifdef USE_SCOREP
+        SCOREP_USER_REGION_END(handle_phydll_send)
+
+        SCOREP_USER_METRIC_LOCAL(bytes_recv_logical);
+        SCOREP_USER_METRIC_INIT(bytes_recv_logical, "bytes_recv_logical", "bytes", SCOREP_USER_METRIC_TYPE_UINT64, SCOREP_USER_METRIC_CONTEXT_CALLPATH);
+        SCOREP_USER_METRIC_LOCAL(bytes_recv_actual);
+        SCOREP_USER_METRIC_INIT(bytes_recv_actual, "bytes_recv_actual", "bytes", SCOREP_USER_METRIC_TYPE_UINT64, SCOREP_USER_METRIC_CONTEXT_CALLPATH);
+        SCOREP_USER_REGION_DEFINE(handle_phydll_recv)
+        SCOREP_USER_REGION_BEGIN(handle_phydll_recv, "phydll_recv", SCOREP_USER_REGION_TYPE_COMMON)
+#endif
 
         phydll_recv();
 
@@ -131,8 +162,19 @@ public:
                 free(recv_ptr);
             }
         }
+#ifdef USE_SCOREP
+        SCOREP_USER_REGION_END(handle_phydll_recv)
+        SCOREP_USER_METRIC_UINT64(bytes_recv_logical, sum_sizes(output_sizes_) * sizeof(float));
+        SCOREP_USER_METRIC_UINT64(bytes_recv_actual, sum_sizes(output_sizes_) * sizeof(double));
+
+        SCOREP_USER_REGION_DEFINE(handle_phydll_unpack)
+        SCOREP_USER_REGION_BEGIN(handle_phydll_unpack, "phydll_unpack", SCOREP_USER_REGION_TYPE_COMMON)
+#endif
 
         unpack_output_buffer();
+#ifdef USE_SCOREP
+        SCOREP_USER_REGION_END(handle_phydll_unpack)
+#endif
         metadata_sent_ = true;
 #endif
     }

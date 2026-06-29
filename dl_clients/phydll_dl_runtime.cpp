@@ -1,4 +1,9 @@
 #include "phydll_dl_runtime.hpp"
+#ifdef USE_SCOREP
+#include <scorep/SCOREP_User.h>
+SCOREP_USER_REGION_DEFINE(handle_dl_recv);
+SCOREP_USER_REGION_DEFINE(handle_dl_send);
+#endif
 
 #include <algorithm>
 #include <cstring>
@@ -117,6 +122,10 @@ void DlRuntime::send_output(const std::vector<double>& output) {
         throw std::runtime_error("Output data exceeds registered field size.");
     }
 
+    #ifdef USE_SCOREP
+    SCOREP_USER_REGION_BEGIN(handle_dl_send, "dl_send", SCOREP_USER_REGION_TYPE_COMMON);
+    #endif
+
     char out_label[] = "DL-OUT";
     for (int i = 0; i < dl_count_; ++i) {
         std::memset(output_ptrs_[i], 0, static_cast<size_t>(field_size_) * sizeof(double));
@@ -133,9 +142,16 @@ void DlRuntime::send_output(const std::vector<double>& output) {
     }
     
     phydll_send();
+
+    #ifdef USE_SCOREP
+    SCOREP_USER_REGION_END(handle_dl_send);
+    #endif
 }
 
 void DlRuntime::receive_fields() {
+    #ifdef USE_SCOREP
+    SCOREP_USER_REGION_BEGIN(handle_dl_recv, "dl_recv", SCOREP_USER_REGION_TYPE_COMMON);
+    #endif
     phydll_irecv();
     phydll_wait_irecv();
 
@@ -158,6 +174,9 @@ void DlRuntime::receive_fields() {
             free(buffer_ptr);
         }
     }
+    #ifdef USE_SCOREP
+    SCOREP_USER_REGION_END(handle_dl_recv);
+    #endif
 }
 
 void DlRuntime::reset_buffers() {

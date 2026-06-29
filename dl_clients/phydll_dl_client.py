@@ -1,12 +1,31 @@
 #!/usr/bin/env python3
 import os
 import sys
+# Ensure Score-P's bin directory is in PATH for python scorep module
+scorep_bin = "/cvmfs/software.hpc.rwth.de/Linux/RH9/x86_64/intel/sapphirerapids/software/Score-P/8.4-gompi-2022a/bin"
+if scorep_bin not in os.environ.get("PATH", ""):
+    os.environ["PATH"] = scorep_bin + os.pathsep + os.environ.get("PATH", "")
 import struct
 import numpy as np
 import mpi4py
 mpi4py.rc.thread_level = "funneled"
 from mpi4py import MPI
 import torch
+import contextlib
+try:
+    import scorep.user
+    HAS_SCOREP = True
+except ImportError:
+    HAS_SCOREP = False
+
+@contextlib.contextmanager
+def scorep_region(name):
+    if HAS_SCOREP:
+        with scorep.user.region(name):
+            yield
+    else:
+        yield
+
 
 # Add phydll to path if it's not installed
 script_dir = os.path.dirname(os.path.abspath(__file__))
@@ -163,6 +182,7 @@ def main():
     total_input_size = 0
     total_output_size = 0
     final_meta = None
+    rank_batch_sizes = {}
     
     # Receive metadata from each connected physical rank
     for source_rank in dests:
@@ -175,6 +195,8 @@ def main():
                 meta_initialized = True
             total_input_size += p2p_meta.get('total_input', 0)
             total_output_size += p2p_meta.get('total_output', 0)
+            if p2p_meta.get('in_shapes') and len(p2p_meta['in_shapes']) > 0:
+                rank_batch_sizes[source_rank] = p2p_meta['in_shapes'][0][0]
 
     torch_device = torch.device('cpu')
     model = None
@@ -185,7 +207,8 @@ def main():
         # Receive fields from PhyDLL
         # With dl_count=1, pyphydll.recv() returns a dict with one entry
         print(f"[DL {world_comm.rank}] Calling dll.recv()...", flush=True)
-        fields = dll.recv()
+        with scorep_region("py_recv"):
+            fields = dll.recv()
         print(f"[DL {world_comm.rank}] Returned from dll.recv().", flush=True)
         combined_data = fields.get("PHY-DATA", None)
         if combined_data is None:
@@ -222,63 +245,60 @@ def main():
         used_model = False
         
         if model_loaded and model is not None:
-            client_batch_size = 1
-            if final_meta and final_meta.get('in_shapes') and len(final_meta['in_shapes']) > 0 and len(final_meta['in_shapes'][0]) > 0:
-                client_batch_size = final_meta['in_shapes'][0][0]
-            
-            batch_size = max(1, ndest * client_batch_size)
-            field_size_per_rank = field_size // max(1, ndest)
-            input_per_rank_used = total_input_size // batch_size
-            outputs_per_rank_used = total_output_size // batch_size
-            
-            # Pack batch
-            input_flat = np.zeros(total_input_size, dtype=np.float32)
-            for b in range(batch_size):
-                client_id = b // client_batch_size
-                sample_id = b % client_batch_size
-                src_start = client_id * field_size_per_rank + sample_id * input_per_rank_used
-                input_flat[b * input_per_rank_used : (b+1) * input_per_rank_used] = \
-                    combined_data[src_start : src_start + input_per_rank_used]
-            
-            actual_shape = [batch_size]
-            if final_meta and final_meta.get('in_shapes'):
-                shape = final_meta['in_shapes'][0]
-                if len(shape) > 1:
-                    actual_shape.extend(shape[1:])
+            with scorep_region("py_inference"):
+                # Total batch size is the sum of local batches
+                batch_size = sum(rank_batch_sizes[r] for r in dests if r in rank_batch_sizes)
+                
+                # Retrieve features per rank from metadata
+                input_per_rank_used = 18
+                if final_meta and final_meta.get('in_shapes') and len(final_meta['in_shapes']) > 0 and len(final_meta['in_shapes'][0]) > 1:
+                    input_per_rank_used = final_meta['in_shapes'][0][1]
+                
+                # Check for dynamic shapes
+                actual_shape = [batch_size]
+                if final_meta and final_meta.get('in_shapes'):
+                    shape = final_meta['in_shapes'][0]
+                    if len(shape) > 1:
+                        actual_shape.extend(shape[1:])
+                    else:
+                        actual_shape.append(input_per_rank_used)
                 else:
                     actual_shape.append(input_per_rank_used)
-            else:
-                actual_shape.append(input_per_rank_used)
                 
-            input_tensor = torch.from_numpy(input_flat).reshape(batch_size, input_per_rank_used)
-            input_tensor = input_tensor.view(*actual_shape)
-            input_tensor = input_tensor.to(torch_device)
-            
-            try:
-                with torch.no_grad():
-                    max_chunk_size = final_meta.get('batch_size', 0)
-                    if max_chunk_size <= 0:
-                        max_chunk_size = batch_size
-                    outputs = []
-                    for chunk_idx in range(0, batch_size, max_chunk_size):
-                        end_idx = min(chunk_idx + max_chunk_size, batch_size)
-                        chunk_tensor = input_tensor[chunk_idx:end_idx]
-                        outputs.append(model(chunk_tensor))
-                    output_tensor = torch.cat(outputs, dim=0)
-                    # Result is [batch_size, outputs_per_rank_used]
-                    output_np = output_tensor.cpu().contiguous().numpy().flatten()
-                    
-                # Scatter back to output buffer
-                for b in range(batch_size):
-                    client_id = b // client_batch_size
-                    sample_id = b % client_batch_size
-                    dest_start = client_id * field_size_per_rank + sample_id * outputs_per_rank_used
-                    output[dest_start : dest_start + outputs_per_rank_used] = \
-                        output_np[b * outputs_per_rank_used : (b+1) * outputs_per_rank_used]
-                used_model = True
-            except Exception as e:
-                print(f"[PHYDLL:DL:PY] forward failed: {e}", file=sys.stderr)
-                world_comm.Abort(1)
+                # Under the C++ provider, inputs are sent back-to-back without padding per rank
+                # so input_flat can be directly copied from combined_data.
+                input_flat = combined_data[:total_input_size].astype(np.float32)
+                
+                input_tensor = torch.from_numpy(input_flat).reshape(batch_size, input_per_rank_used)
+                input_tensor = input_tensor.view(*actual_shape)
+                input_tensor = input_tensor.to(torch_device)
+                
+                try:
+                    with torch.no_grad():
+                        max_chunk_size = final_meta.get('batch_size', 0)
+                        if max_chunk_size <= 0:
+                            max_chunk_size = batch_size
+                        outputs = []
+                        for chunk_idx in range(0, batch_size, max_chunk_size):
+                            end_idx = min(chunk_idx + max_chunk_size, batch_size)
+                            chunk_tensor = input_tensor[chunk_idx:end_idx]
+                            outputs.append(model(chunk_tensor))
+                        output_tensor = torch.cat(outputs, dim=0)
+                        output_np = output_tensor.cpu().contiguous().numpy().flatten()
+                        
+                    # Scatter back to output buffer
+                    # output has the same structure as combined_data (consecutive blocks of size N_r * 18)
+                    # output expects outputs at the start of each rank's block
+                    for i, r in enumerate(dests):
+                        N_r = rank_batch_sizes[r]
+                        dest_block_start = sum(rank_batch_sizes[dests[j]] * 18 for j in range(i))
+                        src_output_start = sum(rank_batch_sizes[dests[j]] for j in range(i))
+                        output[dest_block_start : dest_block_start + N_r] = \
+                            output_np[src_output_start : src_output_start + N_r]
+                    used_model = True
+                except Exception as e:
+                    print(f"[PHYDLL:DL:PY] forward failed: {e}", file=sys.stderr)
+                    world_comm.Abort(1)
         
         if not used_model:
             # Fallback: negate inputs
@@ -286,7 +306,8 @@ def main():
             output[:size] = -combined_data[:size]
             
         # Send results back
-        dll.send({"DL-OUT": output})
+        with scorep_region("py_send"):
+            dll.send({"DL-OUT": output})
         frame_id += 1
 
     dll.finalize()

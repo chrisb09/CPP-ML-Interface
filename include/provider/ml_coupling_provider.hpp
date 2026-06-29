@@ -8,6 +8,10 @@
 #include <stdexcept>
 #include "../data/ml_coupling_data.hpp"
 
+#ifdef USE_SCOREP
+#include <scorep/SCOREP_User.h>
+#endif
+
 #if defined(MPI_FOUND)
 #include <mpi.h>
 #define MLCOUPLING_PROVIDER_HAS_MPI 1
@@ -267,6 +271,10 @@ protected:
         MLCouplingData<T> stacked_data;
         
         for (size_t t_idx = 0; t_idx < num_tensors; ++t_idx) {
+#ifdef USE_SCOREP
+            SCOREP_USER_REGION_DEFINE(handle_merge_stack)
+            SCOREP_USER_REGION_BEGIN(handle_merge_stack, "merge_stack", SCOREP_USER_REGION_TYPE_COMMON)
+#endif
             auto first_dim = data_list[0][t_idx].dimensions();
             if (first_dim.empty()) {
                 throw std::runtime_error("Cannot stack scalar tensors.");
@@ -338,6 +346,9 @@ protected:
                 );
                 stacked_data.add_tensor(std::move(new_tensor));
             }
+#ifdef USE_SCOREP
+            SCOREP_USER_REGION_END(handle_merge_stack)
+#endif
         }
         return stacked_data;
     }
@@ -397,6 +408,10 @@ protected:
         // Output tensor shape: [B, TotalFeaturesPerBatch].
 
         for (size_t t_idx = 0; t_idx < num_tensors; ++t_idx) {
+#ifdef USE_SCOREP
+            SCOREP_USER_REGION_DEFINE(handle_merge_list)
+            SCOREP_USER_REGION_BEGIN(handle_merge_list, "merge_list", SCOREP_USER_REGION_TYPE_COMMON)
+#endif
             auto first_dim = data_list[0][t_idx].dimensions();
             if (first_dim.empty()) {
                 throw std::runtime_error("List fallback: Cannot merge scalar tensors. Expected at least a batch dimension.");
@@ -470,6 +485,9 @@ protected:
                     buffer, new_dims, MLCouplingMemLayoutContiguous, MLCouplingOwnershipOwned);
                 merged_data.add_tensor(std::move(new_tensor));
             }
+#ifdef USE_SCOREP
+            SCOREP_USER_REGION_END(handle_merge_list)
+#endif
         }
         return merged_data;
     }

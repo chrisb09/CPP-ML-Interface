@@ -20,6 +20,7 @@ option(WITH_TORCH "Enable Torch support in AIxelerator (only applies if building
 option(WITH_TENSORFLOW "Enable TensorFlow support in AIxelerator (only applies if building AIxelerator from source or using a prebuilt with TF support)" OFF)
 option(WITH_ONNX "Enable ONNX support in AIxelerator (only applies if building AIxelerator from source or using a prebuilt with ONNX support)" OFF)
 option(FORCE_AIX_REBUILD "Force rebuilding AIxelerator from source even if a prebuilt library is found (only applies if AIX_USE_PREBUILT is ON)" OFF)
+option(WITH_SCOREP "Enable Score-P manual instrumentation" OFF)
 
 # Set Variables
 set(EXECUTABLE_NAME "cpp_ml_interface_executable")
@@ -115,6 +116,17 @@ target_include_directories(${LIBRARY_NAME} PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/i
 add_library(cpp_ml_interface_headers INTERFACE)
 target_include_directories(cpp_ml_interface_headers INTERFACE "${CMAKE_CURRENT_SOURCE_DIR}/include")
 target_link_libraries(cpp_ml_interface_headers INTERFACE tomlplusplus::tomlplusplus)
+
+if (WITH_SCOREP)
+    list(APPEND CMAKE_MODULE_PATH "${AIXELERATOR_DIR}/cmake")
+    find_package(Scorep REQUIRED)
+    if(SCOREP_FOUND)
+        scorep_instrument_target(${LIBRARY_NAME} USER ON COMPILER OFF MEMORY ON MPP mpi)
+        scorep_instrument_target(cpp_ml_interface_headers INTERFACE USER ON COMPILER OFF)
+        target_compile_definitions(${LIBRARY_NAME} PUBLIC USE_SCOREP)
+        target_compile_definitions(cpp_ml_interface_headers INTERFACE USE_SCOREP)
+    endif()
+endif()
 
 
 # Manually set SmartRedis include and library paths
@@ -250,6 +262,10 @@ target_link_libraries(${EXECUTABLE_NAME} PRIVATE
     tomlplusplus::tomlplusplus
 )
 
+if (WITH_SCOREP)
+    set_target_properties(${EXECUTABLE_NAME} PROPERTIES SCOREP_MPP_SYSTEM "mpi")
+endif()
+
 if(WITH_SMARTSIM)
     target_link_directories(${EXECUTABLE_NAME} PRIVATE ${SMARTREDIS_DIR}/install/lib64)
     target_link_libraries(${EXECUTABLE_NAME} PRIVATE smartredis)
@@ -276,6 +292,9 @@ if(BUILD_TESTING)
     add_executable(test_flexible_fallback test/test_flexible_fallback.cpp)
     target_include_directories(test_flexible_fallback PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/include")
     target_link_libraries(test_flexible_fallback PRIVATE cpp_ml_interface_library)
+    if (WITH_SCOREP)
+        set_target_properties(test_flexible_fallback PROPERTIES SCOREP_MPP_SYSTEM "mpi")
+    endif()
     add_test(NAME test_flexible_fallback COMMAND test_flexible_fallback)
 
     add_executable(test_behavior_flow_extrapolator test/test_behavior_flow_extrapolator.cpp)
@@ -309,6 +328,9 @@ if(BUILD_TESTING)
         add_executable(test_provider_inference test/test_provider_inference.cpp)
         target_include_directories(test_provider_inference PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/include")
         target_link_libraries(test_provider_inference PRIVATE cpp_ml_interface_library)
+        if (WITH_SCOREP)
+            set_target_properties(test_provider_inference PROPERTIES SCOREP_MPP_SYSTEM "mpi")
+        endif()
 
         add_test(NAME test_provider_inference
             COMMAND test_provider_inference "${TEST_MODEL_PATH}"

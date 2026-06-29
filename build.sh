@@ -37,8 +37,15 @@ USER_PYTHON="$USER_PYTHON_ENV/bin/python"
 CUDA_ROOT="/cvmfs/software.hpc.rwth.de/Linux/RH9/x86_64/intel/sapphirerapids/software/CUDA/12.4.0"
 
 # Explicitly set compilers to ensure consistency and CUDA compatibility
-export CC=gcc
-export CXX=g++
+if [[ -n "${USE_SCOREP:-}" ]]; then
+    export CC=scorep-mpicc
+    export CXX=scorep-mpicxx
+    scorep_flag="-DWITH_SCOREP=ON"
+else
+    export CC=gcc
+    export CXX=g++
+    scorep_flag="-DWITH_SCOREP=OFF"
+fi
 unset LD # Remove LD if set by install.sh to prevent CMake compiler checks from failing
 
 # CRITICAL: Prioritize CVMFS CUDA paths to avoid using "stripped" Python wheel libraries
@@ -65,6 +72,7 @@ cmake -S . -B build \
 	-DWITH_ONNX="${with_onnx}" \
 	-DFORCE_AIX_REBUILD="${force_aix_rebuild}" \
 	-DBUILD_TESTING="${build_testing}" \
+	${scorep_flag} \
 	-DTEST_PYTHON_EXECUTABLE="${USER_PYTHON}" || { echo "CMake configuration failed"; exit 1; }
 
 # build (generator-agnostic; passes -j to underlying tool)
