@@ -112,13 +112,13 @@ protected:
     {
         if (behavior.should_send_data())
         {
-            prepare_input();
+            this->prepare_input();
         }
         if (behavior.should_perform_inference())
         {
             provider.static_inference(&this->input_data_after_preprocessing,
                                        &this->output_data_before_postprocessing);
-            finalize_output();
+            this->finalize_output();
             return behavior.time_step_delta();
         }
         return 0;

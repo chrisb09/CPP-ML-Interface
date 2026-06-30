@@ -10,6 +10,7 @@
 #include <string_view>
 #include <vector>
 #include <cstdlib> // for setenv
+#include <climits>
 
 #if defined(WITH_SMARTSIM)
 #include "client.h"

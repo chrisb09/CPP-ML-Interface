@@ -36,9 +36,13 @@ public:
         {
             throw std::invalid_argument("MLCouplingBehaviorFlowExtrapolator: inference_interval must be > 0");
         }
-        if (coupled_steps_before_inference_ < 0)
+        if (coupled_steps_before_inference_ < 1)
         {
-            throw std::invalid_argument("MLCouplingBehaviorFlowExtrapolator: coupled_steps_before_inference must be >= 0");
+            throw std::invalid_argument("MLCouplingBehaviorFlowExtrapolator: coupled_steps_before_inference must be >= 1");
+        }
+        if (total_timesteps_ <= 0)
+        {
+            throw std::invalid_argument("MLCouplingBehaviorFlowExtrapolator: total_timesteps must be > 0");
         }
         stride_ = static_cast<int>(std::round(static_cast<double>(input_step_distance_) * scaling_factor_));
         if (stride_ <= 0)

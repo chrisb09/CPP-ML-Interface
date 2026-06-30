@@ -44,19 +44,6 @@ protected:
         return input_data;
     }
 
-    void coupling_step(MLCouplingData<In> input_data_after_preprocessing) override
-    {
-        // Implement turbulence closure specific inference logic here
-        // TODO
-    }
-
-    MLCouplingData<Out> ml_step(MLCouplingData<In> input_data_after_preprocessing) override
-    {
-        // Implement turbulence closure specific inference logic here
-        // TODO
-        return MLCouplingData<Out>();
-    }
-
     MLCouplingData<Out> postprocess(MLCouplingData<Out> output_data_before_postprocessing) override
     {
         // TODO: Implement turbulence closure specific postprocessing here
