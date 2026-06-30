@@ -100,6 +100,10 @@ add_library(${LIBRARY_NAME} SHARED
     ${LIB_SOURCES}
 )
 
+# CMI uses typeid in generated registry (get_type_name functions),
+# so it needs RTTI even if the consuming project compiles with -fno-rtti.
+target_compile_options(${LIBRARY_NAME} PUBLIC -frtti)
+
 if(NOT CPPML_DISABLE_REGISTRY_GEN)
     # Abhängigkeit zur Code-Generierung
     add_dependencies(${LIBRARY_NAME} generate_registry)

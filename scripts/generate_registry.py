@@ -790,10 +790,12 @@ def write_constructor_dependencies(f, base_classes, found_classes, subclass_cons
                     selected_ctor = constructors[0]
                 
                 if selected_ctor:
-                    for param_type, param_name, _ in selected_ctor:
+                    for param_type, param_name, pdefault in selected_ctor:
                         # Check if this parameter type is one of our base classes
                         matching_base = extract_base_class_from_type(param_type, base_classes)
-                        if matching_base:
+                        # Skip dependencies that have a default value - they are optional
+                        # and the factory will fall back to the default when the param is absent.
+                        if matching_base and pdefault is None:
                             f.write(f'        dependencies.push_back({{"{matching_base}", "{param_name}"}});\n')
     
     if not first_class:
@@ -911,7 +913,7 @@ def write_class_hierarchy_functions(f, base_classes, found_classes):
 def _get_template_strings(base_class, template_params):
     """Get template declaration and argument strings."""
     if not template_params:
-        return f"{base_class}*", ""
+        return f"inline {base_class}*", ""
     
     template_decl = ", ".join(f"typename {p}" for p in template_params)
     template_args = ", ".join(template_params)
@@ -1298,8 +1300,18 @@ def _write_map_factory(f, base_class, template_str, template_args, category,
                 elif _is_pointer_to_known_class(ptype):
                     # For pointers to known classes (e.g. MLCouplingNormalization<In,Out>*),
                     # the config already stores the raw object pointer in parameter.second.
-                    param_args.append(f'reinterpret_cast<{ptype}>(parameter.at("{pname}").second)')
-                    debug_outputs.append(f'"{pname}=" << reinterpret_cast<{ptype}>(parameter.at("{pname}").second)')
+                    if pdefault:
+                        param_args.append(
+                            f'parameter.find("{pname}") != parameter.end() ? '
+                            f'reinterpret_cast<{ptype}>(parameter.at("{pname}").second) : '
+                            f'({ptype}){pdefault}'
+                        )
+                        debug_outputs.append(
+                            f'"{pname}=<" << (parameter.find("{pname}") != parameter.end() ? "provided" : "default") << ">"'
+                        )
+                    else:
+                        param_args.append(f'reinterpret_cast<{ptype}>(parameter.at("{pname}").second)')
+                        debug_outputs.append(f'"{pname}=" << reinterpret_cast<{ptype}>(parameter.at("{pname}").second)')
                 elif _can_use_config_param_cast(ptype):
                     cast_type = storage_type
                     if pdefault:

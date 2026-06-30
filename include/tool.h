@@ -6,7 +6,7 @@
 #include <stdlib.h>
 
 // Pure C assertion helper
-void guarantee(bool condition, const char *message)
+inline void guarantee(bool condition, const char *message)
 {
     if (!condition)
     {

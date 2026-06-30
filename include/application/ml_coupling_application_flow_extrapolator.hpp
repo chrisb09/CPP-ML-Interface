@@ -19,7 +19,7 @@ class MLCouplingApplicationFlowExtrapolator : public MLCouplingApplication<In, O
 public:
     MLCouplingApplicationFlowExtrapolator(MLCouplingData<In> input_data,
                                           MLCouplingData<Out> output_data,
-                                          MLCouplingNormalization<In, Out> *normalization,
+                                          MLCouplingNormalization<In, Out> *normalization = nullptr,
                                           int cube_dimension = 8,
                                           int cube_overlap = 0,
                                           int input_sequence_length = 1,
@@ -37,15 +37,15 @@ public:
     MLCouplingApplicationFlowExtrapolator(MLCouplingData<In> input_data,
                                           MLCouplingData<In> input_data_after_preprocessing,
                                           MLCouplingData<Out> output_data_before_postprocessing,
-                                          MLCouplingData<Out> output_data,
-                                          MLCouplingNormalization<In, Out> *normalization,
+MLCouplingData<Out> output_data,
+                                          MLCouplingNormalization<In, Out> *normalization = nullptr,
                                           int cube_dimension = 8,
                                           int cube_overlap = 0,
                                           int input_sequence_length = 1,
                                           int forecast_window = 1,
                                           int n_ghost_layers = 0)
         : MLCouplingApplication<In, Out>(std::move(input_data),
-                                         std::move(input_data_after_preprocessing),
+                                          std::move(input_data_after_preprocessing),
                                          std::move(output_data_before_postprocessing),
                                          std::move(output_data),
                                          normalization)
