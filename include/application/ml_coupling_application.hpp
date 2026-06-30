@@ -6,6 +6,7 @@
 
 #include "../data/ml_coupling_data.hpp"
 #include "../provider/ml_coupling_provider.hpp"
+#include "../behavior/ml_coupling_behavior.hpp"
 #include "../normalization/ml_coupling_normalization.hpp"
 
 // @category: application
@@ -97,22 +98,17 @@ public:
         this->normalization.reset(normalization);
     }
 
-    void step(bool perform_coupling, bool perform_inference)
+    virtual int ml_step(MLCouplingProvider<In,Out>& provider, MLCouplingBehavior& behavior)
     {
-        if (!perform_coupling && !perform_inference)
+        if (behavior.should_perform_inference())
         {
-            return;
+            prepare_input();
+            provider.static_inference(&input_data_after_preprocessing,
+                                       &output_data_before_postprocessing);
+            finalize_output();
+            return behavior.time_step_delta();
         }
-        input_data_after_preprocessing = preprocess(input_data);
-        if (perform_coupling)
-        {
-            coupling_step(input_data_after_preprocessing);
-        }
-        if (perform_inference)
-        {
-            output_data_before_postprocessing = ml_step(input_data_after_preprocessing);
-            output_data = postprocess(output_data_before_postprocessing);
-        }
+        return 0;
     }
 
     void prepare_input()
@@ -135,13 +131,7 @@ public:
 protected:
     virtual MLCouplingData<In> preprocess(MLCouplingData<In> input_data) { return input_data; }
 
-    // Run the coupling step logic (sending data)
-    // If you only need data from one step, you can implement this as a no-op
-    // and just implement the ml_step()
-    virtual void coupling_step(MLCouplingData<In> input_data_after_preprocessing) = 0;
-
-    // Run the ML application logic (inference, maybe later training as well)
-    virtual MLCouplingData<Out> ml_step(MLCouplingData<In> input_data_after_preprocessing) = 0;
+    virtual void coupling_step(MLCouplingData<In> input_data_after_preprocessing) { (void)input_data_after_preprocessing; }
 
     virtual MLCouplingData<Out> postprocess(MLCouplingData<Out> output_data_before_postprocessing) { return output_data_before_postprocessing; };
 

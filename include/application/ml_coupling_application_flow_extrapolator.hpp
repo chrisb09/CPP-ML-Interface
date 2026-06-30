@@ -108,15 +108,20 @@ protected:
         return this->input_data_after_preprocessing;
     }
 
-    void coupling_step(MLCouplingData<In> input_data_after_preprocessing) override
+    int ml_step(MLCouplingProvider<In,Out>& provider, MLCouplingBehavior& behavior) override
     {
-        (void)input_data_after_preprocessing;
-    }
-
-    MLCouplingData<Out> ml_step(MLCouplingData<In> input_data_after_preprocessing) override
-    {
-        (void)input_data_after_preprocessing;
-        return this->output_data_before_postprocessing;
+        if (behavior.should_send_data())
+        {
+            prepare_input();
+        }
+        if (behavior.should_perform_inference())
+        {
+            provider.static_inference(&this->input_data_after_preprocessing,
+                                       &this->output_data_before_postprocessing);
+            finalize_output();
+            return behavior.time_step_delta();
+        }
+        return 0;
     }
 
     MLCouplingData<Out> postprocess(MLCouplingData<Out> output_data_before_postprocessing) override

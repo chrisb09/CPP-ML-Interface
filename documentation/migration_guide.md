@@ -9,27 +9,83 @@ the library.
 
 ## 1. Solvers Using the Static API
 
-**Impact: None.**
+**Impact: Medium.**
 
-If your solver previously used the static API to run standard 1-to-1
-inference, your code will continue to compile and run without modifications.
+### a) `step()` now returns `int`
+
+`MLCoupling::step()` now returns an `int` step delta: `0` when no inference
+occurred (solver should perform a normal time step), or `N` when inference
+was performed and the solver should advance time by `N` steps without
+running its usual RHS computation.
 
 *Before:*
 ```cpp
-coupling->ml_step();
+coupling->step();
+// always ran rhs()/rungeKutta() after
 ```
 *After:*
 ```cpp
-coupling->step(); // The preferred, more idiomatic alias, but ml_step() still works.
+int delta = coupling->step();
+if (delta == 0) {
+    rhs(); rhsBnd(); rungeKuttaStep(); setTimeStep(); lhsBnd();
+} else {
+    m_physicalTime += delta * m_timeStep * m_timeRef;
+    m_time += delta * m_timeStep;
+    globalTimeStep += delta;
+}
 ```
+
+### b) `ml_step()` alias removed
+
+The backward-compat alias `void ml_step() { step(); }` has been removed.
+Replace all calls to `coupling->ml_step()` with `coupling->step()` and
+handle the new `int` return value.
 
 ## 2. Implementing a Custom Application Class
 
-**Impact: None.**
+**Impact: Medium.**
 
-The `MLCouplingApplication` contract has not changed. You still implement
-`prepare_input()` and `finalize_output()` to handle data manipulation and
-normalization.
+### a) New `ml_step(provider&, behavior&)` virtual
+
+The orchestration has moved from per-override virtuals to a single
+`ml_step(MLCouplingProvider<In,Out>&, MLCouplingBehavior&)` virtual.
+Override this to drive the provider/behavior interaction:
+
+```cpp
+int ml_step(MLCouplingProvider<In,Out>& provider, MLCouplingBehavior& behavior) override
+{
+    if (behavior.should_send_data())
+    {
+        prepare_input();
+    }
+    if (behavior.should_perform_inference())
+    {
+        provider.static_inference(&this->input_data_after_preprocessing,
+                                   &this->output_data_before_postprocessing);
+        finalize_output();
+        return behavior.time_step_delta();
+    }
+    return 0;
+}
+```
+
+### b) Old `ml_step(MLCouplingData<In>)` removed
+
+The pure virtual `MLCouplingData<Out> ml_step(MLCouplingData<In>)` has been
+removed. If your application subclass overrode it, replace with the new
+`ml_step(provider&, behavior&)` signature above.
+
+### c) `coupling_step(MLCouplingData<In>)` now non-pure
+
+`coupling_step` is no longer a pure virtual — it has an empty default body.
+If your subclass overrode it with a no-op, you may remove the override.
+
+### d) `step(bool, bool)` removed
+
+The old `MLCouplingApplication::step(bool perform_coupling, bool perform_inference)`
+method has been removed. Data flow is now driven by the behavior's
+`should_send_data()` / `should_perform_inference()` queries, not by boolean
+flags.
 
 ## 3. Implementing a Custom Provider
 
@@ -150,3 +206,45 @@ Downstream C consumers that previously called `create_provider` with one of
 the removed type tags must switch to the closest {float, double} value.
 The C++ internal `MLCouplingDataType` enum is unchanged, so header-only
 consumers are unaffected.
+
+## 6. Application-Led Orchestration (New)
+
+**Impact: New feature, no migration needed.**
+
+A new `ml_step(MLCouplingProvider<In,Out>&, MLCouplingBehavior&)` virtual
+on `MLCouplingApplication` drives provider/behavior orchestration. The
+`MLCoupling::step()` method delegates to it.
+
+### a) New Behavior: `MLCouplingBehaviorFlowExtrapolator`
+
+A new behavior class `MLCouplingBehaviorFlowExtrapolator` (registry name:
+`FlowExtrapolatorBehavior`, aliases: `flow-extrapolator-behavior`,
+`maia-flow-extrapolator-behavior`) is available in
+`include/behavior/ml_coupling_behavior_flow_extrapolator.hpp`. It subclasses
+`MLCouplingBehavior` directly and manages MAIA-style coupling/inference
+timing with HDF-output avoidance.
+
+Constructor parameters (all TOML-configurable):
+
+| Parameter | TOML key | Description |
+| :--- | :--- | :--- |
+| `inference_interval` | `behavior.inference_interval` | Steps between inference cycles |
+| `coupled_steps_before_inference` | `behavior.coupled_steps_before_inference` | Number of coupled steps before each inference |
+| `step_increment_after_inference` | `behavior.step_increment_after_inference` | Time-step increment after inference |
+| `hdf_output_interval` | `behavior.hdf_output_interval` | HDF output interval for avoidance shifting |
+| `total_timesteps` | `behavior.total_timesteps` | Total simulation steps |
+| `scaling_factor` | `behavior.scaling_factor` (default 1.0) | Step-index scaling factor |
+| `forecast_window` | `behavior.forecast_window` (default 1) | Forecast window size |
+| `input_step_distance` | `behavior.input_step_distance` (default 1) | Stride between coupled steps |
+| `inference_start_step` | `behavior.inference_start_step` (default 0) | First inference logical step |
+| `global_step_offset` | `behavior.global_step_offset` (default 0) | Offset applied to logical→global step mapping |
+
+### b) Known-Affected Consumers
+
+The following consumers are affected by the removal of the old
+`ml_step(MLCouplingData<In>)` virtual and `step()` return-type change.
+They are listed here for awareness; fixing them is a follow-up task outside
+this transition:
+
+- `mini_app/solver_cpp`
+- `module_test/solver.cpp`

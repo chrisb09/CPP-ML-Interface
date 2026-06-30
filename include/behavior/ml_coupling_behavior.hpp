@@ -4,8 +4,6 @@
 class MLCouplingBehavior
 {
 
-    friend int main(int, char **);
-
 public:
     virtual bool should_perform_inference() = 0;
 

@@ -291,24 +291,18 @@ public:
     // --- High-level Static API ---
 
     /**
-     * @brief Performs a standard static inference step. 
-     * Applies preprocessing, runs static inference using the provider, and applies postprocessing.
+     * @brief Performs the ML coupling step.
+     * Delegates to the application's ml_step() which drives the provider/behavior
+     * orchestration. Returns the time-step delta (0 for no inference, N for inference).
      */
-    void step()
+    int step()
     {
-        if (provider && application && behavior && behavior->should_perform_inference())
+        if (provider && application && behavior)
         {
-            application->prepare_input();
-            provider->static_inference(input_after_preprocessing,
-                                       output_before_postprocessing);
-            application->finalize_output();
+            return application->ml_step(*provider, *behavior);
         }
+        return 0;
     }
-
-    /**
-     * @brief Backward compatibility alias for step().
-     */
-    void ml_step() { step(); } // Backward compatibility
 
     /**
      * @brief Configures the fallback merge strategy for flexible execution.
