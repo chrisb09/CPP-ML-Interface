@@ -137,12 +137,8 @@ def main():
     world_comm = MPI.COMM_WORLD
     
     # Handle MPMD split (identical logic to C++ client)
-    color = 1
-    dl_comm = world_comm.Split(color, 0)
-    local_dl_comm = dl_comm.Split_type(MPI.COMM_TYPE_SHARED, 0)
-    local_dl_rank = local_dl_comm.rank
-    local_dl_comm.Free()
-    dl_comm.Free()
+    color = MPI.UNDEFINED
+    local_comm = world_comm.Split(color, 0)
     
     # Check if we are in the DL application group
 
@@ -223,6 +219,12 @@ def main():
         if meta_initialized and not model_loaded:
             wants_gpu = bool(device_name) and device_name.upper() != "CPU"
             if wants_gpu:
+                # Query the communicator containing only the DL ranks
+                dl_comm = dll.get_local_mpi_comm()
+                local_dl_comm = dl_comm.Split_type(MPI.COMM_TYPE_SHARED, 0)
+                local_dl_rank = local_dl_comm.rank
+                local_dl_comm.Free()
+
                 if torch.cuda.is_available() and torch.cuda.device_count() > 0:
                     local_gpu_count = torch.cuda.device_count()
                     gpu_id = local_dl_rank % local_gpu_count
