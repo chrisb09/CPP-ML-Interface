@@ -15,7 +15,7 @@ if(NOT PHYDLL_BUILD_DIR)
     set(PHYDLL_BUILD_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../extern/phydll/build" CACHE PATH "PhyDLL build prefix")
 endif()
 
-add_library(phydll_dl_runtime
+add_library(phydll_dl_runtime SHARED
     phydll_dl_runtime.cpp
 )
 
