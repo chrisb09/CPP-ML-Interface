@@ -137,11 +137,12 @@ def main():
     world_comm = MPI.COMM_WORLD
     
     # Handle MPMD split (identical logic to C++ client)
-    # Handle MPMD split
-    # We no longer rely on MPI_APPNUM, because Slurm srun with OpenMPI 5 assigns appnum 0 to both components!
-    # Since this script is ALWAYS the DL client, we unconditionally assign it color MPI_UNDEFINED.
-    color = MPI.UNDEFINED
-    local_comm = world_comm.Split(color, 0)
+    color = 1
+    dl_comm = world_comm.Split(color, 0)
+    local_dl_comm = dl_comm.Split_type(MPI.COMM_TYPE_SHARED, 0)
+    local_dl_rank = local_dl_comm.rank
+    local_dl_comm.Free()
+    dl_comm.Free()
     
     # Check if we are in the DL application group
 
@@ -223,7 +224,11 @@ def main():
             wants_gpu = bool(device_name) and device_name.upper() != "CPU"
             if wants_gpu:
                 if torch.cuda.is_available() and torch.cuda.device_count() > 0:
-                    torch_device = torch.device('cuda', 0)
+                    local_gpu_count = torch.cuda.device_count()
+                    gpu_id = local_dl_rank % local_gpu_count
+                    gpu_id = int(os.environ.get("PHYDLL_DL_GPU_ID", gpu_id))
+                    print(f"[PHYDLL:DL:PY] Using local DL rank {local_dl_rank} mapped to GPU device index: {gpu_id}", file=sys.stderr)
+                    torch_device = torch.device('cuda', gpu_id)
                 else:
                     print("[PHYDLL:DL:PY] requested GPU but no CUDA device available; using CPU", file=sys.stderr)
                     torch_device = torch.device('cpu')

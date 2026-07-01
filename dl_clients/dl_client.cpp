@@ -151,10 +151,20 @@ int main(int argc, char **argv) {
 
     // Participate in the MPMD split to avoid collective mismatches.
     // We no longer rely on MPI_APPNUM, because Slurm srun with OpenMPI 5 assigns appnum 0 to both components!
-    // Since this binary is ALWAYS the DL client, we unconditionally assign it color MPI_UNDEFINED.
-    const int color = MPI_UNDEFINED;
-    MPI_Comm local_comm = MPI_COMM_NULL;
-    MPI_Comm_split(MPI_COMM_WORLD, color, 0, &local_comm);
+    // Since this binary is ALWAYS the DL client, we split using color = 1.
+    const int color = 1;
+    MPI_Comm dl_comm = MPI_COMM_NULL;
+    MPI_Comm_split(MPI_COMM_WORLD, color, 0, &dl_comm);
+
+    // Further split to get the local rank on the node
+    MPI_Comm local_dl_comm = MPI_COMM_NULL;
+    MPI_Comm_split_type(dl_comm, MPI_COMM_TYPE_SHARED, 0, MPI_INFO_NULL, &local_dl_comm);
+
+    int local_dl_rank = 0;
+    MPI_Comm_rank(local_dl_comm, &local_dl_rank);
+
+    MPI_Comm_free(&local_dl_comm);
+    MPI_Comm_free(&dl_comm);
 
     const int dl_count = get_env_int("PHYDLL_DL_FIELD_COUNT", get_env_int("PHYDLL_DL_COUNT", 1));
 
@@ -261,7 +271,12 @@ int main(int argc, char **argv) {
             if (wants_gpu) {
                 const bool cuda_ok = torch::cuda::is_available() && torch::cuda::device_count() > 0;
                 if (cuda_ok) {
-                    torch_device = torch::Device(torch::kCUDA, 0);
+                    const int local_gpu_count = torch::cuda::device_count();
+                    int gpu_id = local_dl_rank % local_gpu_count;
+                    gpu_id = get_env_int("PHYDLL_DL_GPU_ID", gpu_id);
+                    std::cerr << "[PHYDLL:DL] Using local DL rank " << local_dl_rank 
+                              << " mapped to GPU device index: " << gpu_id << std::endl;
+                    torch_device = torch::Device(torch::kCUDA, gpu_id);
                 } else {
                     std::cerr << "[PHYDLL:DL] requested GPU but no CUDA device available; using CPU" << std::endl;
                     torch_device = torch::Device(torch::kCPU);
