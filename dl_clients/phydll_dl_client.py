@@ -253,17 +253,19 @@ def main():
         
         if model_loaded and model is not None:
             with scorep_region("py_inference"):
-                # Total batch size is the sum of local batches
-                batch_size = sum(rank_batch_sizes[r] for r in dests if r in rank_batch_sizes)
+                # Replicate the C++ client's robust dynamic shape and batch extraction logic
+                ndest = len(dests)
+                client_batch_size = 1
+                if final_meta and final_meta.get('in_shapes') and len(final_meta['in_shapes']) > 0 and len(final_meta['in_shapes'][0]) > 0:
+                    client_batch_size = final_meta['in_shapes'][0][0]
                 
-                # Retrieve features per rank from metadata
-                input_per_rank_used = 18
-                if final_meta and final_meta.get('in_shapes') and len(final_meta['in_shapes']) > 0 and len(final_meta['in_shapes'][0]) > 1:
-                    input_per_rank_used = final_meta['in_shapes'][0][1]
+                batch_size = max(1, ndest * client_batch_size)
+                field_size_per_rank = len(combined_data) // max(1, ndest)
+                input_per_rank_used = total_input_size // batch_size
                 
                 # Check for dynamic shapes
                 actual_shape = [batch_size]
-                if final_meta and final_meta.get('in_shapes'):
+                if final_meta and final_meta.get('in_shapes') and len(final_meta['in_shapes']) > 0:
                     shape = final_meta['in_shapes'][0]
                     if len(shape) > 1:
                         actual_shape.extend(shape[1:])
@@ -272,9 +274,15 @@ def main():
                 else:
                     actual_shape.append(input_per_rank_used)
                 
-                # Under the C++ provider, inputs are sent back-to-back without padding per rank
-                # so input_flat can be directly copied from combined_data.
-                input_flat = combined_data[:total_input_size].astype(np.float32)
+                # Extract input features per sample (accounting for any rank padding)
+                input_flat = np.zeros(total_input_size, dtype=np.float32)
+                for b in range(batch_size):
+                    client_id = b // client_batch_size
+                    sample_id = b % client_batch_size
+                    src_start = client_id * field_size_per_rank + sample_id * input_per_rank_used
+                    dest_start = b * input_per_rank_used
+                    input_flat[dest_start : dest_start + input_per_rank_used] = \
+                        combined_data[src_start : src_start + input_per_rank_used]
                 
                 input_tensor = torch.from_numpy(input_flat).reshape(batch_size, input_per_rank_used)
                 input_tensor = input_tensor.view(*actual_shape)
@@ -293,15 +301,16 @@ def main():
                         output_tensor = torch.cat(outputs, dim=0)
                         output_np = output_tensor.cpu().contiguous().numpy().flatten()
                         
-                    # Scatter back to output buffer
-                    # output has the same structure as combined_data (consecutive blocks of size N_r * 18)
-                    # output expects outputs at the start of each rank's block
-                    for i, r in enumerate(dests):
-                        N_r = rank_batch_sizes[r]
-                        dest_block_start = sum(rank_batch_sizes[dests[j]] * 18 for j in range(i))
-                        src_output_start = sum(rank_batch_sizes[dests[j]] for j in range(i))
-                        output[dest_block_start : dest_block_start + N_r] = \
-                            output_np[src_output_start : src_output_start + N_r]
+                    # Scatter back to output buffer dynamically (matching C++ logic)
+                    outputs_per_rank_used = total_output_size // batch_size
+                    output_field_size_per_rank = len(output) // max(1, ndest)
+                    for b in range(batch_size):
+                        client_id = b // client_batch_size
+                        sample_id = b % client_batch_size
+                        dest_start = client_id * output_field_size_per_rank + sample_id * outputs_per_rank_used
+                        src_start = b * outputs_per_rank_used
+                        output[dest_start : dest_start + outputs_per_rank_used] = \
+                            output_np[src_start : src_start + outputs_per_rank_used]
                     used_model = True
                 except Exception as e:
                     print(f"[PHYDLL:DL:PY] forward failed: {e}", file=sys.stderr)
