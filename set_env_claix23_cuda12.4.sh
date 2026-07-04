@@ -21,24 +21,10 @@ if [[ "${USE_SCOREP}" == "1" ]]; then
     module_names="$module_names Score-P/8.4 PAPI/7.0.0"
 fi
 
-any_load_required=false
-
+echo "Loading required modules..."
 for module in $module_names; do
-    if ! module is-loaded "$module" >/dev/null 2>&1; then
-        any_load_required=true
-        echo "Module $module is not loaded. Purging and loading required modules."
-        break
-    fi
+    module load "$module" >/dev/null 2>&1 || module load "$module"
 done
-
-if [ "$any_load_required" = true ]; then
-    echo "Purging and loading required modules for SmartSim..."
-    module purge
-    echo "Loading required modules..."
-    for module in $module_names; do
-        module load "$module"
-    done
-fi
 
 # Keep OpenSSL runtime path so Python SSL remains consistent.
 export LD_LIBRARY_PATH="$EBROOTOPENSSL/lib:$LD_LIBRARY_PATH"
