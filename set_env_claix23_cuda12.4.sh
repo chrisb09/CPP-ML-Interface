@@ -1,8 +1,8 @@
 #!/bin/bash
 
 # Initialize Lmod module command for non-interactive shells
-if [ -f /etc/profile.d/modules.sh ]; then
-    source /etc/profile.d/modules.sh
+if [ -f /opt/lmod/lmod/init/bash ]; then
+    source /opt/lmod/lmod/init/bash
 fi
 
 # Disable Lmod pagination and interactive warning prompts

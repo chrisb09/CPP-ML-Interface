@@ -5,6 +5,11 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 BASE_DIR="$(realpath "${SCRIPT_DIR}/..")"
 source "${BASE_DIR}/set_env_claix23_cuda12.4.sh"
 
+echo "DEBUG: SCOREP_ROOT_DIR = $SCOREP_ROOT_DIR"
+echo "DEBUG: PATH = $PATH"
+echo "DEBUG: MODULEPATH = $MODULEPATH"
+type module
+
 # Usage:
 #   ./build.sh          - build the project (tests excluded)
 
