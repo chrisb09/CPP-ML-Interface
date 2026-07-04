@@ -1,4 +1,4 @@
-#!/bin/sh
+#!/bin/bash
 
 # Source the main environment script from the project root
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
