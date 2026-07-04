@@ -1,4 +1,9 @@
-#!/bin/sh
+#!/bin/bash
+
+# Initialize Lmod module command for non-interactive shells
+if [ -f /etc/profile.d/modules.sh ]; then
+    source /etc/profile.d/modules.sh
+fi
 
 # SmartSim requirements:
 # - Python 3.9-3.11, pip
