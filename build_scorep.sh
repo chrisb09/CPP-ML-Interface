@@ -8,4 +8,5 @@ export SCOREP_WRAPPER_INSTRUMENTER_FLAGS="--nocompiler --user --mpp=none --io=no
 
 # Forward all arguments (e.g. test, test <name>) directly to the main build script
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+rm -rf "${SCRIPT_DIR}/build"
 exec "${SCRIPT_DIR}/build.sh" "$@"
