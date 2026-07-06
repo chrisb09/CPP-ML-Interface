@@ -37,7 +37,7 @@ public:
     MLCouplingApplicationFlowExtrapolator(MLCouplingData<In> input_data,
                                           MLCouplingData<In> input_data_after_preprocessing,
                                           MLCouplingData<Out> output_data_before_postprocessing,
-MLCouplingData<Out> output_data,
+                                          MLCouplingData<Out> output_data,
                                           MLCouplingNormalization<In, Out> *normalization = nullptr,
                                           int cube_dimension = 8,
                                           int cube_overlap = 0,
@@ -50,14 +50,13 @@ MLCouplingData<Out> output_data,
                                          std::move(output_data),
                                          normalization)
     {
-        if (this->input_data_after_preprocessing.empty())
-        {
-            this->input_data_after_preprocessing = make_input_buffer(this->input_data, cube_dimension, cube_overlap, input_sequence_length, n_ghost_layers);
-        }
-        if (this->output_data_before_postprocessing.empty())
-        {
-            this->output_data_before_postprocessing = make_output_buffer(this->input_data, forecast_window, cube_dimension, cube_overlap, n_ghost_layers);
-        }
+        // Always recreate pre/post buffers unconditionally: the base class
+        // constructor (MLCouplingApplication) copies input_data (3 raw tensors)
+        // into input_data_after_preprocessing when the latter is empty, which
+        // defeats the empty() check and causes "exactly one tensor" validation
+        // failure. We must override with proper single-tensor buffers.
+        this->input_data_after_preprocessing = make_input_buffer(this->input_data, cube_dimension, cube_overlap, input_sequence_length, n_ghost_layers);
+        this->output_data_before_postprocessing = make_output_buffer(this->input_data, forecast_window, cube_dimension, cube_overlap, n_ghost_layers);
         initialize(cube_dimension, cube_overlap, input_sequence_length, forecast_window, n_ghost_layers);
     }
 

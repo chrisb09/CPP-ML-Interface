@@ -50,11 +50,31 @@ public:
             stride_ = 1;
         }
         next_inference_step_ = inference_start_step_;
+        effective_global_step_ = global_step_offset_;
     }
 
     bool should_perform_inference() override
     {
         logical_step_count_++;
+
+        if (logical_step_count_ > 1)
+        {
+            if (last_inference_successful_)
+            {
+                effective_global_step_ += time_step_delta();
+            }
+            else
+            {
+                effective_global_step_ += 1;
+            }
+        }
+        else
+        {
+            effective_global_step_ = global_step_offset_ + 1;
+        }
+
+        last_inference_successful_ = false;
+
         if (logical_step_count_ != next_inference_step_)
         {
             return false;
@@ -62,7 +82,7 @@ public:
 
         int increment = time_step_delta();
         long long int next_logical = logical_step_count_ + inference_interval_;
-        long long int next_global = next_logical + global_step_offset_;
+        long long int next_global = effective_global_step_ + increment + inference_interval_;
 
         if (next_logical + increment >= total_timesteps_)
         {
@@ -70,13 +90,17 @@ public:
         }
         else if (is_hdf_unsafe(next_global, increment))
         {
-            next_inference_step_ = next_logical
-                + (hdf_output_interval_ - static_cast<int>((next_global - 1) % hdf_output_interval_));
+            long long int next_hdf = ((next_global + hdf_output_interval_) / hdf_output_interval_) * hdf_output_interval_;
+            long long int safe_global = next_hdf + 1;
+            long long int delay = safe_global - next_global;
+            next_inference_step_ = logical_step_count_ + inference_interval_ + delay;
         }
         else
         {
             next_inference_step_ = next_logical;
         }
+
+        last_inference_successful_ = true;
         return true;
     }
 
@@ -123,4 +147,6 @@ private:
     int global_step_offset_;
     int stride_ = 1;
     long long int next_inference_step_ = 0;
+    long long int effective_global_step_ = 0;
+    bool last_inference_successful_ = false;
 };
