@@ -9,3 +9,9 @@
 	path = extern/phydll
 	url = https://gitlab.com/cerfacs/phydll.git
 	branch = release/0.2
+[submodule "extern/papi"]
+	path = extern/papi
+	url = https://github.com/icl-utk-edu/papi.git
+[submodule "extern/scorep"]
+	path = extern/scorep
+	url = https://gitlab.com/score-p/scorep.git

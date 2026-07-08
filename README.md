@@ -131,24 +131,38 @@ The library includes optional **manual Score-P instrumentation** that can be ena
 
 ### Prerequisites
 
-- **Score-P 8.4** (built against `gompi/2022a`: GCC 11.3 + OpenMPI 4.1.4), module name: `Score-P/8.4`
-- **PAPI 7.0.0** (optional, for hardware counter metrics)
+- **Score-P 8.4** and **PAPI 7.2.0** via the local bootstrap scripts in `extern/`
+- Public CI/CD tarballs for the Score-P git-checkout dependencies:
+  - `otf2-3.1.1`
+  - `opari2-2.0.9`
+  - `cubew-4.8.2`
+  - `cubelib-4.8.2`
 
-The cluster environment script [set_env_claix23_cuda12.4.sh](set_env_claix23_cuda12.4.sh) loads these modules automatically when `USE_SCOREP=1` is exported before sourcing it:
+Bootstrap them once with:
 
 ```bash
-export USE_SCOREP=1
-source set_env_claix23_cuda12.4.sh
+git submodule update --init --recursive
+./install_scorep.sh cuda-12
 ```
 
-> **Note:** Do not set `SCOREP_METRIC_PAPI` to hardware counter events (e.g. `PAPI_TOT_INS`) on standard compute nodes — `perf_event_paranoid` restrictions will cause a fatal PAPI initialization crash. Keep it empty:
+`install_scorep.sh` runs the SmartSim install with the local PAPI/Score-P stack enabled. If you only want to bootstrap the profiling stack, run `./build_scorep.sh`.
+
+`build_scorep.sh` keeps `extern/scorep` as a submodule, builds local PAPI, downloads and installs the public OTF2/OPARI2/CubeW/CubeLib tarballs into the local prefix, then runs Score-P's git-checkout bootstrap/configure flow against that prefix.
+
+See `documentation/custom_scorep_papi.md` for the full local-stack workflow.
+
+The cluster environment script [set_env_claix23_cuda12.4.sh](set_env_claix23_cuda12.4.sh) now uses the local Score-P install when `USE_SCOREP=1` is exported before sourcing it.
+
+> **Note:** Do not set `SCOREP_METRIC_PAPI` to hardware counter events (e.g. `PAPI_TOT_INS`) on standard compute nodes unless the job requests `--hwctr=papi`. Keep it empty otherwise:
 > ```bash
 > export SCOREP_METRIC_PAPI=""
 > ```
 
+> To measure IB/network traffic on the measured job, set `SCOREP_METRIC_PAPI_SEP=,` and `SCOREP_METRIC_PAPI` to the desired native PAPI event names before starting the application.
+
 ### Enabling in CMake
 
-Pass `-DWITH_SCOREP=ON` to the CMake configure step. This activates the `USE_SCOREP` compile definition throughout the library and switches the compiler to the `scorep-mpicxx` wrapper:
+Pass `-DWITH_SCOREP=ON` to the CMake configure step. This activates the `USE_SCOREP` compile definition throughout the library and switches the compiler to the local `scorep-mpicxx` wrapper:
 
 ```bash
 cmake -B build -DWITH_SCOREP=ON

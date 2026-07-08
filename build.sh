@@ -5,6 +5,19 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 BASE_DIR="$(realpath "${SCRIPT_DIR}/..")"
 source "${BASE_DIR}/set_env_claix23_cuda12.4.sh"
 
+if [[ -n "${USE_SCOREP:-}" ]]; then
+    if [ -f "${SCRIPT_DIR}/env_scorep.sh" ]; then
+        source "${SCRIPT_DIR}/env_scorep.sh"
+    else
+        echo "USE_SCOREP=1 but ${SCRIPT_DIR}/env_scorep.sh is missing. Run ./install_scorep.sh first." >&2
+        exit 1
+    fi
+    if ! command -v scorep-mpicxx >/dev/null 2>&1 || ! command -v scorep-config >/dev/null 2>&1; then
+        echo "USE_SCOREP=1 but local Score-P is not on PATH. Run ./install_scorep.sh first." >&2
+        exit 1
+    fi
+fi
+
 echo "DEBUG: SCOREP_ROOT_DIR = $SCOREP_ROOT_DIR"
 echo "DEBUG: PATH = $PATH"
 echo "DEBUG: MODULEPATH = $MODULEPATH"
@@ -22,7 +35,6 @@ test_filter="${2:-}"
 run_registry_tests="${CPPML_RUN_REGISTRY_TESTS:-OFF}"
 with_smartsim="${WITH_SMARTSIM:-ON}"
 with_aix="${WITH_AIX:-ON}"
-aix_use_prebuilt="${AIX_USE_PREBUILT:-ON}"
 with_phydll="${WITH_PHYDLL:-ON}"
 with_torch="${WITH_TORCH:-ON}"
 with_tensorflow="${WITH_TENSORFLOW:-OFF}"
@@ -46,10 +58,12 @@ if [[ -n "${USE_SCOREP:-}" ]]; then
     export CC=scorep-mpicc
     export CXX=scorep-mpicxx
     scorep_flag="-DWITH_SCOREP=ON"
+    aix_use_prebuilt="${AIX_USE_PREBUILT:-ON}"
 else
     export CC=gcc
     export CXX=g++
     scorep_flag="-DWITH_SCOREP=OFF"
+    aix_use_prebuilt="${AIX_USE_PREBUILT:-OFF}"
 fi
 unset LD # Remove LD if set by install.sh to prevent CMake compiler checks from failing
 
