@@ -1,20 +1,22 @@
 #!/usr/bin/env python3
 import os
 import sys
-# Ensure Score-P's bin directory is in PATH for python scorep module
-scorep_bin = "/cvmfs/software.hpc.rwth.de/Linux/RH9/x86_64/intel/sapphirerapids/software/Score-P/8.4-gompi-2022a/bin"
-if scorep_bin not in os.environ.get("PATH", ""):
-    os.environ["PATH"] = scorep_bin + os.pathsep + os.environ.get("PATH", "")
 import struct
 import numpy as np
+PY_SCOREP_WRAPPER = os.environ.get("PHYDLL_PY_SCOREP_WRAPPER", "0") == "1"
+
 import mpi4py
 mpi4py.rc.thread_level = "funneled"
 from mpi4py import MPI
 import torch
 import contextlib
+ENABLE_SCOREP_USER = os.environ.get("ENABLE_SCOREP_USER", "0") == "1"
 try:
-    import scorep.user
-    HAS_SCOREP = True
+    if ENABLE_SCOREP_USER:
+        import scorep.user
+        HAS_SCOREP = True
+    else:
+        HAS_SCOREP = False
 except ImportError:
     HAS_SCOREP = False
 
@@ -46,6 +48,8 @@ def receive_p2p_metadata(comm, source_rank):
     """
     Replicates receive_p2p_metadata from dl_client.cpp
     """
+    from mpi4py import MPI
+
     # struct BcastMetaHeader {
     #     int32_t magic;           // 0
     #     int32_t version;         // 4
@@ -134,202 +138,232 @@ def receive_p2p_metadata(comm, source_rank):
     }
 
 def main():
+    dll = None
     world_comm = MPI.COMM_WORLD
-    
-    # Handle MPMD split (identical logic to C++ client)
-    color = MPI.UNDEFINED
-    local_comm = world_comm.Split(color, 0)
-    
-    # Check if we are in the DL application group
+    try:
+        # Configure Torch threading
+        intra_threads = int(os.environ.get("MLCOUPLING_INTRA_OP_THREADS", os.environ.get("SLURM_CPUS_PER_TASK", "-1")))
+        inter_threads = int(os.environ.get("MLCOUPLING_INTER_OP_THREADS", "-1"))
 
-    # Configure Torch threading
-    intra_threads = int(os.environ.get("MLCOUPLING_INTRA_OP_THREADS", os.environ.get("SLURM_CPUS_PER_TASK", "-1")))
-    inter_threads = int(os.environ.get("MLCOUPLING_INTER_OP_THREADS", "-1"))
+        if intra_threads > 0:
+            torch.set_num_threads(intra_threads)
+        if inter_threads > 0:
+            torch.set_num_interop_threads(inter_threads)
 
-    if intra_threads > 0:
-        torch.set_num_threads(intra_threads)
-    if inter_threads > 0:
-        torch.set_num_interop_threads(inter_threads)
-
-    dl_count = int(os.environ.get("PHYDLL_DL_COUNT", "1"))
-    
-    dll = PhyDLL()
-    dll.init("dl")
-    print(f"[DL {world_comm.rank}] Calling dll.define_dl...", flush=True)
-    if intra_threads > 0 or inter_threads > 0:
-        print(f"[DL {world_comm.rank}] torch threads: intra={torch.get_num_threads()}, inter={torch.get_num_interop_threads()}", flush=True)
-    
-    dll.define_dl(count=dl_count)
-    print(f"[DL {world_comm.rank}] Returned from dll.define_dl.", flush=True)
-    
-    dist_info = dll.get_distribution_info()
-    ndest = dist_info["ndest"]
-    dests = dist_info["dest"]
-    field_size = dll.get_field_size()
-    
-    # C++ client has a Barrier here
-    print(f"[DL {world_comm.rank}] Entering world_comm.Barrier...", flush=True)
-    world_comm.Barrier()
-    print(f"[DL {world_comm.rank}] Exited world_comm.Barrier.", flush=True)
-    
-    meta_initialized = False
-    model_loaded = False
-    model_path = ""
-    device_name = ""
-    total_input_size = 0
-    total_output_size = 0
-    final_meta = None
-    rank_batch_sizes = {}
-    
-    # Receive metadata from each connected physical rank
-    for source_rank in dests:
-        p2p_meta = receive_p2p_metadata(world_comm, source_rank)
-        if p2p_meta['valid']:
-            if not meta_initialized:
-                model_path = p2p_meta.get('model_path', '')
-                device_name = p2p_meta.get('device', '')
-                final_meta = p2p_meta
-                meta_initialized = True
-            total_input_size += p2p_meta.get('total_input', 0)
-            total_output_size += p2p_meta.get('total_output', 0)
-            if p2p_meta.get('in_shapes') and len(p2p_meta['in_shapes']) > 0:
-                rank_batch_sizes[source_rank] = p2p_meta['in_shapes'][0][0]
-
-    torch_device = torch.device('cpu')
-    model = None
-    
-    # Main loop
-    frame_id = 0
-    while dll.is_phy_signal():
-        # Receive fields from PhyDLL
-        # With dl_count=1, pyphydll.recv() returns a dict with one entry
-        print(f"[DL {world_comm.rank}] Calling dll.recv()...", flush=True)
-        with scorep_region("py_recv"):
-            fields = dll.recv()
-        print(f"[DL {world_comm.rank}] Returned from dll.recv().", flush=True)
-        combined_data = fields.get("PHY-DATA", None)
-        if combined_data is None:
-            # Fallback
-            if fields:
-                combined_data = next(iter(fields.values()))
-            else:
-                combined_data = np.zeros(field_size)
-
-        # Load model if metadata was received (deferred load like C++ client)
-        if meta_initialized and not model_loaded:
-            wants_gpu = bool(device_name) and device_name.upper() != "CPU"
-            if wants_gpu:
-                # Query the communicator containing only the DL ranks
-                dl_comm = dll.get_local_mpi_comm()
-                local_dl_comm = dl_comm.Split_type(MPI.COMM_TYPE_SHARED, 0)
-                local_dl_rank = local_dl_comm.rank
-                local_dl_comm.Free()
-
-                if torch.cuda.is_available() and torch.cuda.device_count() > 0:
-                    local_gpu_count = torch.cuda.device_count()
-                    gpu_id = local_dl_rank % local_gpu_count
-                    gpu_id = int(os.environ.get("PHYDLL_DL_GPU_ID", gpu_id))
-                    print(f"[PHYDLL:DL:PY] Using local DL rank {local_dl_rank} mapped to GPU device index: {gpu_id}", file=sys.stderr)
-                    torch_device = torch.device('cuda', gpu_id)
-                else:
-                    print("[PHYDLL:DL:PY] requested GPU but no CUDA device available; using CPU", file=sys.stderr)
-                    torch_device = torch.device('cpu')
-            
-            if model_path:
-                try:
-                    model = torch.jit.load(model_path)
-                    model.eval()
-                    model.to(torch_device)
-                    print("[PHYDLL:DL:PY] model loaded", file=sys.stderr)
-                except Exception as e:
-                    print(f"[PHYDLL:DL:PY] Failed to load TorchScript model: {e}", file=sys.stderr)
-                    world_comm.Abort(1)
-            
-            print(f"[PHYDLL:DL:PY] meta init model_path='{model_path}' total_input={total_input_size} total_output={total_output_size}", file=sys.stderr)
-            model_loaded = True
-
-        output = np.zeros(field_size, dtype=np.float64)
-        used_model = False
+        dl_count = int(os.environ.get("PHYDLL_DL_COUNT", "1"))
         
-        if model_loaded and model is not None:
-            with scorep_region("py_inference"):
-                # Replicate the C++ client's robust dynamic shape and batch extraction logic
-                ndest = len(dests)
-                client_batch_size = 1
-                if final_meta and final_meta.get('in_shapes') and len(final_meta['in_shapes']) > 0 and len(final_meta['in_shapes'][0]) > 0:
-                    client_batch_size = final_meta['in_shapes'][0][0]
+        # Match the original Python DL startup: participate in the MPMD split
+        # before entering PhyDLL's own internal MPI split.
+        color = MPI.UNDEFINED
+        local_comm = world_comm.Split(color, 0)
+        if local_comm != MPI.COMM_NULL:
+            local_comm.Free()
+        
+        print("[DL] constructing PhyDLL...", flush=True)
+        dll = PhyDLL()
+        print("[DL] calling dll.init(...)", flush=True)
+        dll.init("dl")
+        print("[DL] Calling dll.define_dl...", flush=True)
+        if intra_threads > 0 or inter_threads > 0:
+            print(f"[DL] torch threads: intra={torch.get_num_threads()}, inter={torch.get_num_interop_threads()}", flush=True)
+        
+        dll.define_dl(count=dl_count)
+        print("[DL] Returned from dll.define_dl.", flush=True)
+
+        print("[DL] calling dll.get_local_mpi_comm()...", flush=True)
+        local_comm = dll.get_local_mpi_comm()
+        local_comm.Get_rank()
+        local_comm.Get_size()
+        print("[DL] Returned from dll.get_local_mpi_comm().", flush=True)
+        
+        dist_info = dll.get_distribution_info()
+        ndest = dist_info["ndest"]
+        dests = dist_info["dest"]
+        field_size = dll.get_field_size()
+        
+        # C++ client has a Barrier here
+        print(f"[DL {world_comm.rank}] Entering world_comm.Barrier...", flush=True)
+        world_comm.Barrier()
+        print(f"[DL {world_comm.rank}] Exited world_comm.Barrier.", flush=True)
+        
+        meta_initialized = False
+        model_loaded = False
+        model_path = ""
+        device_name = ""
+        total_input_size = 0
+        total_output_size = 0
+        final_meta = None
+        rank_batch_sizes = {}
+        
+        # Receive metadata from each connected physical rank
+        for source_rank in dests:
+            p2p_meta = receive_p2p_metadata(world_comm, source_rank)
+            if p2p_meta['valid']:
+                if not meta_initialized:
+                    model_path = p2p_meta.get('model_path', '')
+                    device_name = p2p_meta.get('device', '')
+                    final_meta = p2p_meta
+                    meta_initialized = True
+                total_input_size += p2p_meta.get('total_input', 0)
+                total_output_size += p2p_meta.get('total_output', 0)
+                if p2p_meta.get('in_shapes') and len(p2p_meta['in_shapes']) > 0:
+                    rank_batch_sizes[source_rank] = p2p_meta['in_shapes'][0][0]
+
+        torch_device = torch.device('cpu')
+        model = None
+        
+        # Main loop
+        frame_id = 0
+        while dll.is_phy_signal():
+            # Receive fields from PhyDLL
+            # With dl_count=1, pyphydll.recv() returns a dict with one entry
+            print(f"[DL {world_comm.rank}] Calling dll.recv()...", flush=True)
+            with scorep_region("py_recv"):
+                fields = dll.recv()
+            print(f"[DL {world_comm.rank}] Returned from dll.recv().", flush=True)
+            combined_data = fields.get("PHY-DATA", None)
+            if combined_data is None:
+                # Fallback
+                if fields:
+                    combined_data = next(iter(fields.values()))
+                else:
+                    combined_data = np.zeros(field_size)
+
+            # Load model if metadata was received (deferred load like C++ client)
+            if meta_initialized and not model_loaded:
+                wants_gpu = bool(device_name) and device_name.upper() != "CPU"
+                if wants_gpu:
+                    # Query the communicator containing only the DL ranks
+                    dl_comm = dll.get_local_mpi_comm()
+                    try:
+                        local_dl_comm = None
+                        local_dl_comm = dl_comm.Split_type(MPI.COMM_TYPE_SHARED, 0)
+                        try:
+                            local_dl_rank = local_dl_comm.rank
+                        finally:
+                            if local_dl_comm is not None:
+                                local_dl_comm.Free()
+                    finally:
+                        dl_comm.Free()
+
+                    if torch.cuda.is_available() and torch.cuda.device_count() > 0:
+                        local_gpu_count = torch.cuda.device_count()
+                        gpu_id = local_dl_rank % local_gpu_count
+                        gpu_id = int(os.environ.get("PHYDLL_DL_GPU_ID", gpu_id))
+                        print(f"[PHYDLL:DL:PY] Using local DL rank {local_dl_rank} mapped to GPU device index: {gpu_id}", file=sys.stderr)
+                        torch_device = torch.device('cuda', gpu_id)
+                    else:
+                        print("[PHYDLL:DL:PY] requested GPU but no CUDA device available; using CPU", file=sys.stderr)
+                        torch_device = torch.device('cpu')
                 
-                batch_size = max(1, ndest * client_batch_size)
-                field_size_per_rank = len(combined_data) // max(1, ndest)
-                input_per_rank_used = total_input_size // batch_size
+                if model_path:
+                    try:
+                        model = torch.jit.load(model_path)
+                        model.eval()
+                        model.to(torch_device)
+                        print("[PHYDLL:DL:PY] model loaded", file=sys.stderr)
+                    except Exception as e:
+                        print(f"[PHYDLL:DL:PY] Failed to load TorchScript model: {e}", file=sys.stderr)
+                        world_comm.Abort(1)
                 
-                # Check for dynamic shapes
-                actual_shape = [batch_size]
-                if final_meta and final_meta.get('in_shapes') and len(final_meta['in_shapes']) > 0:
-                    shape = final_meta['in_shapes'][0]
-                    if len(shape) > 1:
-                        actual_shape.extend(shape[1:])
+                print(f"[PHYDLL:DL:PY] meta init model_path='{model_path}' total_input={total_input_size} total_output={total_output_size}", file=sys.stderr)
+                model_loaded = True
+
+            output = np.zeros(field_size, dtype=np.float64)
+            used_model = False
+            
+            if model_loaded and model is not None:
+                with scorep_region("py_inference"):
+                    # Replicate the C++ client's robust dynamic shape and batch extraction logic
+                    ndest = len(dests)
+                    client_batch_size = 1
+                    if final_meta and final_meta.get('in_shapes') and len(final_meta['in_shapes']) > 0 and len(final_meta['in_shapes'][0]) > 0:
+                        client_batch_size = final_meta['in_shapes'][0][0]
+                    
+                    batch_size = max(1, ndest * client_batch_size)
+                    field_size_per_rank = len(combined_data) // max(1, ndest)
+                    input_per_rank_used = total_input_size // batch_size
+                    
+                    # Check for dynamic shapes
+                    actual_shape = [batch_size]
+                    if final_meta and final_meta.get('in_shapes') and len(final_meta['in_shapes']) > 0:
+                        shape = final_meta['in_shapes'][0]
+                        if len(shape) > 1:
+                            actual_shape.extend(shape[1:])
+                        else:
+                            actual_shape.append(input_per_rank_used)
                     else:
                         actual_shape.append(input_per_rank_used)
-                else:
-                    actual_shape.append(input_per_rank_used)
-                
-                # Extract input features per sample (accounting for any rank padding)
-                input_flat = np.zeros(total_input_size, dtype=np.float32)
-                for b in range(batch_size):
-                    client_id = b // client_batch_size
-                    sample_id = b % client_batch_size
-                    src_start = client_id * field_size_per_rank + sample_id * input_per_rank_used
-                    dest_start = b * input_per_rank_used
-                    input_flat[dest_start : dest_start + input_per_rank_used] = \
-                        combined_data[src_start : src_start + input_per_rank_used]
-                
-                input_tensor = torch.from_numpy(input_flat).reshape(batch_size, input_per_rank_used)
-                input_tensor = input_tensor.view(*actual_shape)
-                input_tensor = input_tensor.to(torch_device)
-                
-                try:
-                    with torch.no_grad():
-                        max_chunk_size = final_meta.get('batch_size', 0)
-                        if max_chunk_size <= 0:
-                            max_chunk_size = batch_size
-                        outputs = []
-                        for chunk_idx in range(0, batch_size, max_chunk_size):
-                            end_idx = min(chunk_idx + max_chunk_size, batch_size)
-                            chunk_tensor = input_tensor[chunk_idx:end_idx]
-                            outputs.append(model(chunk_tensor))
-                        output_tensor = torch.cat(outputs, dim=0)
-                        output_np = output_tensor.cpu().contiguous().numpy().flatten()
-                        
-                    # Scatter back to output buffer dynamically (matching C++ logic)
-                    outputs_per_rank_used = total_output_size // batch_size
-                    output_field_size_per_rank = len(output) // max(1, ndest)
+                    
+                    # Extract input features per sample (accounting for any rank padding)
+                    input_flat = np.zeros(total_input_size, dtype=np.float32)
                     for b in range(batch_size):
                         client_id = b // client_batch_size
                         sample_id = b % client_batch_size
-                        dest_start = client_id * output_field_size_per_rank + sample_id * outputs_per_rank_used
-                        src_start = b * outputs_per_rank_used
-                        output[dest_start : dest_start + outputs_per_rank_used] = \
-                            output_np[src_start : src_start + outputs_per_rank_used]
-                    used_model = True
-                except Exception as e:
-                    print(f"[PHYDLL:DL:PY] forward failed: {e}", file=sys.stderr)
-                    world_comm.Abort(1)
-        
-        if not used_model:
-            # Fallback: negate inputs
-            size = min(len(combined_data), len(output))
-            output[:size] = -combined_data[:size]
+                        src_start = client_id * field_size_per_rank + sample_id * input_per_rank_used
+                        dest_start = b * input_per_rank_used
+                        input_flat[dest_start : dest_start + input_per_rank_used] = \
+                            combined_data[src_start : src_start + input_per_rank_used]
+                    
+                    input_tensor = torch.from_numpy(input_flat).reshape(batch_size, input_per_rank_used)
+                    input_tensor = input_tensor.view(*actual_shape)
+                    input_tensor = input_tensor.to(torch_device)
+                    
+                    try:
+                        with torch.no_grad():
+                            max_chunk_size = final_meta.get('batch_size', 0)
+                            if max_chunk_size <= 0:
+                                max_chunk_size = batch_size
+                            outputs = []
+                            for chunk_idx in range(0, batch_size, max_chunk_size):
+                                end_idx = min(chunk_idx + max_chunk_size, batch_size)
+                                chunk_tensor = input_tensor[chunk_idx:end_idx]
+                                outputs.append(model(chunk_tensor))
+                            output_tensor = torch.cat(outputs, dim=0)
+                            output_np = output_tensor.cpu().contiguous().numpy().flatten()
+                            
+                        # Scatter back to output buffer dynamically (matching C++ logic)
+                        outputs_per_rank_used = total_output_size // batch_size
+                        output_field_size_per_rank = len(output) // max(1, ndest)
+                        for b in range(batch_size):
+                            client_id = b // client_batch_size
+                            sample_id = b % client_batch_size
+                            dest_start = client_id * output_field_size_per_rank + sample_id * outputs_per_rank_used
+                            src_start = b * outputs_per_rank_used
+                            output[dest_start : dest_start + outputs_per_rank_used] = \
+                                output_np[src_start : src_start + outputs_per_rank_used]
+                        used_model = True
+                    except Exception as e:
+                        print(f"[PHYDLL:DL:PY] forward failed: {e}", file=sys.stderr)
+                        world_comm.Abort(1)
             
-        # Send results back
-        with scorep_region("py_send"):
-            dll.send({"DL-OUT": output})
-        frame_id += 1
+            if not used_model:
+                # Fallback: negate inputs
+                size = min(len(combined_data), len(output))
+                output[:size] = -combined_data[:size]
+                
+            # Send results back
+            with scorep_region("py_send"):
+                dll.send({"DL-OUT": output})
+            frame_id += 1
 
-    dll.finalize()
+    finally:
+        if dll is not None:
+            try:
+                prefix = f"[DL {world_comm.rank}]" if world_comm is not None else "[DL]"
+                print(f"{prefix} Entering dll.finalize()", flush=True)
+                dll.finalize()
+                print(f"{prefix} Exited dll.finalize()", flush=True)
+            except Exception as e:
+                print(f"[PHYDLL:DL:PY] dll.finalize() failed: {e}", file=sys.stderr)
+        prefix = f"[DL {world_comm.rank}]" if world_comm is not None else "[DL]"
+        print(f"{prefix} main() returning", flush=True)
 
 if __name__ == "__main__":
-    main()
-    # mpi4py calls Finalize at exit unless configured otherwise
-    # But we can call it explicitly
-    MPI.Finalize()
+    try:
+        main()
+    finally:
+        if MPI.Is_initialized() and not MPI.Is_finalized():
+            print("[DL] Entering MPI.Finalize()", flush=True)
+            MPI.Finalize()
+            print("[DL] Exited MPI.Finalize()", flush=True)

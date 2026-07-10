@@ -272,8 +272,6 @@ private:
             std::cout << "[PHYDLL:PHY] Rank 0 starting metadata handshake. Synchronizing with DL side..." << std::endl;
         }
 
-        MPI_Barrier(MPI_COMM_WORLD);
-
         if (world_rank == 0)
         {
             std::cout << "[PHYDLL:PHY] Handshake synchronization complete." << std::endl;

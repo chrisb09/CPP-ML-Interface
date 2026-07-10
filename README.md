@@ -223,6 +223,15 @@ When running the PhyDLL DL clients (either the C++ `dl_client` or the Python `ph
 - `MLCOUPLING_INTRA_OP_THREADS`: Number of threads used for parallelizing individual operations (e.g., matrix multiplications). Defaults to `SLURM_CPUS_PER_TASK` if running under Slurm.
 - `MLCOUPLING_INTER_OP_THREADS`: Number of threads used for parallelizing independent operations in the model graph.
 
+### PhyDLL With Score-P In Python
+
+The Python PhyDLL client has two valid launch modes:
+
+- `USE_SCOREP=0`: plain Python imports the non-Score-P `libphydll.so` build.
+- `USE_SCOREP=1` with `PHYDLL_PY_SCOREP_WRAPPER=1`: the launcher starts Python through `python -m scorep --keep-files --instrumenter-type=dummy --noinstrumenter --mpp=none ...`, which is required for importing the Score-P-linked PhyDLL build.
+
+Without the wrapper, the Score-P-linked PhyDLL import fails with missing Score-P runtime symbols.
+
 **Best Practice**: For CPU inference with PhyDLL, it is recommended to launch fewer DL ranks than simulation ranks (e.g., one DL rank per node) and give each DL rank multiple cores via Slurm's `--cpus-per-task`. The clients will automatically respect this allocation to ensure efficient execution without oversubscribing the CPU.
 
 ## Diagram

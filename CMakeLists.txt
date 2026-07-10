@@ -21,6 +21,7 @@ option(WITH_TENSORFLOW "Enable TensorFlow support in AIxelerator (only applies i
 option(WITH_ONNX "Enable ONNX support in AIxelerator (only applies if building AIxelerator from source or using a prebuilt with ONNX support)" OFF)
 option(FORCE_AIX_REBUILD "Force rebuilding AIxelerator from source even if a prebuilt library is found (only applies if AIX_USE_PREBUILT is ON)" OFF)
 option(WITH_SCOREP "Enable Score-P manual instrumentation" OFF)
+set(CPPML_SCOREP_MPP "mpi" CACHE STRING "Score-P MPP subsystem for CMI targets")
 
 # Set Variables
 set(EXECUTABLE_NAME "cpp_ml_interface_executable")
@@ -121,8 +122,8 @@ if (WITH_SCOREP)
     list(APPEND CMAKE_MODULE_PATH "${AIXELERATOR_DIR}/cmake")
     find_package(Scorep REQUIRED)
     if(SCOREP_FOUND)
-        scorep_instrument_target(${LIBRARY_NAME} USER ON COMPILER OFF MEMORY ON MPP mpi)
-        scorep_instrument_target(cpp_ml_interface_headers INTERFACE USER ON COMPILER OFF MPP mpi)
+        scorep_instrument_target(${LIBRARY_NAME} USER ON COMPILER OFF MEMORY ON MPP ${CPPML_SCOREP_MPP})
+        scorep_instrument_target(cpp_ml_interface_headers INTERFACE USER ON COMPILER OFF MPP ${CPPML_SCOREP_MPP})
         target_compile_definitions(${LIBRARY_NAME} PUBLIC USE_SCOREP)
         target_compile_definitions(cpp_ml_interface_headers INTERFACE USE_SCOREP)
     endif()
@@ -263,7 +264,7 @@ target_link_libraries(${EXECUTABLE_NAME} PRIVATE
 )
 
 if (WITH_SCOREP)
-    set_target_properties(${EXECUTABLE_NAME} PROPERTIES SCOREP_MPP_SYSTEM "mpi")
+    set_target_properties(${EXECUTABLE_NAME} PROPERTIES SCOREP_MPP_SYSTEM "${CPPML_SCOREP_MPP}")
 endif()
 
 if(WITH_SMARTSIM)
@@ -293,7 +294,7 @@ if(BUILD_TESTING)
     target_include_directories(test_flexible_fallback PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/include")
     target_link_libraries(test_flexible_fallback PRIVATE cpp_ml_interface_library)
     if (WITH_SCOREP)
-        set_target_properties(test_flexible_fallback PROPERTIES SCOREP_MPP_SYSTEM "mpi")
+        set_target_properties(test_flexible_fallback PROPERTIES SCOREP_MPP_SYSTEM "${CPPML_SCOREP_MPP}")
     endif()
     add_test(NAME test_flexible_fallback COMMAND test_flexible_fallback)
 
@@ -329,7 +330,7 @@ if(BUILD_TESTING)
         target_include_directories(test_provider_inference PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/include")
         target_link_libraries(test_provider_inference PRIVATE cpp_ml_interface_library)
         if (WITH_SCOREP)
-            set_target_properties(test_provider_inference PROPERTIES SCOREP_MPP_SYSTEM "mpi")
+            set_target_properties(test_provider_inference PROPERTIES SCOREP_MPP_SYSTEM "${CPPML_SCOREP_MPP}")
         endif()
 
         add_test(NAME test_provider_inference
@@ -345,4 +346,3 @@ if(BUILD_TESTING)
             "Set -DTEST_PYTHON_EXECUTABLE=/path/to/python3 to enable it.")
     endif()
 endif()
-

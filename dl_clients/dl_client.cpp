@@ -147,7 +147,11 @@ BcastMeta receive_p2p_metadata(int source_rank)
 } // namespace
 
 int main(int argc, char **argv) {
+    std::fprintf(stderr, "[PHYDLL:DL] client entering main before MPI_Init\n");
+    std::fflush(stderr);
     MPI_Init(&argc, &argv);
+    std::fprintf(stderr, "[PHYDLL:DL] client returned from MPI_Init\n");
+    std::fflush(stderr);
 
     // Participate in the MPMD split to avoid collective mismatches.
     // We no longer rely on MPI_APPNUM, because Slurm srun with OpenMPI 5 assigns appnum 0 to both components!
@@ -205,9 +209,7 @@ int main(int argc, char **argv) {
     phydll_dl::DlRuntime runtime(dl_count);
     runtime.initialize();
 
-    MPI_Barrier(MPI_COMM_WORLD);
-
-    std::fprintf(stderr, "[PHYDLL:DL] Past MPI_Barrier, getting ndest\n"); std::fflush(stderr);
+    std::fprintf(stderr, "[PHYDLL:DL] getting ndest\n"); std::fflush(stderr);
     int ndest = phydll_get_ndest();
     int *dests = phydll_get_dest();
     std::fprintf(stderr, "[PHYDLL:DL] ndest=%d, dests=%p\n", ndest, (void*)dests); std::fflush(stderr);
@@ -434,5 +436,7 @@ int main(int argc, char **argv) {
 
     phydll_finalize();
     MPI_Finalize();
+    std::fprintf(stderr, "[PHYDLL:DL] client exiting cleanly\n");
+    std::fflush(stderr);
     return 0;
 }

@@ -15,6 +15,7 @@ venv/
 extern/python
 extern/libtorch
 dl_clients/build
+dl_clients/build-module-test
 tmp/
 
 # Stray Slurm build logs
