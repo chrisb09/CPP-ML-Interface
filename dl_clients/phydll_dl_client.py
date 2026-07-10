@@ -181,11 +181,6 @@ def main():
         dests = dist_info["dest"]
         field_size = dll.get_field_size()
         
-        # C++ client has a Barrier here
-        print(f"[DL {world_comm.rank}] Entering world_comm.Barrier...", flush=True)
-        world_comm.Barrier()
-        print(f"[DL {world_comm.rank}] Exited world_comm.Barrier.", flush=True)
-        
         meta_initialized = False
         model_loaded = False
         model_path = ""
