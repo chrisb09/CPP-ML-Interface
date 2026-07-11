@@ -125,6 +125,87 @@ target_include_directories(cpp_ml_interface_executable PRIVATE "${CMAKE_CURRENT_
 
 An actually working example project can be found in the [`module_test`](https://github.com/chrisb09/smartsim_playground/tree/master/module_test) directory of the `smartsim_playground` repository, which includes a custom provider and behavior, and demonstrates how to set up the CMakeLists.txt file to generate the merged registry and use the library in a project with custom subclasses.
 
+## Score-P Profiling Instrumentation
+
+The library includes optional **manual Score-P instrumentation** that can be enabled at build time. When active, it produces CUBE4 profiles (`.cubex` files) viewable in `cube4` or `Vampir`, giving a per-phase breakdown of the ML coupling overhead.
+
+### Prerequisites
+
+- **Score-P 8.4** and **PAPI 7.2.0** via the local bootstrap scripts in `extern/`
+- Public CI/CD tarballs for the Score-P git-checkout dependencies:
+  - `otf2-3.1.1`
+  - `opari2-2.0.9`
+  - `cubew-4.8.2`
+  - `cubelib-4.8.2`
+
+Bootstrap them once with:
+
+```bash
+git submodule update --init --recursive
+./install_scorep.sh cuda-12
+```
+
+`install_scorep.sh` runs the SmartSim install with the local PAPI/Score-P stack enabled. If you only want to bootstrap the profiling stack, run `./build_scorep.sh`.
+
+`build_scorep.sh` keeps `extern/scorep` as a submodule, builds local PAPI, downloads and installs the public OTF2/OPARI2/CubeW/CubeLib tarballs into the local prefix, then runs Score-P's git-checkout bootstrap/configure flow against that prefix.
+
+See `documentation/custom_scorep_papi.md` for the full local-stack workflow.
+
+The cluster environment script [set_env_claix23_cuda12.4.sh](set_env_claix23_cuda12.4.sh) now uses the local Score-P install when `USE_SCOREP=1` is exported before sourcing it.
+
+> **Note:** Do not set `SCOREP_METRIC_PAPI` to hardware counter events (e.g. `PAPI_TOT_INS`) on standard compute nodes unless the job requests `--hwctr=papi`. Keep it empty otherwise:
+> ```bash
+> export SCOREP_METRIC_PAPI=""
+> ```
+
+> To measure IB/network traffic on the measured job, set `SCOREP_METRIC_PAPI_SEP=,` and `SCOREP_METRIC_PAPI` to the desired native PAPI event names before starting the application.
+
+### Enabling in CMake
+
+Pass `-DWITH_SCOREP=ON` to the CMake configure step. This activates the `USE_SCOREP` compile definition throughout the library and switches the compiler to the local `scorep-mpicxx` wrapper:
+
+```bash
+cmake -B build -DWITH_SCOREP=ON
+cmake --build build
+```
+
+Or via the build script:
+
+```bash
+USE_SCOREP=1 ./build.sh
+```
+
+### Instrumented Regions
+
+When built with `WITH_SCOREP=ON`, the following `SCOREP_USER_REGION` regions are available in the profiles:
+
+| Region | Location | Description |
+|--------|----------|-------------|
+| `cppml_prepare_input` | `ml_coupling.hpp` | Input data preparation before inference |
+| `cppml_static_inference` | `ml_coupling.hpp` | Provider dispatch + inference call |
+| `cppml_finalize_output` | `ml_coupling.hpp` | Output copy after inference |
+| `smartsim_put_tensor` | SmartSim provider | Per-tensor `put_tensor` call to the Redis DB |
+| `smartsim_run_model` | SmartSim provider | `run_model` call to the Redis DB |
+| `smartsim_unpack_tensor` | SmartSim provider | Per-tensor `unpack_tensor` from the Redis DB |
+| `phydll_prepack` | PhyDLL provider | Float→double cast + buffer preparation |
+| `phydll_send` | PhyDLL provider | `phydll_set_field` + `phydll_send` |
+| `phydll_recv` | PhyDLL provider | `phydll_recv` + `phydll_get_field` loop |
+| `phydll_unpack` | PhyDLL provider | Double→float cast + output unpack |
+| `aix_inference` | AIxelerator provider | Wraps the AIxeleratorService `inference()` call |
+
+### Enabling in a Downstream Project
+
+If your project uses `add_subdirectory` to consume this library, propagate the flag:
+
+```cmake
+set(WITH_SCOREP ON CACHE BOOL "Enable Score-P instrumentation" FORCE)
+add_subdirectory("${CPP_MODULE_DIR}" "${CMAKE_CURRENT_BINARY_DIR}/cpp-ml-interface-build")
+```
+
+This ensures the library's compile definitions and Score-P wrapper flags are applied consistently across your project and the CPP-ML-Interface build.
+
+---
+
 ## CPU Inference Strategies & Threading
 
 The different providers supported by this interface employ varying strategies for CPU inference, which impacts how you should allocate resources in your job scripts.
@@ -141,6 +222,15 @@ When running the PhyDLL DL clients (either the C++ `dl_client` or the Python `ph
 
 - `MLCOUPLING_INTRA_OP_THREADS`: Number of threads used for parallelizing individual operations (e.g., matrix multiplications). Defaults to `SLURM_CPUS_PER_TASK` if running under Slurm.
 - `MLCOUPLING_INTER_OP_THREADS`: Number of threads used for parallelizing independent operations in the model graph.
+
+### PhyDLL With Score-P In Python
+
+The Python PhyDLL client has two valid launch modes:
+
+- `USE_SCOREP=0`: plain Python imports the non-Score-P `libphydll.so` build.
+- `USE_SCOREP=1` with `PHYDLL_PY_SCOREP_WRAPPER=1`: the launcher starts Python through `python -m scorep --keep-files --instrumenter-type=dummy --noinstrumenter --mpp=none ...`, which is required for importing the Score-P-linked PhyDLL build.
+
+Without the wrapper, the Score-P-linked PhyDLL import fails with missing Score-P runtime symbols.
 
 **Best Practice**: For CPU inference with PhyDLL, it is recommended to launch fewer DL ranks than simulation ranks (e.g., one DL rank per node) and give each DL rank multiple cores via Slurm's `--cpus-per-task`. The clients will automatically respect this allocation to ensure efficient execution without oversubscribing the CPU.
 

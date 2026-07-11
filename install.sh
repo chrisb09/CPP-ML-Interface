@@ -1,15 +1,19 @@
-#!/bin/sh
+#!/usr/bin/env bash
 
-# Set temporary directory to writable location to avoid /tmp issues with CUDA
-# Specifically, we might have insufficient permissions to create files in /tmp
-export TMPDIR="${PWD}/tmp"
-mkdir -p "$TMPDIR"
-
-. ./set_env_claix23_cuda12.4.sh 
-
-# Script dir (POSIX sh and bash support)
+# Script dir
 SCRIPT_PATH="${BASH_SOURCE[0]:-$0}"
 SCRIPT_DIR="$(cd "$(dirname "$SCRIPT_PATH")" && pwd)"
+
+# Set temporary directory to writable location to avoid /tmp issues with CUDA.
+export TMPDIR="${SCRIPT_DIR}/tmp"
+mkdir -p "$TMPDIR"
+
+. "${SCRIPT_DIR}/set_env_claix23_cuda12.4.sh"
+
+if [ "${SMARTSIM_BUILD_SCOREP:-0}" = "1" ]; then
+    echo "SMARTSIM_BUILD_SCOREP=1: bootstrapping local PAPI and Score-P..."
+    "${SCRIPT_DIR}/build_scorep.sh"
+fi
 
 EXTERN_RUNTIME_ROOT="/home/thes2181/python"
 DEFAULT_RUNTIME_ROOT="${SCRIPT_DIR}/extern/python"

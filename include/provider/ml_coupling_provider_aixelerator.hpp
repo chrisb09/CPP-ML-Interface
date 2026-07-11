@@ -16,6 +16,10 @@
 #include "aixeleratorService/aixeleratorService.h"
 #endif
 
+#ifdef USE_SCOREP
+#include <scorep/SCOREP_User.h>
+#endif
+
 // @registry_name: Aixelerator
 // @registry_aliases: aixelerator, AIxelerator, aix, AIx, AIX
 template <typename In, typename Out>
@@ -110,7 +114,14 @@ public:
                                                                    host_fraction);
             }
 
+#ifdef USE_SCOREP
+            SCOREP_USER_REGION_DEFINE(handle_aix_inference)
+            SCOREP_USER_REGION_BEGIN(handle_aix_inference, "aix_inference", SCOREP_USER_REGION_TYPE_COMMON)
+#endif
             service->inference();
+#ifdef USE_SCOREP
+            SCOREP_USER_REGION_END(handle_aix_inference)
+#endif
 
 
         }

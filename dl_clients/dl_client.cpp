@@ -12,6 +12,14 @@
 #include <torch/torch.h>
 #endif
 
+#ifdef USE_SCOREP
+#include <scorep/SCOREP_User.h>
+SCOREP_USER_REGION_DEFINE(handle_dl_h2d);
+SCOREP_USER_REGION_DEFINE(handle_dl_torch_forward);
+SCOREP_USER_REGION_DEFINE(handle_dl_d2h_scatter);
+SCOREP_USER_REGION_DEFINE(handle_dl_send_output);
+#endif
+
 namespace {
 int get_env_int(const char *name, int fallback) {
     const char *value = std::getenv(name);
@@ -139,7 +147,11 @@ BcastMeta receive_p2p_metadata(int source_rank)
 } // namespace
 
 int main(int argc, char **argv) {
+    std::fprintf(stderr, "[PHYDLL:DL] client entering main before MPI_Init\n");
+    std::fflush(stderr);
     MPI_Init(&argc, &argv);
+    std::fprintf(stderr, "[PHYDLL:DL] client returned from MPI_Init\n");
+    std::fflush(stderr);
 
     // Participate in the MPMD split to avoid collective mismatches.
     // We no longer rely on MPI_APPNUM, because Slurm srun with OpenMPI 5 assigns appnum 0 to both components!
@@ -147,6 +159,8 @@ int main(int argc, char **argv) {
     const int color = MPI_UNDEFINED;
     MPI_Comm local_comm = MPI_COMM_NULL;
     MPI_Comm_split(MPI_COMM_WORLD, color, 0, &local_comm);
+
+    int local_dl_rank = 0;
 
     const int dl_count = get_env_int("PHYDLL_DL_FIELD_COUNT", get_env_int("PHYDLL_DL_COUNT", 1));
 
@@ -195,9 +209,7 @@ int main(int argc, char **argv) {
     phydll_dl::DlRuntime runtime(dl_count);
     runtime.initialize();
 
-    MPI_Barrier(MPI_COMM_WORLD);
-
-    std::fprintf(stderr, "[PHYDLL:DL] Past MPI_Barrier, getting ndest\n"); std::fflush(stderr);
+    std::fprintf(stderr, "[PHYDLL:DL] getting ndest\n"); std::fflush(stderr);
     int ndest = phydll_get_ndest();
     int *dests = phydll_get_dest();
     std::fprintf(stderr, "[PHYDLL:DL] ndest=%d, dests=%p\n", ndest, (void*)dests); std::fflush(stderr);
@@ -251,9 +263,21 @@ int main(int argc, char **argv) {
 #ifdef PHYDLL_DL_USE_TORCH
             const bool wants_gpu = !device_name.empty() && device_name != "CPU" && device_name != "cpu";
             if (wants_gpu) {
+                // Query the communicator containing only the DL ranks (after initialization)
+                MPI_Comm dl_comm = phydll_get_local_mpi_comm();
+                MPI_Comm local_dl_comm = MPI_COMM_NULL;
+                MPI_Comm_split_type(dl_comm, MPI_COMM_TYPE_SHARED, 0, MPI_INFO_NULL, &local_dl_comm);
+                MPI_Comm_rank(local_dl_comm, &local_dl_rank);
+                MPI_Comm_free(&local_dl_comm);
+
                 const bool cuda_ok = torch::cuda::is_available() && torch::cuda::device_count() > 0;
                 if (cuda_ok) {
-                    torch_device = torch::Device(torch::kCUDA, 0);
+                    const int local_gpu_count = torch::cuda::device_count();
+                    int gpu_id = local_dl_rank % local_gpu_count;
+                    gpu_id = get_env_int("PHYDLL_DL_GPU_ID", gpu_id);
+                    std::cerr << "[PHYDLL:DL] Using local DL rank " << local_dl_rank 
+                              << " mapped to GPU device index: " << gpu_id << std::endl;
+                    torch_device = torch::Device(torch::kCUDA, gpu_id);
                 } else {
                     std::cerr << "[PHYDLL:DL] requested GPU but no CUDA device available; using CPU" << std::endl;
                     torch_device = torch::Device(torch::kCPU);
@@ -338,19 +362,34 @@ int main(int argc, char **argv) {
                 actual_shape.push_back(input_per_rank_used);
             }
 
+            #ifdef USE_SCOREP
+            SCOREP_USER_REGION_BEGIN(handle_dl_h2d, "dl_h2d", SCOREP_USER_REGION_TYPE_COMMON);
+            #endif
             auto input_tensor = torch::from_blob(input.data(), {batch_size, input_per_rank_used}, options).clone();
             input_tensor = input_tensor.view(actual_shape);
             input_tensor = input_tensor.to(torch_device);
+            #ifdef USE_SCOREP
+            SCOREP_USER_REGION_END(handle_dl_h2d);
+            #endif
             try {
                 torch::NoGradGuard no_grad;
                 long long max_chunk_size = final_meta.batch_size > 0 ? static_cast<long long>(final_meta.batch_size) : batch_size;
                 std::vector<torch::Tensor> outputs;
+                #ifdef USE_SCOREP
+                SCOREP_USER_REGION_BEGIN(handle_dl_torch_forward, "dl_torch_forward", SCOREP_USER_REGION_TYPE_COMMON);
+                #endif
                 for (long long chunk_idx = 0; chunk_idx < batch_size; chunk_idx += max_chunk_size) {
                     long long chunk_size = std::min(max_chunk_size, batch_size - chunk_idx);
                     auto chunk_tensor = input_tensor.slice(0, chunk_idx, chunk_idx + chunk_size);
                     outputs.push_back(model.forward({chunk_tensor}).toTensor());
                 }
                 auto output_tensor = torch::cat(outputs, 0);
+                #ifdef USE_SCOREP
+                SCOREP_USER_REGION_END(handle_dl_torch_forward);
+                #endif
+                #ifdef USE_SCOREP
+                SCOREP_USER_REGION_BEGIN(handle_dl_d2h_scatter, "dl_d2h_scatter", SCOREP_USER_REGION_TYPE_COMMON);
+                #endif
                 output_tensor = output_tensor.to(torch::kCPU).contiguous().view({-1});
 
                 auto output_ptr = output_tensor.data_ptr<float>();
@@ -363,6 +402,9 @@ int main(int argc, char **argv) {
                         output[dest_start + j] = static_cast<double>(output_ptr[b * outputs_per_rank_used + j]);
                     }
                 }
+                #ifdef USE_SCOREP
+                SCOREP_USER_REGION_END(handle_dl_d2h_scatter);
+                #endif
                 used_model = true;
             } catch (const c10::Error &e) {
                 std::cerr << "[PHYDLL:DL] forward failed: " << e.what() << std::endl;
@@ -381,12 +423,20 @@ int main(int argc, char **argv) {
             }
         }
 
+        #ifdef USE_SCOREP
+        SCOREP_USER_REGION_BEGIN(handle_dl_send_output, "dl_send_output", SCOREP_USER_REGION_TYPE_COMMON);
+        #endif
         runtime.send_output(output);
+        #ifdef USE_SCOREP
+        SCOREP_USER_REGION_END(handle_dl_send_output);
+        #endif
 
         ++frame_id;
     }
 
     phydll_finalize();
     MPI_Finalize();
+    std::fprintf(stderr, "[PHYDLL:DL] client exiting cleanly\n");
+    std::fflush(stderr);
     return 0;
 }

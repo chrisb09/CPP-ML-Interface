@@ -1,4 +1,16 @@
-#!/bin/sh
+#!/bin/bash
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+# Initialize Lmod module command for non-interactive shells
+if [ -f /opt/lmod/lmod/init/bash ]; then
+    source /opt/lmod/lmod/init/bash
+fi
+
+# Disable Lmod pagination and interactive warning prompts
+# export TERM=dumb
+export LMOD_PAGER=cat
+export PAGER=cat
 
 # SmartSim requirements:
 # - Python 3.9-3.11, pip
@@ -13,25 +25,20 @@
 
 module_names="OpenSSL/1.1 CUDA/12.4.0 GCCcore/11.3.0 Clang/15.0.5 GCC/11.3.0 OpenMPI/4.1.4 FFTW.MPI/3.3.10 HDF5/1.12.2 PnetCDF/1.12.3 cuDNN/8.9.7.29-CUDA-12.4.0 imkl/2024.2.0"
 
-any_load_required=false
-
+echo "Loading required modules..."
 for module in $module_names; do
-    if ! module is-loaded "$module" >/dev/null 2>&1; then
-        any_load_required=true
-        echo "Module $module is not loaded. Purging and loading required modules."
-        break
-    fi
+    module load "$module" >/dev/null 2>&1 || true
 done
 
-if [ "$any_load_required" = true ]; then
-    echo "Purging and loading required modules for SmartSim..."
-    module purge
-    echo "Loading required modules..."
-    for module in $module_names; do
-        module load "$module"
-    done
+if [[ "${USE_SCOREP:-}" == "1" ]]; then
+    if [ -f "${SCRIPT_DIR}/env_scorep.sh" ]; then
+        . "${SCRIPT_DIR}/env_scorep.sh"
+    else
+        echo "Warning: local Score-P environment helper not found at ${SCRIPT_DIR}/env_scorep.sh"
+    fi
 fi
 
 # Keep OpenSSL runtime path so Python SSL remains consistent.
 export LD_LIBRARY_PATH="$EBROOTOPENSSL/lib:$LD_LIBRARY_PATH"
 export LIBCLANG_PATH="${EBROOTCLANG}/lib"
+export CPPML_ENV_READY=1

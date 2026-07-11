@@ -1,9 +1,27 @@
-#!/bin/sh
+#!/bin/bash
 
 # Source the main environment script from the project root
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 BASE_DIR="$(realpath "${SCRIPT_DIR}/..")"
 source "${BASE_DIR}/set_env_claix23_cuda12.4.sh"
+
+if [[ -n "${USE_SCOREP:-}" ]]; then
+    if [ -f "${SCRIPT_DIR}/env_scorep.sh" ]; then
+        source "${SCRIPT_DIR}/env_scorep.sh"
+    else
+        echo "USE_SCOREP=1 but ${SCRIPT_DIR}/env_scorep.sh is missing. Run ./install_scorep.sh first." >&2
+        exit 1
+    fi
+    if ! command -v scorep-mpicxx >/dev/null 2>&1 || ! command -v scorep-config >/dev/null 2>&1; then
+        echo "USE_SCOREP=1 but local Score-P is not on PATH. Run ./install_scorep.sh first." >&2
+        exit 1
+    fi
+fi
+
+echo "DEBUG: SCOREP_ROOT_DIR = $SCOREP_ROOT_DIR"
+echo "DEBUG: PATH = $PATH"
+echo "DEBUG: MODULEPATH = $MODULEPATH"
+type module
 
 # Usage:
 #   ./build.sh          - build the project (tests excluded)
@@ -17,7 +35,6 @@ test_filter="${2:-}"
 run_registry_tests="${CPPML_RUN_REGISTRY_TESTS:-OFF}"
 with_smartsim="${WITH_SMARTSIM:-ON}"
 with_aix="${WITH_AIX:-ON}"
-aix_use_prebuilt="${AIX_USE_PREBUILT:-ON}"
 with_phydll="${WITH_PHYDLL:-ON}"
 with_torch="${WITH_TORCH:-ON}"
 with_tensorflow="${WITH_TENSORFLOW:-OFF}"
@@ -37,8 +54,17 @@ USER_PYTHON="$USER_PYTHON_ENV/bin/python"
 CUDA_ROOT="/cvmfs/software.hpc.rwth.de/Linux/RH9/x86_64/intel/sapphirerapids/software/CUDA/12.4.0"
 
 # Explicitly set compilers to ensure consistency and CUDA compatibility
-export CC=gcc
-export CXX=g++
+if [[ -n "${USE_SCOREP:-}" ]]; then
+    export CC=scorep-mpicc
+    export CXX=scorep-mpicxx
+    scorep_flag="-DWITH_SCOREP=ON"
+    aix_use_prebuilt="${AIX_USE_PREBUILT:-ON}"
+else
+    export CC=gcc
+    export CXX=g++
+    scorep_flag="-DWITH_SCOREP=OFF"
+    aix_use_prebuilt="${AIX_USE_PREBUILT:-OFF}"
+fi
 unset LD # Remove LD if set by install.sh to prevent CMake compiler checks from failing
 
 # CRITICAL: Prioritize CVMFS CUDA paths to avoid using "stripped" Python wheel libraries
@@ -65,6 +91,7 @@ cmake -S . -B build \
 	-DWITH_ONNX="${with_onnx}" \
 	-DFORCE_AIX_REBUILD="${force_aix_rebuild}" \
 	-DBUILD_TESTING="${build_testing}" \
+	${scorep_flag} \
 	-DTEST_PYTHON_EXECUTABLE="${USER_PYTHON}" || { echo "CMake configuration failed"; exit 1; }
 
 # build (generator-agnostic; passes -j to underlying tool)

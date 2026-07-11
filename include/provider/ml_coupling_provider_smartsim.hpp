@@ -16,6 +16,10 @@
 #include "client.h"
 #endif
 
+#ifdef USE_SCOREP
+#include <scorep/SCOREP_User.h>
+#endif
+
 // @registry_name: Smartsim
 // @registry_aliases: smartsim, SmartSim
 template <typename In, typename Out>
@@ -389,6 +393,13 @@ public:
             return converted_dims;
         };
 
+#ifdef USE_SCOREP
+        SCOREP_USER_METRIC_LOCAL(smartsim_input_bytes);
+        SCOREP_USER_METRIC_INIT(smartsim_input_bytes, "smartsim_input_bytes", "bytes", SCOREP_USER_METRIC_TYPE_UINT64, SCOREP_USER_METRIC_CONTEXT_CALLPATH);
+        SCOREP_USER_METRIC_LOCAL(smartsim_output_bytes);
+        SCOREP_USER_METRIC_INIT(smartsim_output_bytes, "smartsim_output_bytes", "bytes", SCOREP_USER_METRIC_TYPE_UINT64, SCOREP_USER_METRIC_CONTEXT_CALLPATH);
+#endif
+
         size_t max_bytes = 500ULL * 1024 * 1024; // 500 MiB limit
         size_t num_chunks = 1;
 
@@ -485,7 +496,15 @@ public:
                 SRTensorType sr_type = to_srtensor_type(ml_type);
                 logging::debug("  " + tensor.to_string("Tensor " + std::to_string(tensor_index)));
 
+#ifdef USE_SCOREP
+                SCOREP_USER_METRIC_UINT64(smartsim_input_bytes, tensor.numel() * tensor.element_size());
+                SCOREP_USER_REGION_DEFINE(handle_smartsim_put_tensor)
+                SCOREP_USER_REGION_BEGIN(handle_smartsim_put_tensor, "smartsim_put_tensor", SCOREP_USER_REGION_TYPE_COMMON)
+#endif
                 client->put_tensor(input_name, data, dims, sr_type, to_sr_memory_layout(tensor.layout()));
+#ifdef USE_SCOREP
+                SCOREP_USER_REGION_END(handle_smartsim_put_tensor)
+#endif
                 input_tensor_names.push_back(input_name);
 
                 std::cout << "DEBUG: put_tensor " << input_name << " dims=[";
@@ -507,6 +526,10 @@ public:
             for (const auto &name : output_tensor_names) { logging::debug("  " + name); }
 
             try {
+#ifdef USE_SCOREP
+                SCOREP_USER_REGION_DEFINE(handle_smartsim_run_model)
+                SCOREP_USER_REGION_BEGIN(handle_smartsim_run_model, "smartsim_run_model", SCOREP_USER_REGION_TYPE_COMMON)
+#endif
                 if (this->device == "GPU") {
                     const int offset = this->rank >= 0 ? this->rank : 0;
                     if (this->tf_input_keys.empty()) {
@@ -521,6 +544,9 @@ public:
                         client->run_model(this->model_name, this->tf_input_keys, output_tensor_names);
                     }
                 }
+#ifdef USE_SCOREP
+                SCOREP_USER_REGION_END(handle_smartsim_run_model)
+#endif
             } catch (const std::exception& ex) {
                 std::cerr << "run_model failed: " << ex.what() << std::endl;
                 throw;
@@ -558,7 +584,15 @@ public:
                 }
 
                 try {
+#ifdef USE_SCOREP
+                    SCOREP_USER_METRIC_UINT64(smartsim_output_bytes, tensor.numel() * tensor.element_size());
+                    SCOREP_USER_REGION_DEFINE(handle_smartsim_unpack_tensor)
+                    SCOREP_USER_REGION_BEGIN(handle_smartsim_unpack_tensor, "smartsim_unpack_tensor", SCOREP_USER_REGION_TYPE_COMMON)
+#endif
                     client->unpack_tensor(output_name, data, dims, sr_type, sr_layout);
+#ifdef USE_SCOREP
+                    SCOREP_USER_REGION_END(handle_smartsim_unpack_tensor)
+#endif
                 } catch (const std::exception& ex) {
                     std::cerr << "unpack_tensor failed for " << output_name << ": " << ex.what() << std::endl;
                     throw;

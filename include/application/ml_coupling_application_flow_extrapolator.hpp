@@ -10,6 +10,10 @@
 
 #include "ml_coupling_application.hpp"
 
+#ifdef USE_SCOREP
+#include <scorep/SCOREP_User.h>
+#endif
+
 // @registry_name: MLCouplingApplicationFlowExtrapolator
 // @registry_aliases: flow-extrapolator, flow_extrapolator, maia-flow-extrapolator
 // @registry_description: Preprocesses three raw flow fields into cube-based model tensors and reconstructs model output back into the raw fields.
@@ -65,6 +69,10 @@ protected:
     {
         validate_input_fields(input_data);
 
+#ifdef USE_SCOREP
+        SCOREP_USER_REGION_DEFINE(handle_flowex_extract_cubes)
+        SCOREP_USER_REGION_BEGIN(handle_flowex_extract_cubes, "flowex_extract_cubes", SCOREP_USER_REGION_TYPE_COMMON)
+#endif
         std::vector<std::vector<In>> current_step(static_cast<size_t>(kFieldCount));
         for (int field = 0; field < kFieldCount; ++field)
         {
@@ -98,6 +106,9 @@ protected:
                 }
             }
         }
+#ifdef USE_SCOREP
+        SCOREP_USER_REGION_END(handle_flowex_extract_cubes)
+#endif
 
         if (this->normalization)
         {
@@ -136,6 +147,10 @@ protected:
 
         clear_output_active_region();
 
+#ifdef USE_SCOREP
+        SCOREP_USER_REGION_DEFINE(handle_flowex_reconstruct_output)
+        SCOREP_USER_REGION_BEGIN(handle_flowex_reconstruct_output, "flowex_reconstruct_output", SCOREP_USER_REGION_TYPE_COMMON)
+#endif
         const auto &tensor = output_data_before_postprocessing[0];
         const Out *buffer = static_cast<const Out *>(tensor.root());
 
@@ -161,6 +176,9 @@ protected:
                 }
             }
         }
+#ifdef USE_SCOREP
+        SCOREP_USER_REGION_END(handle_flowex_reconstruct_output)
+#endif
 
         return this->output_data;
     }
@@ -193,10 +211,18 @@ private:
                                                 int input_sequence_length,
                                                 int n_ghost_layers)
     {
+#ifdef USE_SCOREP
+        SCOREP_USER_REGION_DEFINE(handle_flowex_make_input_buffer)
+        SCOREP_USER_REGION_BEGIN(handle_flowex_make_input_buffer, "flowex_make_input_buffer", SCOREP_USER_REGION_TYPE_COMMON)
+#endif
         const ShapeInfo shape = infer_shape(input_data, cube_dimension, cube_overlap, n_ghost_layers);
         const std::vector<int> dims = {kFieldCount * shape.num_cubes, input_sequence_length, shape.cube_size};
-        return MLCouplingData<In>(std::vector<MLCouplingTensor<In>>{
+        MLCouplingData<In> result(std::vector<MLCouplingTensor<In>>{
             MLCouplingTensor<In>::from_flat_copy(std::vector<In>(static_cast<size_t>(dims[0]) * static_cast<size_t>(dims[1]) * static_cast<size_t>(dims[2]), static_cast<In>(0)), dims)});
+#ifdef USE_SCOREP
+        SCOREP_USER_REGION_END(handle_flowex_make_input_buffer)
+#endif
+        return result;
     }
 
     static MLCouplingData<Out> make_output_buffer(const MLCouplingData<In> &input_data,
@@ -205,10 +231,18 @@ private:
                                                   int cube_overlap,
                                                   int n_ghost_layers)
     {
+#ifdef USE_SCOREP
+        SCOREP_USER_REGION_DEFINE(handle_flowex_make_output_buffer)
+        SCOREP_USER_REGION_BEGIN(handle_flowex_make_output_buffer, "flowex_make_output_buffer", SCOREP_USER_REGION_TYPE_COMMON)
+#endif
         const ShapeInfo shape = infer_shape(input_data, cube_dimension, cube_overlap, n_ghost_layers);
         const std::vector<int> dims = {kFieldCount * shape.num_cubes, forecast_window, shape.cube_size};
-        return MLCouplingData<Out>(std::vector<MLCouplingTensor<Out>>{
+        MLCouplingData<Out> result(std::vector<MLCouplingTensor<Out>>{
             MLCouplingTensor<Out>::from_flat_copy(std::vector<Out>(static_cast<size_t>(dims[0]) * static_cast<size_t>(dims[1]) * static_cast<size_t>(dims[2]), static_cast<Out>(0)), dims)});
+#ifdef USE_SCOREP
+        SCOREP_USER_REGION_END(handle_flowex_make_output_buffer)
+#endif
+        return result;
     }
 
     struct ShapeInfo

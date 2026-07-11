@@ -9,6 +9,12 @@
 
 #include "provider/ml_coupling_provider.hpp"
 #include "application/ml_coupling_application.hpp"
+#include "normalization/ml_coupling_minmax_normalization.hpp"
+#include <string>
+
+#ifdef USE_SCOREP
+#include <scorep/SCOREP_User.h>
+#endif
 #include "behavior/ml_coupling_behavior.hpp"
 #include "behavior/ml_coupling_behavior_default.hpp"
 #include "coupling_type.hpp"

@@ -12,9 +12,12 @@
 #include <string>
 #include <utility>
 #include <vector>
-
 #include "ml_coupling_data_type.hpp"
 #include "ml_coupling_memory_layout.hpp"
+
+#ifdef USE_SCOREP
+#include <scorep/SCOREP_User.h>
+#endif
 
 typedef enum
 {
@@ -137,8 +140,15 @@ public:
 			throw std::invalid_argument("from_flat_copy(): values.size() does not match dimensions product");
 		}
 
+#ifdef USE_SCOREP
+		SCOREP_USER_REGION_DEFINE(handle_data_from_flat_copy)
+		SCOREP_USER_REGION_BEGIN(handle_data_from_flat_copy, "data_from_flat_copy", SCOREP_USER_REGION_TYPE_COMMON)
+#endif
 		T *buffer = new T[expected];
 		std::copy(values.begin(), values.end(), buffer);
+#ifdef USE_SCOREP
+		SCOREP_USER_REGION_END(handle_data_from_flat_copy)
+#endif
 		return wrap_flat(buffer, dimensions, layout, MLCouplingOwnershipOwned);
 	}
 
@@ -332,19 +342,34 @@ public:
 			throw std::invalid_argument("as_flat_vector(): target_layout must be contiguous");
 		}
 
+#ifdef USE_SCOREP
+		SCOREP_USER_REGION_DEFINE(handle_data_as_flat_vector)
+		SCOREP_USER_REGION_BEGIN(handle_data_as_flat_vector, "data_as_flat_vector", SCOREP_USER_REGION_TYPE_COMMON)
+#endif
 		std::vector<T> flat(numel());
 		for (size_t linear = 0; linear < flat.size(); ++linear)
 		{
 			const std::vector<int> idx = unravel_index(linear, dimensions_, target_layout);
 			flat[linear] = at(idx);
 		}
+#ifdef USE_SCOREP
+		SCOREP_USER_REGION_END(handle_data_as_flat_vector)
+#endif
 		return flat;
 	}
 
 	MLCouplingTensor<T> flatten(MLCouplingMemoryLayout target_layout = MLCouplingMemLayoutContiguous) const
 	{
+#ifdef USE_SCOREP
+		SCOREP_USER_REGION_DEFINE(handle_data_flatten)
+		SCOREP_USER_REGION_BEGIN(handle_data_flatten, "data_flatten", SCOREP_USER_REGION_TYPE_COMMON)
+#endif
 		std::vector<T> flat_values = as_flat_vector(target_layout);
-		return from_flat_copy(flat_values, dimensions_, target_layout);
+		MLCouplingTensor<T> result = from_flat_copy(flat_values, dimensions_, target_layout);
+#ifdef USE_SCOREP
+		SCOREP_USER_REGION_END(handle_data_flatten)
+#endif
+		return result;
 	}
 
 	MLCouplingTensor<T> deep_copy() const
@@ -361,6 +386,10 @@ public:
 			throw std::invalid_argument("unflatten(): target_layout must be nested");
 		}
 
+#ifdef USE_SCOREP
+		SCOREP_USER_REGION_DEFINE(handle_data_unflatten)
+		SCOREP_USER_REGION_BEGIN(handle_data_unflatten, "data_unflatten", SCOREP_USER_REGION_TYPE_COMMON)
+#endif
 		const MLCouplingTensor<T> flat = flatten(to_contiguous_layout(target_layout));
 
 		if (flat.rank() == 1)
@@ -368,6 +397,9 @@ public:
 			const size_t n = flat.numel();
 			T *leaf = new T[n];
 			std::copy(static_cast<T *>(flat.root_), static_cast<T *>(flat.root_) + n, leaf);
+#ifdef USE_SCOREP
+			SCOREP_USER_REGION_END(handle_data_unflatten)
+#endif
 			return wrap_nested(static_cast<void *>(leaf), flat.dimensions_, target_layout,
 							   MLCouplingOwnershipOwned,
 							   [](void *ptr)
@@ -417,6 +449,9 @@ public:
 		};
 
 		void *root = build_level(0, 0);
+#ifdef USE_SCOREP
+		SCOREP_USER_REGION_END(handle_data_unflatten)
+#endif
 		return wrap_nested(root,
 						   flat.dimensions_,
 						   target_layout,
