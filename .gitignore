@@ -16,8 +16,10 @@ extern/python
 extern/libtorch
 dl_clients/build
 dl_clients/build-module-test
+dl_clients/build-*
 tmp/
 
 # Stray Slurm build logs
 build-cpp-ml-interface.*.err
 build-cpp-ml-interface.*.out
+phydll-*.log

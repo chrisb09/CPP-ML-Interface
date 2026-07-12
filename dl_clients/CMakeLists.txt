@@ -1,5 +1,15 @@
 cmake_minimum_required(VERSION 3.10)
 
+# Prevent CUDA stubs from being added to the RUNPATH/RPATH of binaries compiled on CPU login nodes
+list(APPEND CMAKE_PLATFORM_IMPLICIT_LINK_DIRECTORIES
+  "/cvmfs/software.hpc.rwth.de/Linux/RH9/x86_64/intel/sapphirerapids/software/CUDA/12.4.0/lib/stubs"
+  "/cvmfs/software.hpc.rwth.de/Linux/RH9/x86_64/intel/sapphirerapids/software/CUDA/12.4.0/targets/x86_64-linux/lib/stubs"
+)
+list(APPEND CMAKE_CXX_IMPLICIT_LINK_DIRECTORIES
+  "/cvmfs/software.hpc.rwth.de/Linux/RH9/x86_64/intel/sapphirerapids/software/CUDA/12.4.0/lib/stubs"
+  "/cvmfs/software.hpc.rwth.de/Linux/RH9/x86_64/intel/sapphirerapids/software/CUDA/12.4.0/targets/x86_64-linux/lib/stubs"
+)
+
 # Honor <Package>_ROOT variables like CUDA_ROOT.
 cmake_policy(SET CMP0074 NEW)
 

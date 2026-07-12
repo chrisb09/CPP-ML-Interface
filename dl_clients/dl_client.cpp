@@ -45,6 +45,7 @@ struct BcastMetaHeader
     int32_t layout = 0;
     int32_t num_input_dims = 0;
     int32_t num_output_dims = 0;
+    int64_t field_size = 0;
 };
 
 struct BcastMeta
@@ -58,12 +59,13 @@ struct BcastMeta
     std::vector<std::vector<int64_t>> output_shapes;
     int64_t total_input = 0;
     int64_t total_output = 0;
+    int64_t field_size = 0;
 };
 
 BcastMeta receive_p2p_metadata(int source_rank)
 {
     constexpr int kBcastMetaMagic = 0x4D4C434D; // "MLCM"
-    constexpr int kBcastMetaVersion = 1;
+    constexpr int kBcastMetaVersion = 2;
 
     BcastMetaHeader header;
     MPI_Status status;
@@ -92,6 +94,7 @@ BcastMeta receive_p2p_metadata(int source_rank)
     meta.total_input = header.total_input;
     meta.total_output = header.total_output;
     meta.batch_size = header.batch_size;
+    meta.field_size = header.field_size;
 
     size_t offset = 0;
     if (header.model_len > 0)
@@ -147,15 +150,10 @@ BcastMeta receive_p2p_metadata(int source_rank)
 } // namespace
 
 int main(int argc, char **argv) {
-    std::fprintf(stderr, "[PHYDLL:DL] client entering main before MPI_Init\n");
-    std::fflush(stderr);
     MPI_Init(&argc, &argv);
-    std::fprintf(stderr, "[PHYDLL:DL] client returned from MPI_Init\n");
-    std::fflush(stderr);
 
-    // Participate in the MPMD split to avoid collective mismatches.
-    // We no longer rely on MPI_APPNUM, because Slurm srun with OpenMPI 5 assigns appnum 0 to both components!
-    // Since this binary is ALWAYS the DL client, we unconditionally assign it color MPI_UNDEFINED.
+    // Exclude this DL rank from solver-only collectives. PhyDLL subsequently performs
+    // its own split on MPI_COMM_WORLD for the physics/DL communicators.
     const int color = MPI_UNDEFINED;
     MPI_Comm local_comm = MPI_COMM_NULL;
     MPI_Comm_split(MPI_COMM_WORLD, color, 0, &local_comm);
@@ -213,6 +211,8 @@ int main(int argc, char **argv) {
     int ndest = phydll_get_ndest();
     int *dests = phydll_get_dest();
     std::fprintf(stderr, "[PHYDLL:DL] ndest=%d, dests=%p\n", ndest, (void*)dests); std::fflush(stderr);
+    std::vector<long long> rank_batch_sizes(ndest, 1);
+    std::vector<long long> rank_field_sizes(ndest, 0);
     for (int i = 0; i < ndest; ++i)
     {
         int source_rank = dests[i];
@@ -229,6 +229,10 @@ int main(int argc, char **argv) {
             }
             total_input_size += p2p_meta.total_input;
             total_output_size += p2p_meta.total_output;
+            if (!p2p_meta.input_shapes.empty() && !p2p_meta.input_shapes.front().empty()) {
+                rank_batch_sizes[i] = p2p_meta.input_shapes.front().front();
+            }
+            rank_field_sizes[i] = p2p_meta.field_size;
         }
     }
     std::fprintf(stderr, "[PHYDLL:DL] Finished receiving metadata from all %d sources\n", ndest); std::fflush(stderr);
@@ -248,13 +252,16 @@ int main(int argc, char **argv) {
             // Note: frame.meta uses old flattened sizes. 
             // In a complete implementation we'd update frame.meta.entries parsing too, 
             // but forSTATIC api mode, total_input_size is already populated correctly via p2p_meta.
-            for (const auto& entry : frame.meta.entries) {
+            rank_batch_sizes.resize(frame.meta.entries.size(), 1);
+            for (size_t i = 0; i < frame.meta.entries.size(); ++i) {
+                const auto& entry = frame.meta.entries[i];
                 for (const auto size : entry.input_sizes) {
                     total_input_size += size;
                 }
                 for (const auto size : entry.output_sizes) {
                     total_output_size += size;
                 }
+                rank_batch_sizes[i] = 1;
             }
             meta_initialized = true;
         }
@@ -322,25 +329,30 @@ int main(int argc, char **argv) {
         if (!model_path.empty()) {
             std::vector<float> input(static_cast<size_t>(total_input_size));
             int ndest = phydll_get_ndest();
-            long long client_batch_size = 1;
-            if (!final_meta.input_shapes.empty() && !final_meta.input_shapes.front().empty()) {
-                client_batch_size = final_meta.input_shapes.front().front();
+            long long batch_size = 0;
+            for (int i = 0; i < ndest; ++i) {
+                batch_size += rank_batch_sizes[i];
             }
-            const long long batch_size = std::max(1LL, static_cast<long long>(ndest) * client_batch_size);
             const long long field_size_per_rank = runtime.field_size() / std::max(1, ndest);
             const long long input_per_rank_used = static_cast<long long>(total_input_size) / batch_size;
 
-            std::fprintf(stderr, "[PHYDLL:DL] Frame %llu extracting data: total_input_size=%lld, batch=%lld, client_batch=%lld, field/rank=%lld, used/rank=%lld\n",
-                         (unsigned long long)frame_id, (long long)total_input_size, batch_size, client_batch_size, field_size_per_rank, input_per_rank_used);
+            std::fprintf(stderr, "[PHYDLL:DL] Frame %llu extracting data: total_input_size=%lld, batch=%lld, field/rank=%lld, used/rank=%lld\n",
+                         (unsigned long long)frame_id, (long long)total_input_size, batch_size, field_size_per_rank, input_per_rank_used);
             std::fflush(stderr);
 
-            for (long long b = 0; b < batch_size; ++b) {
-                long long client_id = b / client_batch_size;
-                long long sample_id = b % client_batch_size;
-                long long src_start = client_id * field_size_per_rank + sample_id * input_per_rank_used;
-                for (long long j = 0; j < input_per_rank_used; ++j) {
-                    input[b * input_per_rank_used + j] = static_cast<float>(frame.data[src_start + j]);
+            long long offset_so_far = 0;
+            long long src_rank_start = 0;
+            for (int i = 0; i < ndest; ++i) {
+                long long rank_batch = rank_batch_sizes[i];
+                for (long long s = 0; s < rank_batch; ++s) {
+                    long long src_start = src_rank_start + s * input_per_rank_used;
+                    long long dest_start = (offset_so_far + s) * input_per_rank_used;
+                    for (long long j = 0; j < input_per_rank_used; ++j) {
+                        input[dest_start + j] = static_cast<float>(frame.data[src_start + j]);
+                    }
                 }
+                offset_so_far += rank_batch;
+                src_rank_start += rank_field_sizes[i];
             }
 
             std::fprintf(stderr, "[PHYDLL:DL] Frame %llu running inference\n", (unsigned long long)frame_id); std::fflush(stderr);
@@ -394,13 +406,20 @@ int main(int argc, char **argv) {
 
                 auto output_ptr = output_tensor.data_ptr<float>();
                 const long long outputs_per_rank_used = static_cast<long long>(total_output_size) / batch_size;
-                for (long long b = 0; b < batch_size; ++b) {
-                    long long client_id = b / client_batch_size;
-                    long long sample_id = b % client_batch_size;
-                    long long dest_start = client_id * field_size_per_rank + sample_id * outputs_per_rank_used;
-                    for (long long j = 0; j < outputs_per_rank_used; ++j) {
-                        output[dest_start + j] = static_cast<double>(output_ptr[b * outputs_per_rank_used + j]);
+
+                offset_so_far = 0;
+                long long dest_rank_start = 0;
+                for (int i = 0; i < ndest; ++i) {
+                    long long rank_batch = rank_batch_sizes[i];
+                    for (long long s = 0; s < rank_batch; ++s) {
+                        long long dest_start = dest_rank_start + s * outputs_per_rank_used;
+                        long long src_start = (offset_so_far + s) * outputs_per_rank_used;
+                        for (long long j = 0; j < outputs_per_rank_used; ++j) {
+                            output[dest_start + j] = static_cast<double>(output_ptr[src_start + j]);
+                        }
                     }
+                    offset_so_far += rank_batch;
+                    dest_rank_start += rank_field_sizes[i];
                 }
                 #ifdef USE_SCOREP
                 SCOREP_USER_REGION_END(handle_dl_d2h_scatter);

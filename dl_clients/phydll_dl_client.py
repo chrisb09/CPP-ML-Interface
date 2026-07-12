@@ -1,14 +1,19 @@
 #!/usr/bin/env python3
 import os
 import sys
+print("[DL] Starting Python DL Client...", flush=True)
 import struct
 import numpy as np
 PY_SCOREP_WRAPPER = os.environ.get("PHYDLL_PY_SCOREP_WRAPPER", "0") == "1"
 
+print("[DL] Importing mpi4py...", flush=True)
 import mpi4py
 mpi4py.rc.thread_level = "funneled"
 from mpi4py import MPI
+print("[DL] mpi4py imported successfully. MPI world size =", MPI.COMM_WORLD.Get_size(), "rank =", MPI.COMM_WORLD.Get_rank(), flush=True)
+print("[DL] Importing torch...", flush=True)
 import torch
+print("[DL] torch imported successfully.", flush=True)
 import contextlib
 ENABLE_SCOREP_USER = os.environ.get("ENABLE_SCOREP_USER", "0") == "1"
 try:
@@ -50,7 +55,6 @@ def receive_p2p_metadata(comm, source_rank):
     """
     from mpi4py import MPI
 
-    # struct BcastMetaHeader {
     #     int32_t magic;           // 0
     #     int32_t version;         // 4
     #     int32_t model_len;       // 8
@@ -65,18 +69,18 @@ def receive_p2p_metadata(comm, source_rank):
     #     int32_t layout;          // 52
     #     int32_t num_input_dims;  // 56
     #     int32_t num_output_dims; // 60
-    # } (Total: 64 bytes)
-    # } (Total: 56 bytes)
+    #     int64_t field_size;      // 64
+    # } (Total: 72 bytes)
     
-    header_size = 64
+    header_size = 72
     header_buf = bytearray(header_size)
     status = MPI.Status()
     # Tag is source_rank to match C++ provider
     comm.Recv([header_buf, MPI.BYTE], source=source_rank, tag=source_rank, status=status)
     
-    magic, version, m_len, b_len, d_len, batch_size_arg, n_in, n_out, t_in, t_out, dtype, layout, n_in_dims, n_out_dims = struct.unpack("=8i 2q 4i", header_buf)
+    magic, version, m_len, b_len, d_len, batch_size_arg, n_in, n_out, t_in, t_out, dtype, layout, n_in_dims, n_out_dims, field_size_arg = struct.unpack("=8i 2q 4i q", header_buf)
     
-    if magic != 0x4D4C434D or version != 1:
+    if magic != 0x4D4C434D or version != 2:
         return {'valid': False}
         
     payload_size = m_len + b_len + d_len + (n_in_dims + n_out_dims) * 8
@@ -134,7 +138,8 @@ def receive_p2p_metadata(comm, source_rank):
         'total_input': t_in,
         'total_output': t_out,
         'in_shapes': in_shapes,
-        'out_shapes': out_shapes
+        'out_shapes': out_shapes,
+        'field_size': field_size_arg
     }
 
 def main():
@@ -155,7 +160,9 @@ def main():
         # Match the original Python DL startup: participate in the MPMD split
         # before entering PhyDLL's own internal MPI split.
         color = MPI.UNDEFINED
+        print("[DL] Entering world_comm.Split(color=MPI.UNDEFINED)", flush=True)
         local_comm = world_comm.Split(color, 0)
+        print("[DL] Returned from world_comm.Split", flush=True)
         if local_comm != MPI.COMM_NULL:
             local_comm.Free()
         
@@ -189,6 +196,7 @@ def main():
         total_output_size = 0
         final_meta = None
         rank_batch_sizes = {}
+        rank_field_sizes = {}
         
         # Receive metadata from each connected physical rank
         for source_rank in dests:
@@ -203,6 +211,7 @@ def main():
                 total_output_size += p2p_meta.get('total_output', 0)
                 if p2p_meta.get('in_shapes') and len(p2p_meta['in_shapes']) > 0:
                     rank_batch_sizes[source_rank] = p2p_meta['in_shapes'][0][0]
+                rank_field_sizes[source_rank] = p2p_meta.get('field_size', 0)
 
         torch_device = torch.device('cpu')
         model = None
@@ -271,11 +280,11 @@ def main():
                 with scorep_region("py_inference"):
                     # Replicate the C++ client's robust dynamic shape and batch extraction logic
                     ndest = len(dests)
-                    client_batch_size = 1
-                    if final_meta and final_meta.get('in_shapes') and len(final_meta['in_shapes']) > 0 and len(final_meta['in_shapes'][0]) > 0:
-                        client_batch_size = final_meta['in_shapes'][0][0]
-                    
-                    batch_size = max(1, ndest * client_batch_size)
+                    batch_size = 0
+                    for i in range(ndest):
+                        source_rank = dests[i]
+                        batch_size += rank_batch_sizes.get(source_rank, 1)
+
                     field_size_per_rank = len(combined_data) // max(1, ndest)
                     input_per_rank_used = total_input_size // batch_size
                     
@@ -292,13 +301,18 @@ def main():
                     
                     # Extract input features per sample (accounting for any rank padding)
                     input_flat = np.zeros(total_input_size, dtype=np.float32)
-                    for b in range(batch_size):
-                        client_id = b // client_batch_size
-                        sample_id = b % client_batch_size
-                        src_start = client_id * field_size_per_rank + sample_id * input_per_rank_used
-                        dest_start = b * input_per_rank_used
-                        input_flat[dest_start : dest_start + input_per_rank_used] = \
-                            combined_data[src_start : src_start + input_per_rank_used]
+                    offset_so_far = 0
+                    src_rank_start = 0
+                    for i in range(ndest):
+                        source_rank = dests[i]
+                        rank_batch = rank_batch_sizes.get(source_rank, 1)
+                        for s in range(rank_batch):
+                            src_start = src_rank_start + s * input_per_rank_used
+                            dest_start = (offset_so_far + s) * input_per_rank_used
+                            input_flat[dest_start : dest_start + input_per_rank_used] = \
+                                combined_data[src_start : src_start + input_per_rank_used]
+                        offset_so_far += rank_batch
+                        src_rank_start += rank_field_sizes.get(source_rank, 0)
                     
                     input_tensor = torch.from_numpy(input_flat).reshape(batch_size, input_per_rank_used)
                     input_tensor = input_tensor.view(*actual_shape)
@@ -319,14 +333,18 @@ def main():
                             
                         # Scatter back to output buffer dynamically (matching C++ logic)
                         outputs_per_rank_used = total_output_size // batch_size
-                        output_field_size_per_rank = len(output) // max(1, ndest)
-                        for b in range(batch_size):
-                            client_id = b // client_batch_size
-                            sample_id = b % client_batch_size
-                            dest_start = client_id * output_field_size_per_rank + sample_id * outputs_per_rank_used
-                            src_start = b * outputs_per_rank_used
-                            output[dest_start : dest_start + outputs_per_rank_used] = \
-                                output_np[src_start : src_start + outputs_per_rank_used]
+                        offset_so_far = 0
+                        dest_rank_start = 0
+                        for i in range(ndest):
+                            source_rank = dests[i]
+                            rank_batch = rank_batch_sizes.get(source_rank, 1)
+                            for s in range(rank_batch):
+                                dest_start = dest_rank_start + s * outputs_per_rank_used
+                                src_start = (offset_so_far + s) * outputs_per_rank_used
+                                output[dest_start : dest_start + outputs_per_rank_used] = \
+                                    output_np[src_start : src_start + outputs_per_rank_used]
+                            offset_so_far += rank_batch
+                            dest_rank_start += rank_field_sizes.get(source_rank, 0)
                         used_model = True
                     except Exception as e:
                         print(f"[PHYDLL:DL:PY] forward failed: {e}", file=sys.stderr)

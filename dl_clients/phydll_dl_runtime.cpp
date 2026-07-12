@@ -6,6 +6,7 @@ SCOREP_USER_REGION_DEFINE(handle_dl_send);
 #endif
 
 #include <algorithm>
+#include <cstdio>
 #include <cstring>
 #include <iostream>
 #include <limits>
@@ -66,8 +67,16 @@ void DlRuntime::initialize() {
     if (initialized_) {
         return;
     }
+    std::fprintf(stderr, "[PHYDLL:DL] runtime before phydll_init\n");
+    std::fflush(stderr);
     phydll_init(const_cast<char*>("dl"));
+    std::fprintf(stderr, "[PHYDLL:DL] runtime after phydll_init\n");
+    std::fflush(stderr);
+    std::fprintf(stderr, "[PHYDLL:DL] runtime before phydll_define_dl count=%d\n", dl_count_);
+    std::fflush(stderr);
     phydll_define_dl(dl_count_);
+    std::fprintf(stderr, "[PHYDLL:DL] runtime after phydll_define_dl\n");
+    std::fflush(stderr);
     phydll_get_field_size(&field_size_);
     phydll_get_field_counts(&phy_count_, &dl_count_);
     source_count_ = phydll_get_ndest();

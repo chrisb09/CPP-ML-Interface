@@ -191,7 +191,7 @@ private:
     static constexpr int kFieldCount = 1; // PHY-DATA (Metadata is OOB)
     static constexpr int kHeaderFixedCount = 14;
     static constexpr int kBcastMetaMagic = 0x4D4C434D; // "MLCM"
-    static constexpr int kBcastMetaVersion = 1;
+    static constexpr int kBcastMetaVersion = 2;
 
     std::string model_file;
     std::string backend;
@@ -229,6 +229,7 @@ private:
         int32_t layout = 0;
         int32_t num_input_dims = 0;
         int32_t num_output_dims = 0;
+        int64_t field_size = 0;
     };
 
     std::vector<int64_t> input_dims_;
@@ -293,6 +294,7 @@ private:
 
         header.num_input_dims = static_cast<int32_t>(input_dims_.size());
         header.num_output_dims = static_cast<int32_t>(output_dims_.size());
+        header.field_size = static_cast<int64_t>(field_size_);
 
         const size_t sizes_bytes = (input_dims_.size() + output_dims_.size()) * sizeof(int64_t);
         payload.resize(static_cast<size_t>(header.model_len + header.backend_len + header.device_len) + sizes_bytes);
@@ -358,7 +360,9 @@ private:
 
         initialize_phydll_if_needed();
         phydll_opt_enable_cpl_loop();
+        std::cerr << "[PHYDLL:PHY] before phydll_define_phy field_size=" << field_size_ << std::endl;
         phydll_define_phy(kFieldCount, field_size_);
+        std::cerr << "[PHYDLL:PHY] after phydll_define_phy" << std::endl;
 
         broadcast_metadata_once();
 
@@ -395,7 +399,9 @@ private:
         }
 
         char mode[] = "physical";
+        std::cerr << "[PHYDLL:PHY] before phydll_init" << std::endl;
         phydll_init(mode);
+        std::cerr << "[PHYDLL:PHY] after phydll_init" << std::endl;
         phydll_initialized_ = true;
 #endif
     }
