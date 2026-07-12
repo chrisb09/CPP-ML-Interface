@@ -4,6 +4,16 @@ script_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 
 cd "${script_dir}/extern/phydll"
 
+py_env="${PHYDLL_PYTHON_ENV:-${SMARTSIM_PYTHON_ENV:-/hpcwork/${USER}/smartsim/python/smartsim_cpu/bin/activate}}"
+if [ -f "${py_env}" ]; then
+    echo "Activating PhyDLL Python environment: ${py_env}"
+    source "${py_env}"
+else
+    echo "Warning: PhyDLL Python environment not found: ${py_env}"
+fi
+
+python -m pip install Cython mpi4py numpy pyyaml
+
 mkdir -p ./build
 export BUILD=$(realpath ./build)
 PHYDLL_CC=${PHYDLL_CC:-${MPICC:-}}

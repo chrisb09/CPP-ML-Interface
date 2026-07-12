@@ -177,14 +177,12 @@ static void test_stride() {
 static void test_hdf_avoidance() {
     MLCouplingBehaviorFlowExtrapolator beh(5, 3, 12, 50, 300, 1.0, 2, 1, 25, 0);
 
-    int coupled = 3, stride = 1;
-
     for (int call = 1; call <= 24; ++call) {
         beh.should_send_data();
         beh.should_perform_inference();
     }
 
-    // Call 25: inference fires + records HDF shift
+    // Call 25: inference fires
     {
         bool send = beh.should_send_data();
         bool inf = beh.should_perform_inference();
@@ -198,44 +196,65 @@ static void test_hdf_avoidance() {
     }
     report(true, "hdf: call 25 inference fires");
 
-    // Calls 26-50: should not fire inference (shifted to 51).
-    // Send when dist = 51 - (logical+1) < 3*1 && >=0 && %1==0.
-    // At logical=25 (after inference), calls 26..50 have dist = 51-(logical+1):
-    //   logical 25 → dist 25, not < 3 → no send
-    //   logical 26 → dist 24, not < 3 → no send
-    //   ...
-    //   logical 48 → dist 2, < 3 → send
-    //   logical 49 → dist 1, < 3 → send
-    //   logical 50 → dist 0 → send
-    // So sends only at calls 49, 50 (and 51).
-    for (int call = 26; call <= 50; ++call) {
+    // Next inference is at 30.
+    // Calls 26-27: no send, no inf.
+    for (int call = 26; call <= 27; ++call) {
         bool send = beh.should_send_data();
         bool inf = beh.should_perform_inference();
-        // projection: logical_before = call-1 (since each call increments once)
-        long long int projected = static_cast<long long int>(call);
-        long long int dist = 51 - projected;
-        bool send_expected = (dist >= 0 && dist < coupled * stride && dist % stride == 0);
-        if (send != send_expected || inf) {
-            report(false, ("hdf: call " + std::to_string(call)
-                           + " send=" + std::to_string(send)
-                           + " (expected " + std::to_string(send_expected) + ")"
-                           + " inf=" + std::to_string(inf)).c_str());
+        if (send || inf) {
+            report(false, ("hdf: call " + std::to_string(call) + " should not send/inf").c_str());
             return;
         }
     }
-    report(true, "hdf: calls 26-50 no inference, correct sends");
-
-    // Call 51: shifted inference fires
+    // Calls 28-29: send, no inf.
+    for (int call = 28; call <= 29; ++call) {
+        bool send = beh.should_send_data();
+        bool inf = beh.should_perform_inference();
+        if (!send || inf) {
+            report(false, ("hdf: call " + std::to_string(call) + " should send, not inf").c_str());
+            return;
+        }
+    }
+    // Call 30: send + inf.
     {
         bool send = beh.should_send_data();
         bool inf = beh.should_perform_inference();
         if (!send || !inf) {
-            report(false, ("hdf: call 51 send=" + std::to_string(send)
-                           + " inf=" + std::to_string(inf)).c_str());
+            report(false, "hdf: call 30 should send+inf");
             return;
         }
     }
-    report(true, "hdf: call 51 shifted inference fires");
+    report(true, "hdf: call 30 inference fires");
+
+    // Next inference is at 54 (shifted).
+    // Calls 31-51: no send, no inf.
+    for (int call = 31; call <= 51; ++call) {
+        bool send = beh.should_send_data();
+        bool inf = beh.should_perform_inference();
+        if (send || inf) {
+            report(false, ("hdf: call " + std::to_string(call) + " should not send/inf (shifted)").c_str());
+            return;
+        }
+    }
+    // Calls 52-53: send, no inf.
+    for (int call = 52; call <= 53; ++call) {
+        bool send = beh.should_send_data();
+        bool inf = beh.should_perform_inference();
+        if (!send || inf) {
+            report(false, ("hdf: call " + std::to_string(call) + " should send, not inf (shifted)").c_str());
+            return;
+        }
+    }
+    // Call 54: send + inf.
+    {
+        bool send = beh.should_send_data();
+        bool inf = beh.should_perform_inference();
+        if (!send || !inf) {
+            report(false, "hdf: call 54 should send+inf (shifted)");
+            return;
+        }
+    }
+    report(true, "hdf: call 54 shifted inference fires");
 }
 
 // ---------------------------------------------------------------------------
@@ -243,7 +262,7 @@ static void test_hdf_avoidance() {
 // ---------------------------------------------------------------------------
 
 static void test_global_step_offset() {
-    MLCouplingBehaviorFlowExtrapolator beh(5, 3, 1, 50, 300, 1.0, 1, 1, 25, 100);
+    MLCouplingBehaviorFlowExtrapolator beh(5, 3, 12, 50, 300, 1.0, 2, 1, 25, 100);
 
     for (int call = 1; call <= 24; ++call) {
         beh.should_send_data();
@@ -260,7 +279,21 @@ static void test_global_step_offset() {
     }
     report(true, "offset: call 25 inference with offset=100");
 
-    for (int call = 26; call <= 50; ++call) {
+    for (int call = 26; call <= 29; ++call) {
+        beh.should_send_data();
+        beh.should_perform_inference();
+    }
+    // Call 30 inference
+    {
+        bool send = beh.should_send_data();
+        bool inf = beh.should_perform_inference();
+        if (!send || !inf) {
+            report(false, "offset: call 30 inference");
+            return;
+        }
+    }
+
+    for (int call = 31; call <= 53; ++call) {
         beh.should_send_data();
         beh.should_perform_inference();
     }
@@ -269,11 +302,11 @@ static void test_global_step_offset() {
         bool send = beh.should_send_data();
         bool inf = beh.should_perform_inference();
         if (!send || !inf) {
-            report(false, "offset: call 51 shifted inference with offset");
+            report(false, "offset: call 54 shifted inference with offset");
             return;
         }
     }
-    report(true, "offset: call 51 shifted inference with offset");
+    report(true, "offset: call 54 shifted inference with offset");
 }
 
 // ---------------------------------------------------------------------------

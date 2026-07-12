@@ -26,6 +26,7 @@ target_link_directories(phydll_dl_runtime PRIVATE ${PHYDLL_BUILD_DIR}/lib)
 target_link_libraries(phydll_dl_runtime PRIVATE phydll)
 
 add_executable(phydll_dl_client dl_client.cpp)
+target_compile_options(phydll_dl_client PRIVATE -frtti)
 
 
 target_include_directories(phydll_dl_client PRIVATE ${PHYDLL_BUILD_DIR}/include)

@@ -266,7 +266,9 @@ private:
         MPI_Initialized(&mpi_initialized);
         if (mpi_initialized)
         {
-            MPI_Barrier(MPI_COMM_WORLD);
+            // Do not barrier on MPI_COMM_WORLD as it would hang if MAIA is running
+            // under a split communicator (e.g. MPMD or when using custom sub-communicators).
+            // We just skip the global barrier here since SmartRedis handles individual client connections.
         }
 #endif
 

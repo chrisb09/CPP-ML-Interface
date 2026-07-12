@@ -7,6 +7,7 @@ PY_SCOREP_WRAPPER = os.environ.get("PHYDLL_PY_SCOREP_WRAPPER", "0") == "1"
 
 import mpi4py
 mpi4py.rc.thread_level = "funneled"
+mpi4py.rc.finalize = False
 from mpi4py import MPI
 import torch
 import contextlib
@@ -351,14 +352,13 @@ def main():
                 print(f"{prefix} Exited dll.finalize()", flush=True)
             except Exception as e:
                 print(f"[PHYDLL:DL:PY] dll.finalize() failed: {e}", file=sys.stderr)
+        
         prefix = f"[DL {world_comm.rank}]" if world_comm is not None else "[DL]"
-        print(f"{prefix} main() returning", flush=True)
+        print(f"{prefix} entering global shutdown barrier...", flush=True)
+        world_comm.Barrier()
+        print(f"{prefix} passed barrier, finalizing MPI and returning...", flush=True)
 
 if __name__ == "__main__":
-    try:
-        main()
-    finally:
-        if MPI.Is_initialized() and not MPI.Is_finalized():
-            print("[DL] Entering MPI.Finalize()", flush=True)
-            MPI.Finalize()
-            print("[DL] Exited MPI.Finalize()", flush=True)
+    main()
+    from mpi4py import MPI
+    MPI.Finalize()

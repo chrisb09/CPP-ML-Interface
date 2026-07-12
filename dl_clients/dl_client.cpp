@@ -435,6 +435,7 @@ int main(int argc, char **argv) {
     }
 
     phydll_finalize();
+    MPI_Barrier(MPI_COMM_WORLD);
     MPI_Finalize();
     std::fprintf(stderr, "[PHYDLL:DL] client exiting cleanly\n");
     std::fflush(stderr);
