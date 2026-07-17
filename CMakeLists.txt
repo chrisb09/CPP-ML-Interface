@@ -122,8 +122,11 @@ if (WITH_SCOREP)
     list(APPEND CMAKE_MODULE_PATH "${AIXELERATOR_DIR}/cmake")
     find_package(Scorep REQUIRED)
     if(SCOREP_FOUND)
-        scorep_instrument_target(${LIBRARY_NAME} USER ON COMPILER OFF MEMORY ON MPP ${CPPML_SCOREP_MPP})
-        scorep_instrument_target(cpp_ml_interface_headers INTERFACE USER ON COMPILER OFF MPP ${CPPML_SCOREP_MPP})
+        # scorep_instrument_target is NOT called here: when building with the
+        # scorep-mpicxx compiler wrapper, the wrapper already injects the
+        # scorep_init.o stub at link time. Calling scorep_instrument_target
+        # additionally would produce a duplicate-symbol linker error
+        # (scorep_subsystems defined twice).
         target_compile_definitions(${LIBRARY_NAME} PUBLIC USE_SCOREP)
         target_compile_definitions(cpp_ml_interface_headers INTERFACE USE_SCOREP)
     endif()
@@ -264,6 +267,9 @@ target_link_libraries(${EXECUTABLE_NAME} PRIVATE
 )
 
 if (WITH_SCOREP)
+    # scorep_instrument_target is NOT called here: the scorep-mpicxx wrapper
+    # already injects scorep_init.o at link time. Calling scorep_instrument_target
+    # additionally would cause a duplicate-symbol linker error.
     set_target_properties(${EXECUTABLE_NAME} PROPERTIES SCOREP_MPP_SYSTEM "${CPPML_SCOREP_MPP}")
 endif()
 

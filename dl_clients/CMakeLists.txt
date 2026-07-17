@@ -60,9 +60,10 @@ if(WITH_SCOREP)
         if(NOT CPPML_SCOREP_MPP)
             set(CPPML_SCOREP_MPP "mpi")
         endif()
-        # Keep MPI interception consistent with the solver binary.
-        scorep_instrument_target(phydll_dl_runtime USER ON COMPILER OFF MEMORY ON MPP ${CPPML_SCOREP_MPP})
-        scorep_instrument_target(phydll_dl_client USER ON COMPILER OFF MEMORY ON MPP ${CPPML_SCOREP_MPP})
+        # scorep_instrument_target is NOT called here: when building with the
+        # scorep-mpicxx compiler wrapper, the wrapper already injects scorep_init.o
+        # at link time. Calling scorep_instrument_target additionally would produce
+        # a duplicate-symbol linker error (scorep_subsystems defined twice).
         target_link_options(phydll_dl_client PRIVATE -no-pie)
     endif()
     target_compile_definitions(phydll_dl_runtime PRIVATE USE_SCOREP)

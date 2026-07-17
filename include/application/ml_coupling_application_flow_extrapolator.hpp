@@ -1,10 +1,14 @@
 #pragma once
 
 #include <algorithm>
+#include <cstdlib>
 #include <cmath>
 #include <deque>
+#include <filesystem>
+#include <fstream>
 #include <numeric>
 #include <stdexcept>
+#include <string>
 #include <utility>
 #include <vector>
 
@@ -110,6 +114,10 @@ protected:
         SCOREP_USER_REGION_END(handle_flowex_extract_cubes)
 #endif
 
+        if (debug_enabled())
+        {
+            debug_assembled_input_.assign(buffer, buffer + total_values);
+        }
         if (this->normalization)
         {
             this->normalization->normalize_input(this->input_data_after_preprocessing);
@@ -126,9 +134,22 @@ protected:
         }
         if (behavior.should_perform_inference())
         {
+            debug_active_ = debug_begin_inference();
+            if (debug_active_)
+            {
+                debug_dump_layout();
+                debug_dump_fields("raw_fields", this->input_data);
+                debug_dump_vector("assembled_input", debug_assembled_input_);
+                debug_dump_tensor("normalized_input", this->input_data_after_preprocessing[0]);
+            }
             provider.static_inference(&this->input_data_after_preprocessing,
                                        &this->output_data_before_postprocessing);
+            if (debug_active_)
+            {
+                debug_dump_tensor("raw_provider_output", this->output_data_before_postprocessing[0]);
+            }
             this->finalize_output();
+            debug_active_ = false;
             return behavior.time_step_delta();
         }
         return 0;
@@ -143,6 +164,10 @@ protected:
         if (this->normalization)
         {
             this->normalization->denormalize_output(output_data_before_postprocessing);
+        }
+        if (debug_active_)
+        {
+            debug_dump_tensor("denormalized_output", output_data_before_postprocessing[0]);
         }
 
         clear_output_active_region();
@@ -176,6 +201,10 @@ protected:
                 }
             }
         }
+        if (debug_active_)
+        {
+            debug_dump_fields("reconstructed_fields", this->output_data);
+        }
 #ifdef USE_SCOREP
         SCOREP_USER_REGION_END(handle_flowex_reconstruct_output)
 #endif
@@ -204,6 +233,78 @@ private:
     std::vector<std::vector<int>> cube_volume_indices_;
     std::vector<double> weight_;
     std::deque<std::vector<std::vector<In>>> history_;
+    std::vector<In> debug_assembled_input_;
+    int debug_inference_count_ = 0;
+    bool debug_active_ = false;
+    std::string debug_prefix_;
+
+    static bool debug_enabled()
+    {
+        const char* enabled = std::getenv("MLCOUPLING_DEBUG_EXPORT");
+        if (!enabled || std::string(enabled) != "1") return false;
+        const char* rank_env = std::getenv("OMPI_COMM_WORLD_RANK");
+        if (!rank_env) rank_env = std::getenv("SLURM_PROCID");
+        const int rank = rank_env ? std::atoi(rank_env) : 0;
+        const char* requested_rank = std::getenv("MLCOUPLING_DEBUG_RANK");
+        return rank == (requested_rank ? std::atoi(requested_rank) : 0);
+    }
+
+    bool debug_begin_inference()
+    {
+        if (!debug_enabled()) return false;
+        const char* max_env = std::getenv("MLCOUPLING_DEBUG_MAX_INFERENCES");
+        const int max_inferences = max_env ? std::atoi(max_env) : 1;
+        if (++debug_inference_count_ > max_inferences) return false;
+        const char* root_env = std::getenv("MLCOUPLING_DEBUG_EXPORT_DIR");
+        const std::filesystem::path root = root_env ? root_env : "mlcoupling-debug";
+        std::filesystem::create_directories(root);
+        debug_prefix_ = (root / ("current_inference_" + std::to_string(debug_inference_count_))).string();
+        std::ofstream manifest(debug_prefix_ + "_manifest.txt");
+        manifest << "implementation=current\n";
+        manifest << "cube_dimension=" << cube_dimension_ << "\n";
+        manifest << "cube_overlap=" << cube_overlap_ << "\n";
+        manifest << "input_sequence_length=" << input_sequence_length_ << "\n";
+        manifest << "forecast_window=" << forecast_window_ << "\n";
+        manifest << "n_ghost_layers=" << n_ghost_layers_ << "\n";
+        return true;
+    }
+
+    template <typename T>
+    void debug_dump_vector(const std::string& stage, const std::vector<T>& values) const
+    {
+        if (!debug_active_ || values.empty()) return;
+        std::ofstream output(debug_prefix_ + "_" + stage + ".bin", std::ios::binary);
+        output.write(reinterpret_cast<const char*>(values.data()), static_cast<std::streamsize>(values.size() * sizeof(T)));
+    }
+
+    template <typename T>
+    void debug_dump_tensor(const std::string& stage, const MLCouplingTensor<T>& tensor) const
+    {
+        const T* values = static_cast<const T*>(tensor.root());
+        std::vector<T> copy(values, values + tensor.numel());
+        debug_dump_vector(stage, copy);
+    }
+
+    template <typename T>
+    void debug_dump_fields(const std::string& stage, const MLCouplingData<T>& fields) const
+    {
+        for (int field = 0; field < kFieldCount; ++field)
+        {
+            debug_dump_tensor(stage + "_field" + std::to_string(field), fields[field]);
+        }
+    }
+
+    void debug_dump_layout() const
+    {
+        debug_dump_vector("cube_starts_x", xs_);
+        debug_dump_vector("cube_starts_y", ys_);
+        debug_dump_vector("cube_starts_z", zs_);
+        debug_dump_vector("cube_weights", weight_);
+        std::vector<int> mapping;
+        mapping.reserve(cube_volume_indices_.size() * static_cast<size_t>(cube_size_));
+        for (const auto& cube : cube_volume_indices_) mapping.insert(mapping.end(), cube.begin(), cube.end());
+        debug_dump_vector("cube_volume_indices", mapping);
+    }
 
     static MLCouplingData<In> make_input_buffer(const MLCouplingData<In> &input_data,
                                                 int cube_dimension,
