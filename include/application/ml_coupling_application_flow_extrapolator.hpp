@@ -245,6 +245,8 @@ private:
         const char* rank_env = std::getenv("OMPI_COMM_WORLD_RANK");
         if (!rank_env) rank_env = std::getenv("SLURM_PROCID");
         const int rank = rank_env ? std::atoi(rank_env) : 0;
+        const char* all_ranks = std::getenv("MLCOUPLING_DEBUG_ALL_RANKS");
+        if (all_ranks && std::string(all_ranks) == "1") return true;
         const char* requested_rank = std::getenv("MLCOUPLING_DEBUG_RANK");
         return rank == (requested_rank ? std::atoi(requested_rank) : 0);
     }
@@ -258,9 +260,15 @@ private:
         const char* root_env = std::getenv("MLCOUPLING_DEBUG_EXPORT_DIR");
         const std::filesystem::path root = root_env ? root_env : "mlcoupling-debug";
         std::filesystem::create_directories(root);
-        debug_prefix_ = (root / ("current_inference_" + std::to_string(debug_inference_count_))).string();
+        const char* rank_env = std::getenv("OMPI_COMM_WORLD_RANK");
+        if (!rank_env) rank_env = std::getenv("SLURM_PROCID");
+        const int rank = rank_env ? std::atoi(rank_env) : 0;
+        debug_prefix_ = (root / ("current_rank_" + std::to_string(rank) + "_inference_" + std::to_string(debug_inference_count_))).string();
         std::ofstream manifest(debug_prefix_ + "_manifest.txt");
         manifest << "implementation=current\n";
+        manifest << "rank=" << rank << "\n";
+        if (const char* n_cells = std::getenv("MLCOUPLING_DEBUG_NCELLS")) manifest << "n_cells=" << n_cells << "\n";
+        if (const char* offsets = std::getenv("MLCOUPLING_DEBUG_OFFSETS")) manifest << "offsets=" << offsets << "\n";
         manifest << "cube_dimension=" << cube_dimension_ << "\n";
         manifest << "cube_overlap=" << cube_overlap_ << "\n";
         manifest << "input_sequence_length=" << input_sequence_length_ << "\n";
