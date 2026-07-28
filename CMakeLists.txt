@@ -74,7 +74,7 @@ if(NOT CPPML_DISABLE_REGISTRY_GEN)
     # 3. Custom Command für Code-Generierung
     add_custom_target(generate_registry
         COMMAND python3 "${CMAKE_CURRENT_SOURCE_DIR}/scripts/generate_registry.py" 
-                "${GENERATED_SRC}" "MLCouplingProvider,MLCouplingNormalization,MLCouplingBehavior,MLCouplingApplication" ${ALL_HEADERS}
+                "${GENERATED_SRC}" "MLCouplingLibrary,MLCouplingNormalization,MLCouplingBehavior,MLCouplingApplication" ${ALL_HEADERS}
         DEPENDS ${ALL_HEADERS} "${CMAKE_CURRENT_SOURCE_DIR}/scripts/generate_registry.py"
         COMMENT "Generating registry from headers..."
     )

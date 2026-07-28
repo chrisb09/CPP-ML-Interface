@@ -6,50 +6,62 @@
 
 // @registry_name: TurbulenceClosure
 // @registry_aliases: turbulence-closure, turbulence_closure, turbulence
-template <typename In, typename Out>
-class MLCouplingApplicationTurbulenceClosure : public MLCouplingApplication<In, Out>
+template <typename CouplingInput,
+          typename CouplingOutput,
+          typename LibraryInput = CouplingInput,
+          typename LibraryOutput = CouplingOutput>
+class MLCouplingApplicationTurbulenceClosure
+    : public MLCouplingApplication<CouplingInput, CouplingOutput, LibraryInput, LibraryOutput>
 {
 public:
     MLCouplingApplicationTurbulenceClosure(
-        MLCouplingData<In> input_data,
-        MLCouplingData<Out> output_data,
-        MLCouplingNormalization<In, Out> *normalization)
-        : MLCouplingApplication<In, Out>(std::move(input_data), std::move(output_data), normalization)
+        MLCouplingData<CouplingInput> coupling_input,
+        MLCouplingData<CouplingOutput> coupling_output,
+        MLCouplingNormalization<LibraryInput, CouplingOutput> *normalization)
+        : MLCouplingApplication<CouplingInput, CouplingOutput, LibraryInput, LibraryOutput>(
+              std::move(coupling_input), std::move(coupling_output), normalization)
     {
     }
 
     MLCouplingApplicationTurbulenceClosure(
-        MLCouplingData<In> input_data,
-        MLCouplingData<In> input_data_after_preprocessing,
-        MLCouplingData<Out> output_data_before_postprocessing,
-        MLCouplingData<Out> output_data,
-        MLCouplingNormalization<In, Out> *normalization)
-        : MLCouplingApplication<In, Out>(std::move(input_data),
-                                         std::move(input_data_after_preprocessing),
-                                         std::move(output_data_before_postprocessing),
-                                         std::move(output_data),
-                                         normalization)
+        MLCouplingData<CouplingInput> coupling_input,
+        MLCouplingData<LibraryInput> library_input,
+        MLCouplingData<LibraryOutput> library_output,
+        MLCouplingData<CouplingOutput> coupling_output,
+        MLCouplingNormalization<LibraryInput, CouplingOutput> *normalization)
+        : MLCouplingApplication<CouplingInput, CouplingOutput, LibraryInput, LibraryOutput>(
+              std::move(coupling_input),
+              std::move(library_input),
+              std::move(library_output),
+              std::move(coupling_output),
+              normalization)
     {
     }
 
 protected:
     // Pre- and post-processing are already called in MLCoupling's ml_step()
 
-    MLCouplingData<In> preprocess(MLCouplingData<In> input_data) override
+    MLCouplingData<LibraryInput>
+    preprocess_coupling_input(MLCouplingData<CouplingInput> coupling_input) override
     {
         // TODO: Implement turbulence closure specific preprocessing here
-        this->normalization->normalize_input(input_data);
+        this->library_input = MLCouplingApplication<CouplingInput, CouplingOutput, LibraryInput, LibraryOutput>::
+            preprocess_coupling_input(std::move(coupling_input));
+        this->normalization->normalize_input(this->library_input);
         uniform_filtering();
         downsampling();
-        return input_data;
+        return this->library_input;
     }
 
-    MLCouplingData<Out> postprocess(MLCouplingData<Out> output_data_before_postprocessing) override
+    MLCouplingData<CouplingOutput>
+    postprocess_library_output(MLCouplingData<LibraryOutput> library_output) override
     {
         // TODO: Implement turbulence closure specific postprocessing here
-        this->normalization->denormalize_output(output_data_before_postprocessing);
+        this->coupling_output = MLCouplingApplication<CouplingInput, CouplingOutput, LibraryInput, LibraryOutput>::
+            postprocess_library_output(std::move(library_output));
+        this->normalization->denormalize_output(this->coupling_output);
         compute_tau_ij();
-        return output_data_before_postprocessing;
+        return this->coupling_output;
     }
 
 private:

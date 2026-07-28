@@ -1,13 +1,15 @@
 #pragma once
 
 #include <memory>
+#include <fstream>
+#include <iterator>
 #include <span>
 #include <string>
 #include <utility>
 #include <vector>
 #include <map>
 
-#include "provider/ml_coupling_provider.hpp"
+#include "library/ml_coupling_library.hpp"
 #include "application/ml_coupling_application.hpp"
 #include "normalization/ml_coupling_minmax_normalization.hpp"
 #include <string>
@@ -28,7 +30,8 @@
 enum class ConfigCastMode : int;
 enum class ConfigParameterMatchMode : int;
 
-template <typename In, typename Out>
+template <typename CouplingInput, typename CouplingOutput,
+          typename LibraryInput = CouplingInput, typename LibraryOutput = CouplingOutput>
 class MLCoupling;
 
 template <typename In, typename Out>
@@ -59,6 +62,15 @@ MLCoupling<In, Out> *create_mlcoupling_from_config(
     MLCouplingData<Out> output_data,
     const ConfigOverrides &overrides);
 
+template <typename CouplingInput, typename CouplingOutput,
+          typename LibraryInput, typename LibraryOutput>
+MLCoupling<CouplingInput, CouplingOutput, LibraryInput, LibraryOutput> *
+create_mlcoupling_from_config_with_library_types(
+    const std::string &config_str,
+    MLCouplingData<CouplingInput> coupling_input,
+    MLCouplingData<CouplingOutput> coupling_output,
+    const ConfigOverrides &overrides);
+
 template <typename In, typename Out>
 MLCoupling<In, Out> *create_mlcoupling_from_config(
     const std::string &config_str,
@@ -207,17 +219,23 @@ MLCoupling<In, Out> *create_mlcoupling_from_config_file(
     ConfigParameterMatchMode parameter_match_mode,
     const ConfigOverrides &overrides);
 
-template <typename In, typename Out>
+template <typename CouplingInput,
+          typename CouplingOutput,
+          typename LibraryInput,
+          typename LibraryOutput>
 class MLCoupling
 {
     // I'd see this class as essentially the API that the user
     // would interact with.
     friend int main(int, char **);
 
-public:
-    MLCoupling<In, Out>(
-        MLCouplingProvider<In, Out> *provider,
-        MLCouplingApplication<In, Out> *application,
+ public:
+    using In = CouplingInput;
+    using Out = CouplingOutput;
+
+    MLCoupling(
+        MLCouplingLibrary<LibraryInput, LibraryOutput> *library,
+        MLCouplingApplication<CouplingInput, CouplingOutput, LibraryInput, LibraryOutput> *application,
         MLCouplingBehavior *behavior = nullptr,
         std::string log_level = "",
         std::optional<bool> error_separate = std::nullopt)
@@ -229,12 +247,12 @@ public:
             logging::set_error_seperate(*error_separate);
         }
 
-        this->provider.reset(provider);
+        this->library.reset(library);
         this->application.reset(application);
         this->coupling_type = CouplingType::STATIC;
-        this->input_after_preprocessing = &(this->application->input_data_after_preprocessing);
-        this->output_before_postprocessing = &(this->application->output_data_before_postprocessing);
-        if (coupling_type == CouplingType::STATIC && (this->input_after_preprocessing == nullptr || this->output_before_postprocessing == nullptr))
+        this->library_input = &(this->application->library_input);
+        this->library_output = &(this->application->library_output);
+        if (coupling_type == CouplingType::STATIC && (this->library_input == nullptr || this->library_output == nullptr))
         {
             guarantee(false, "CouplingType STATIC requires non-null pre/post buffers.");
         }
@@ -250,13 +268,13 @@ public:
         }
     }
 
-    MLCoupling<In, Out>(
-        MLCouplingProvider<In, Out> *provider,
-        MLCouplingApplication<In, Out> *application,
+    MLCoupling(
+        MLCouplingLibrary<LibraryInput, LibraryOutput> *library,
+        MLCouplingApplication<CouplingInput, CouplingOutput, LibraryInput, LibraryOutput> *application,
         MLCouplingBehavior *behavior,
         CouplingType coupling_type,
-        MLCouplingData<In> *input_after_preprocessing,
-        MLCouplingData<Out> *output_before_postprocessing,
+        MLCouplingData<LibraryInput> *library_input,
+        MLCouplingData<LibraryOutput> *library_output,
         std::string log_level = "",
         std::optional<bool> error_separate = std::nullopt)
     {
@@ -267,11 +285,11 @@ public:
             logging::set_error_seperate(*error_separate);
         }
 
-        this->provider.reset(provider);
+        this->library.reset(library);
         this->application.reset(application);
         this->coupling_type = coupling_type;
-        this->input_after_preprocessing = input_after_preprocessing;
-        this->output_before_postprocessing = output_before_postprocessing;
+        this->library_input = library_input;
+        this->library_output = library_output;
         if (behavior == nullptr)
         {
             this->behavior.reset(new MLCouplingBehaviorDefault());
@@ -282,7 +300,7 @@ public:
         }
 
         if (this->coupling_type == CouplingType::STATIC &&
-            (this->input_after_preprocessing == nullptr || this->output_before_postprocessing == nullptr))
+            (this->library_input == nullptr || this->library_output == nullptr))
         {
             guarantee(false, "CouplingType STATIC requires non-null pre/post buffers.");
         }
@@ -298,14 +316,14 @@ public:
 
     /**
      * @brief Performs the ML coupling step.
-     * Delegates to the application's ml_step() which drives the provider/behavior
+     * Delegates to the application's ml_step() which drives the coupling-library/behavior
      * orchestration. Returns the time-step delta (0 for no inference, N for inference).
      */
     int step()
     {
-        if (provider && application && behavior)
+        if (library && application && behavior)
         {
-            return application->ml_step(*provider, *behavior);
+            return application->ml_step(*library, *behavior);
         }
         return 0;
     }
@@ -316,9 +334,9 @@ public:
      */
     void set_merge_strategy(MLCouplingMergeStrategy strategy)
     {
-        if (provider)
+        if (library)
         {
-            provider->set_merge_strategy(strategy);
+            library->set_merge_strategy(strategy);
         }
     }
 
@@ -329,11 +347,11 @@ public:
      */
     void train_step(long long step_id)
     {
-        if (provider && application)
+        if (library && application)
         {
-            application->prepare_input();
-            auto metadata = provider->static_train(&(application->input_data_after_preprocessing),
-                                                   &(application->output_data_before_postprocessing));
+            application->prepare_library_input();
+            auto metadata = library->static_train(&(application->library_input),
+                                                  &(application->library_output));
             training_tracker.log(step_id, metadata);
         }
     }
@@ -359,9 +377,9 @@ public:
          */
         OrderedProxy &set(MLCouplingData<In> data)
         {
-            parent->application->input_data = std::move(data);
-            parent->application->prepare_input();
-            parent->provider->flex_ordered_set(parent->application->input_data_after_preprocessing);
+            parent->application->coupling_input = std::move(data);
+            parent->application->prepare_library_input();
+            parent->library->flex_ordered_set(parent->application->library_input);
             return *this;
         }
 
@@ -371,11 +389,9 @@ public:
          * @param data The target data.
          * @return A reference to the proxy for chaining.
          */
-        OrderedProxy &set_target(MLCouplingData<Out> data)
+        OrderedProxy &set_target(MLCouplingData<LibraryOutput> data)
         {
-            parent->application->output_data = std::move(data);
-            parent->application->prepare_input(); // We might need a prepare_target in the future, for now just use it directly
-            parent->provider->flex_ordered_set_target(parent->application->output_data);
+            parent->library->flex_ordered_set_target(std::move(data));
             return *this;
         }
 
@@ -385,7 +401,7 @@ public:
          */
         OrderedProxy &inference()
         {
-            parent->provider->flex_ordered_inference(&(parent->application->output_data_before_postprocessing));
+            parent->library->flex_ordered_inference(&(parent->application->library_output));
             return *this;
         }
 
@@ -397,9 +413,9 @@ public:
          */
         OrderedProxy &get(MLCouplingData<Out> &data)
         {
-            parent->provider->flex_ordered_get(&(parent->application->output_data_before_postprocessing));
-            parent->application->finalize_output();
-            data = parent->application->output_data;
+            parent->library->flex_ordered_get(&(parent->application->library_output));
+            parent->application->finalize_coupling_output();
+            data = parent->application->coupling_output;
             return *this;
         }
 
@@ -410,7 +426,7 @@ public:
          */
         std::map<std::string, double> train(long long step_id)
         {
-            auto metadata = parent->provider->flex_ordered_train(step_id);
+            auto metadata = parent->library->flex_ordered_train(step_id);
             parent->training_tracker.log(step_id, metadata);
             return metadata;
         }
@@ -436,9 +452,9 @@ public:
          */
         KeyedProxy &set(const std::string &key, MLCouplingData<In> data)
         {
-            parent->application->input_data = std::move(data);
-            parent->application->prepare_input();
-            parent->provider->flex_keyed_set(key, parent->application->input_data_after_preprocessing);
+            parent->application->coupling_input = std::move(data);
+            parent->application->prepare_library_input();
+            parent->library->flex_keyed_set(key, parent->application->library_input);
             return *this;
         }
 
@@ -449,10 +465,9 @@ public:
          * @param data The target data.
          * @return A reference to the proxy for chaining.
          */
-        KeyedProxy &set_target(const std::string &key, MLCouplingData<Out> data)
+        KeyedProxy &set_target(const std::string &key, MLCouplingData<LibraryOutput> data)
         {
-            parent->application->output_data = std::move(data);
-            parent->provider->flex_keyed_set_target(key, parent->application->output_data);
+            parent->library->flex_keyed_set_target(key, std::move(data));
             return *this;
         }
 
@@ -464,7 +479,7 @@ public:
          */
         KeyedProxy &inference(const std::vector<std::string> &in_keys, const std::vector<std::string> &out_keys)
         {
-            parent->provider->flex_keyed_inference(in_keys, out_keys, &(parent->application->output_data_before_postprocessing));
+            parent->library->flex_keyed_inference(in_keys, out_keys, &(parent->application->library_output));
             return *this;
         }
 
@@ -477,9 +492,9 @@ public:
          */
         KeyedProxy &get(const std::string &key, MLCouplingData<Out> &data)
         {
-            parent->provider->flex_keyed_get(key, &(parent->application->output_data_before_postprocessing));
-            parent->application->finalize_output();
-            data = parent->application->output_data;
+            parent->library->flex_keyed_get(key, &(parent->application->library_output));
+            parent->application->finalize_coupling_output();
+            data = parent->application->coupling_output;
             return *this;
         }
 
@@ -492,7 +507,7 @@ public:
          */
         std::map<std::string, double> train(long long step_id, const std::vector<std::string> &in_keys, const std::vector<std::string> &target_keys)
         {
-            auto metadata = parent->provider->flex_keyed_train(step_id, in_keys, target_keys);
+            auto metadata = parent->library->flex_keyed_train(step_id, in_keys, target_keys);
             parent->training_tracker.log(step_id, metadata);
             return metadata;
         }
@@ -573,15 +588,20 @@ public:
                                                   parameter_match_mode);
     }
 
-    static MLCoupling<In, Out> *create_from_config(const std::string &config_file_path,
-                                                   MLCouplingData<In> input_data,
-                                                   MLCouplingData<Out> output_data,
-                                                   const ConfigOverrides &overrides)
+    static MLCoupling<CouplingInput, CouplingOutput, LibraryInput, LibraryOutput> *create_from_config(
+        const std::string &config_file_path,
+        MLCouplingData<In> input_data,
+        MLCouplingData<Out> output_data,
+        const ConfigOverrides &overrides)
     {
-        return create_mlcoupling_from_config_file(config_file_path,
-                                                  std::move(input_data),
-                                                  std::move(output_data),
-                                                  overrides);
+        std::ifstream config_file(config_file_path);
+        if (!config_file)
+        {
+            throw std::runtime_error("Failed to open configuration file: " + config_file_path);
+        }
+        return create_mlcoupling_from_config_with_library_types<CouplingInput, CouplingOutput, LibraryInput, LibraryOutput>(
+            std::string(std::istreambuf_iterator<char>(config_file), std::istreambuf_iterator<char>()),
+            std::move(input_data), std::move(output_data), overrides);
     }
 
     static MLCoupling<In, Out> *create_from_config(const std::string &config_file_path,
@@ -777,14 +797,14 @@ protected:
     }
 
 private:
-    std::vector<void *> parameters; // Store parameters for provider, application, and behavior, so we can free them in the destructor
+    std::vector<void *> parameters; // Store parameters for library, application, and behavior, so we can free them in the destructor
 
-    std::unique_ptr<MLCouplingProvider<In, Out>> provider;
-    std::unique_ptr<MLCouplingApplication<In, Out>> application;
+    std::unique_ptr<MLCouplingLibrary<LibraryInput, LibraryOutput>> library;
+    std::unique_ptr<MLCouplingApplication<CouplingInput, CouplingOutput, LibraryInput, LibraryOutput>> application;
     std::unique_ptr<MLCouplingBehavior> behavior;
     CouplingType coupling_type = CouplingType::STATIC;
-    MLCouplingData<In> *input_after_preprocessing = nullptr;
-    MLCouplingData<Out> *output_before_postprocessing = nullptr;
+    MLCouplingData<LibraryInput> *library_input = nullptr;
+    MLCouplingData<LibraryOutput> *library_output = nullptr;
 
     TrainingTracker training_tracker;
 };

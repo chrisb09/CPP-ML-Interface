@@ -915,7 +915,15 @@ def _get_template_strings(base_class, template_params):
     if not template_params:
         return f"inline {base_class}*", ""
     
-    template_decl = ", ".join(f"typename {p}" for p in template_params)
+    template_decl_parts = []
+    for param in template_params:
+        if param == "LibraryInput" and "CouplingInput" in template_params:
+            template_decl_parts.append("typename LibraryInput = CouplingInput")
+        elif param == "LibraryOutput" and "CouplingOutput" in template_params:
+            template_decl_parts.append("typename LibraryOutput = CouplingOutput")
+        else:
+            template_decl_parts.append(f"typename {param}")
+    template_decl = ", ".join(template_decl_parts)
     template_args = ", ".join(template_params)
     return f"template<{template_decl}>\n{base_class}<{template_args}>*", template_args
 
@@ -926,6 +934,13 @@ def _get_class_instantiation(cls, subclass_template_params, base_template_params
         args = ", ".join(base_template_params[:len(subclass_template_params)])
         return f"{cls}<{args}>"
     return cls
+
+
+def _resolve_subclass_template_parameters(type_name, subclass_template_params, base_template_params):
+    """Map local subclass template names onto the enclosing base template names."""
+    for local, enclosing in zip(subclass_template_params, base_template_params):
+        type_name = re.sub(rf'\b{re.escape(local)}\b', enclosing, type_name)
+    return type_name
 
 
 def write_type_identification_functions(f, base_classes, template_parameters, found_classes):
@@ -1233,6 +1248,7 @@ def _write_map_factory(f, base_class, template_str, template_args, category,
             f.write(f'    }} else if (resolved_class_name == "{cls}") {{\n')
         
         cls_inst = _get_class_instantiation(cls, subclass_template_params, base_template_params)
+        template_parameter_map = dict(zip(subclass_template_params, base_template_params))
         template_param_names = {
             _strip_cvref(name)
             for name in (base_template_params + subclass_template_params)
@@ -1276,6 +1292,8 @@ def _write_map_factory(f, base_class, template_str, template_args, category,
             param_args = []
             debug_outputs = []
             for ptype, pname, pdefault in ctor:
+                ptype = _resolve_subclass_template_parameters(
+                    ptype, subclass_template_params, base_template_params)
                 ptype_norm = _normalize_type_for_display(ptype)
                 is_pointer = ptype_norm.endswith('*')
                 storage_type = _strip_cvref(ptype)

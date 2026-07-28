@@ -21,66 +21,67 @@
 // @registry_name: MLCouplingApplicationFlowExtrapolator
 // @registry_aliases: flow-extrapolator, flow_extrapolator, maia-flow-extrapolator
 // @registry_description: Preprocesses three raw flow fields into cube-based model tensors and reconstructs model output back into the raw fields.
-template <typename In, typename Out>
-class MLCouplingApplicationFlowExtrapolator : public MLCouplingApplication<In, Out>
+template <typename CouplingInput,
+          typename CouplingOutput,
+          typename LibraryInput = CouplingInput,
+          typename LibraryOutput = CouplingOutput>
+class MLCouplingApplicationFlowExtrapolator
+    : public MLCouplingApplication<CouplingInput, CouplingOutput, LibraryInput, LibraryOutput>
 {
 public:
-    MLCouplingApplicationFlowExtrapolator(MLCouplingData<In> input_data,
-                                          MLCouplingData<Out> output_data,
-                                          MLCouplingNormalization<In, Out> *normalization = nullptr,
+    MLCouplingApplicationFlowExtrapolator(MLCouplingData<CouplingInput> coupling_input,
+                                          MLCouplingData<CouplingOutput> coupling_output,
+                                          MLCouplingNormalization<LibraryInput, CouplingOutput> *normalization = nullptr,
                                           int cube_dimension = 8,
                                           int cube_overlap = 0,
                                           int input_sequence_length = 1,
                                           int forecast_window = 1,
                                           int n_ghost_layers = 0)
-        : MLCouplingApplication<In, Out>(std::move(input_data),
-                                         std::move(output_data),
-                                         normalization)
+        : MLCouplingApplication<CouplingInput, CouplingOutput, LibraryInput, LibraryOutput>(std::move(coupling_input),
+                                                                                              std::move(coupling_output),
+                                          normalization)
     {
-        this->input_data_after_preprocessing = make_input_buffer(this->input_data, cube_dimension, cube_overlap, input_sequence_length, n_ghost_layers);
-        this->output_data_before_postprocessing = make_output_buffer(this->input_data, forecast_window, cube_dimension, cube_overlap, n_ghost_layers);
+        this->library_input = make_input_buffer(this->coupling_input, cube_dimension, cube_overlap, input_sequence_length, n_ghost_layers);
+        this->library_output = make_library_output_buffer(this->coupling_input, forecast_window, cube_dimension, cube_overlap, n_ghost_layers);
+        working_output_ = make_working_output_buffer(this->coupling_input, forecast_window, cube_dimension, cube_overlap, n_ghost_layers);
         initialize(cube_dimension, cube_overlap, input_sequence_length, forecast_window, n_ghost_layers);
     }
 
-    MLCouplingApplicationFlowExtrapolator(MLCouplingData<In> input_data,
-                                          MLCouplingData<In> input_data_after_preprocessing,
-                                          MLCouplingData<Out> output_data_before_postprocessing,
-                                          MLCouplingData<Out> output_data,
-                                          MLCouplingNormalization<In, Out> *normalization = nullptr,
+    MLCouplingApplicationFlowExtrapolator(MLCouplingData<CouplingInput> coupling_input,
+                                          MLCouplingData<LibraryInput> library_input,
+                                          MLCouplingData<LibraryOutput> library_output,
+                                          MLCouplingData<CouplingOutput> coupling_output,
+                                          MLCouplingNormalization<LibraryInput, CouplingOutput> *normalization = nullptr,
                                           int cube_dimension = 8,
                                           int cube_overlap = 0,
                                           int input_sequence_length = 1,
                                           int forecast_window = 1,
                                           int n_ghost_layers = 0)
-        : MLCouplingApplication<In, Out>(std::move(input_data),
-                                          std::move(input_data_after_preprocessing),
-                                         std::move(output_data_before_postprocessing),
-                                         std::move(output_data),
-                                         normalization)
+        : MLCouplingApplication<CouplingInput, CouplingOutput, LibraryInput, LibraryOutput>(std::move(coupling_input),
+                                                                                              std::move(library_input),
+                                                                                              std::move(library_output),
+                                                                                              std::move(coupling_output),
+                                          normalization)
     {
-        // Always recreate pre/post buffers unconditionally: the base class
-        // constructor (MLCouplingApplication) copies input_data (3 raw tensors)
-        // into input_data_after_preprocessing when the latter is empty, which
-        // defeats the empty() check and causes "exactly one tensor" validation
-        // failure. We must override with proper single-tensor buffers.
-        this->input_data_after_preprocessing = make_input_buffer(this->input_data, cube_dimension, cube_overlap, input_sequence_length, n_ghost_layers);
-        this->output_data_before_postprocessing = make_output_buffer(this->input_data, forecast_window, cube_dimension, cube_overlap, n_ghost_layers);
+        this->library_input = make_input_buffer(this->coupling_input, cube_dimension, cube_overlap, input_sequence_length, n_ghost_layers);
+        this->library_output = make_library_output_buffer(this->coupling_input, forecast_window, cube_dimension, cube_overlap, n_ghost_layers);
+        working_output_ = make_working_output_buffer(this->coupling_input, forecast_window, cube_dimension, cube_overlap, n_ghost_layers);
         initialize(cube_dimension, cube_overlap, input_sequence_length, forecast_window, n_ghost_layers);
     }
 
 protected:
-    MLCouplingData<In> preprocess(MLCouplingData<In> input_data) override
+    MLCouplingData<LibraryInput> preprocess_coupling_input(MLCouplingData<CouplingInput> coupling_input) override
     {
-        validate_input_fields(input_data);
+        validate_input_fields(coupling_input);
 
 #ifdef USE_SCOREP
         SCOREP_USER_REGION_DEFINE(handle_flowex_extract_cubes)
         SCOREP_USER_REGION_BEGIN(handle_flowex_extract_cubes, "flowex_extract_cubes", SCOREP_USER_REGION_TYPE_COMMON)
 #endif
-        std::vector<std::vector<In>> current_step(static_cast<size_t>(kFieldCount));
+        std::vector<std::vector<CouplingInput>> current_step(static_cast<size_t>(kFieldCount));
         for (int field = 0; field < kFieldCount; ++field)
         {
-            current_step[static_cast<size_t>(field)] = extract_field_cubes(input_data[field]);
+            current_step[static_cast<size_t>(field)] = extract_field_cubes(coupling_input[field]);
         }
 
         history_.push_back(std::move(current_step));
@@ -89,10 +90,10 @@ protected:
             history_.pop_front();
         }
 
-        auto &tensor = this->input_data_after_preprocessing[0];
-        In *buffer = static_cast<In *>(tensor.root());
+        auto &tensor = this->library_input[0];
+        LibraryInput *buffer = static_cast<LibraryInput *>(tensor.root());
         const size_t total_values = tensor.numel();
-        std::fill(buffer, buffer + total_values, static_cast<In>(0));
+        std::fill(buffer, buffer + total_values, static_cast<LibraryInput>(0));
 
         for (int seq = 0; seq < input_sequence_length_; ++seq)
         {
@@ -120,17 +121,17 @@ protected:
         }
         if (this->normalization)
         {
-            this->normalization->normalize_input(this->input_data_after_preprocessing);
+            this->normalization->normalize_input(this->library_input);
         }
 
-        return this->input_data_after_preprocessing;
+        return this->library_input;
     }
 
-    int ml_step(MLCouplingProvider<In,Out>& provider, MLCouplingBehavior& behavior) override
+    int ml_step(MLCouplingLibrary<LibraryInput, LibraryOutput>& library, MLCouplingBehavior& behavior) override
     {
         if (behavior.should_send_data())
         {
-            this->prepare_input();
+            this->prepare_library_input();
         }
         if (behavior.should_perform_inference())
         {
@@ -138,36 +139,42 @@ protected:
             if (debug_active_)
             {
                 debug_dump_layout();
-                debug_dump_fields("raw_fields", this->input_data);
+                debug_dump_fields("raw_fields", this->coupling_input);
                 debug_dump_vector("assembled_input", debug_assembled_input_);
-                debug_dump_tensor("normalized_input", this->input_data_after_preprocessing[0]);
+                debug_dump_tensor("normalized_input", this->library_input[0]);
             }
-            provider.static_inference(&this->input_data_after_preprocessing,
-                                       &this->output_data_before_postprocessing);
+            library.static_inference(&this->library_input, &this->library_output);
             if (debug_active_)
             {
-                debug_dump_tensor("raw_provider_output", this->output_data_before_postprocessing[0]);
+                debug_dump_tensor("raw_provider_output", this->library_output[0]);
             }
-            this->finalize_output();
+            this->finalize_coupling_output();
             debug_active_ = false;
             return behavior.time_step_delta();
         }
         return 0;
     }
 
-    MLCouplingData<Out> postprocess(MLCouplingData<Out> output_data_before_postprocessing) override
+    MLCouplingData<CouplingOutput> postprocess_library_output(MLCouplingData<LibraryOutput> library_output) override
     {
-        validate_input_fields(this->input_data);
-        validate_output_fields(this->output_data);
-        validate_model_output(output_data_before_postprocessing);
+        validate_input_fields(this->coupling_input);
+        validate_output_fields(this->coupling_output);
+        validate_model_output(library_output);
+
+        auto &working_tensor = working_output_[0];
+        CouplingOutput *working_buffer = static_cast<CouplingOutput *>(working_tensor.root());
+        const auto &library_tensor = library_output[0];
+        const LibraryOutput *library_buffer = static_cast<const LibraryOutput *>(library_tensor.root());
+        std::transform(library_buffer, library_buffer + library_tensor.numel(), working_buffer,
+                       [](LibraryOutput value) { return static_cast<CouplingOutput>(value); });
 
         if (this->normalization)
         {
-            this->normalization->denormalize_output(output_data_before_postprocessing);
+            this->normalization->denormalize_output(working_output_);
         }
         if (debug_active_)
         {
-            debug_dump_tensor("denormalized_output", output_data_before_postprocessing[0]);
+            debug_dump_tensor("denormalized_output", working_output_[0]);
         }
 
         clear_output_active_region();
@@ -176,12 +183,24 @@ protected:
         SCOREP_USER_REGION_DEFINE(handle_flowex_reconstruct_output)
         SCOREP_USER_REGION_BEGIN(handle_flowex_reconstruct_output, "flowex_reconstruct_output", SCOREP_USER_REGION_TYPE_COMMON)
 #endif
-        const auto &tensor = output_data_before_postprocessing[0];
-        const Out *buffer = static_cast<const Out *>(tensor.root());
+        const CouplingOutput *buffer = static_cast<const CouplingOutput *>(working_tensor.root());
+
+        // Widen denormalized model output to float64 and accumulate in double to match legacy CMI.
+        // Legacy CMI (ml_coupling_maia_aix.cpp) uses a double* fullField accumulator.
+        // Without this, float32 accumulation produces a ~1 ULP (~1e-8) divergence per cell,
+        // which the CFD solver then amplifies over subsequent steps.
+        std::vector<double> widened(static_cast<size_t>(working_tensor.numel()));
+        for (size_t i = 0; i < working_tensor.numel(); ++i)
+        {
+            widened[i] = static_cast<double>(buffer[i]);
+        }
 
         for (int field = 0; field < kFieldCount; ++field)
         {
-            Out *dst_field = static_cast<Out *>(this->output_data[field].root());
+            CouplingOutput *dst_field = static_cast<CouplingOutput *>(this->coupling_output[field].root());
+
+            // Accumulate into a double temporary to preserve precision (matches legacy CMI).
+            std::vector<double> accum(weight_.size(), 0.0);
             for (int cube = 0; cube < num_cubes_; ++cube)
             {
                 const int batch_index = field * num_cubes_ + cube;
@@ -189,27 +208,29 @@ protected:
                 const std::vector<int> &mapping = cube_volume_indices_[static_cast<size_t>(cube)];
                 for (int local = 0; local < cube_size_; ++local)
                 {
-                    dst_field[static_cast<size_t>(mapping[static_cast<size_t>(local)])] += buffer[src_offset + static_cast<size_t>(local)];
+                    accum[static_cast<size_t>(mapping[static_cast<size_t>(local)])] +=
+                        widened[src_offset + static_cast<size_t>(local)];
                 }
             }
 
+            // Normalize in double, then cast to float32 for solver buffer.
             for (size_t i = 0; i < weight_.size(); ++i)
             {
                 if (weight_[i] > 0.0)
                 {
-                    dst_field[i] = static_cast<Out>(dst_field[i] / static_cast<Out>(weight_[i]));
+                    dst_field[i] = static_cast<CouplingOutput>(accum[i] / weight_[i]);
                 }
             }
         }
         if (debug_active_)
         {
-            debug_dump_fields("reconstructed_fields", this->output_data);
+            debug_dump_fields("reconstructed_fields", this->coupling_output);
         }
 #ifdef USE_SCOREP
         SCOREP_USER_REGION_END(handle_flowex_reconstruct_output)
 #endif
 
-        return this->output_data;
+        return this->coupling_output;
     }
 
 private:
@@ -232,8 +253,9 @@ private:
     std::vector<int> zs_;
     std::vector<std::vector<int>> cube_volume_indices_;
     std::vector<double> weight_;
-    std::deque<std::vector<std::vector<In>>> history_;
-    std::vector<In> debug_assembled_input_;
+    std::deque<std::vector<std::vector<CouplingInput>>> history_;
+    MLCouplingData<CouplingOutput> working_output_;
+    std::vector<LibraryInput> debug_assembled_input_;
     int debug_inference_count_ = 0;
     bool debug_active_ = false;
     std::string debug_prefix_;
@@ -274,6 +296,24 @@ private:
         manifest << "input_sequence_length=" << input_sequence_length_ << "\n";
         manifest << "forecast_window=" << forecast_window_ << "\n";
         manifest << "n_ghost_layers=" << n_ghost_layers_ << "\n";
+        // Self-describing layout fields so comparators can validate without guessing.
+        manifest << "num_cubes=" << num_cubes_ << "\n";
+        manifest << "cube_size=" << cube_size_ << "\n";
+        manifest << "n_fields=" << kFieldCount << "\n";
+        {
+            const size_t ai_count = static_cast<size_t>(kFieldCount) * static_cast<size_t>(num_cubes_)
+                                  * static_cast<size_t>(input_sequence_length_) * static_cast<size_t>(cube_size_);
+            const size_t rpo_count = static_cast<size_t>(kFieldCount) * static_cast<size_t>(num_cubes_)
+                                   * static_cast<size_t>(forecast_window_) * static_cast<size_t>(cube_size_);
+            manifest << "assembled_input_dtype=float32\n";
+            manifest << "assembled_input_count=" << ai_count << "\n";
+            manifest << "raw_provider_output_dtype=float32\n";
+            manifest << "raw_provider_output_count=" << rpo_count << "\n";
+            manifest << "reconstructed_field_dtype=" << (sizeof(CouplingOutput) == sizeof(float) ? "float32" : "float64") << "\n";
+            manifest << "reconstructed_field_count=" << active_cells_[0] * active_cells_[1] * active_cells_[2] << "\n";
+        }
+        if (const char* n_cells = std::getenv("MLCOUPLING_DEBUG_NCELLS"))
+            manifest << "active_cells=" << n_cells << "\n";
         return true;
     }
 
@@ -314,44 +354,63 @@ private:
         debug_dump_vector("cube_volume_indices", mapping);
     }
 
-    static MLCouplingData<In> make_input_buffer(const MLCouplingData<In> &input_data,
-                                                int cube_dimension,
-                                                int cube_overlap,
-                                                int input_sequence_length,
-                                                int n_ghost_layers)
+    static MLCouplingData<LibraryInput> make_input_buffer(const MLCouplingData<CouplingInput> &coupling_input,
+                                                           int cube_dimension,
+                                                           int cube_overlap,
+                                                           int input_sequence_length,
+                                                           int n_ghost_layers)
     {
 #ifdef USE_SCOREP
         SCOREP_USER_REGION_DEFINE(handle_flowex_make_input_buffer)
         SCOREP_USER_REGION_BEGIN(handle_flowex_make_input_buffer, "flowex_make_input_buffer", SCOREP_USER_REGION_TYPE_COMMON)
 #endif
-        const ShapeInfo shape = infer_shape(input_data, cube_dimension, cube_overlap, n_ghost_layers);
+        const ShapeInfo shape = infer_shape(coupling_input, cube_dimension, cube_overlap, n_ghost_layers);
         const std::vector<int> dims = {kFieldCount * shape.num_cubes, input_sequence_length, shape.cube_size};
-        MLCouplingData<In> result(std::vector<MLCouplingTensor<In>>{
-            MLCouplingTensor<In>::from_flat_copy(std::vector<In>(static_cast<size_t>(dims[0]) * static_cast<size_t>(dims[1]) * static_cast<size_t>(dims[2]), static_cast<In>(0)), dims)});
+        MLCouplingData<LibraryInput> result(std::vector<MLCouplingTensor<LibraryInput>>{
+            MLCouplingTensor<LibraryInput>::from_flat_copy(std::vector<LibraryInput>(static_cast<size_t>(dims[0]) * static_cast<size_t>(dims[1]) * static_cast<size_t>(dims[2]), static_cast<LibraryInput>(0)), dims)});
 #ifdef USE_SCOREP
         SCOREP_USER_REGION_END(handle_flowex_make_input_buffer)
 #endif
         return result;
     }
 
-    static MLCouplingData<Out> make_output_buffer(const MLCouplingData<In> &input_data,
-                                                  int forecast_window,
-                                                  int cube_dimension,
-                                                  int cube_overlap,
-                                                  int n_ghost_layers)
+    template <typename T>
+    static MLCouplingData<T> make_output_buffer(const MLCouplingData<CouplingInput> &coupling_input,
+                                                int forecast_window,
+                                                int cube_dimension,
+                                                int cube_overlap,
+                                                int n_ghost_layers)
     {
 #ifdef USE_SCOREP
         SCOREP_USER_REGION_DEFINE(handle_flowex_make_output_buffer)
         SCOREP_USER_REGION_BEGIN(handle_flowex_make_output_buffer, "flowex_make_output_buffer", SCOREP_USER_REGION_TYPE_COMMON)
 #endif
-        const ShapeInfo shape = infer_shape(input_data, cube_dimension, cube_overlap, n_ghost_layers);
+        const ShapeInfo shape = infer_shape(coupling_input, cube_dimension, cube_overlap, n_ghost_layers);
         const std::vector<int> dims = {kFieldCount * shape.num_cubes, forecast_window, shape.cube_size};
-        MLCouplingData<Out> result(std::vector<MLCouplingTensor<Out>>{
-            MLCouplingTensor<Out>::from_flat_copy(std::vector<Out>(static_cast<size_t>(dims[0]) * static_cast<size_t>(dims[1]) * static_cast<size_t>(dims[2]), static_cast<Out>(0)), dims)});
+        MLCouplingData<T> result(std::vector<MLCouplingTensor<T>>{
+            MLCouplingTensor<T>::from_flat_copy(std::vector<T>(static_cast<size_t>(dims[0]) * static_cast<size_t>(dims[1]) * static_cast<size_t>(dims[2]), static_cast<T>(0)), dims)});
 #ifdef USE_SCOREP
         SCOREP_USER_REGION_END(handle_flowex_make_output_buffer)
 #endif
         return result;
+    }
+
+    static MLCouplingData<LibraryOutput> make_library_output_buffer(const MLCouplingData<CouplingInput> &coupling_input,
+                                                                      int forecast_window,
+                                                                      int cube_dimension,
+                                                                      int cube_overlap,
+                                                                      int n_ghost_layers)
+    {
+        return make_output_buffer<LibraryOutput>(coupling_input, forecast_window, cube_dimension, cube_overlap, n_ghost_layers);
+    }
+
+    static MLCouplingData<CouplingOutput> make_working_output_buffer(const MLCouplingData<CouplingInput> &coupling_input,
+                                                                       int forecast_window,
+                                                                       int cube_dimension,
+                                                                       int cube_overlap,
+                                                                       int n_ghost_layers)
+    {
+        return make_output_buffer<CouplingOutput>(coupling_input, forecast_window, cube_dimension, cube_overlap, n_ghost_layers);
     }
 
     struct ShapeInfo
@@ -360,7 +419,7 @@ private:
         int num_cubes = 0;
     };
 
-    static ShapeInfo infer_shape(const MLCouplingData<In> &input_data,
+    static ShapeInfo infer_shape(const MLCouplingData<CouplingInput> &input_data,
                                  int cube_dimension,
                                  int cube_overlap,
                                  int n_ghost_layers)
@@ -418,10 +477,10 @@ private:
         n_ghost_layers_ = n_ghost_layers;
         cube_size_ = cube_dimension_ * cube_dimension_ * cube_dimension_;
 
-        validate_input_fields(this->input_data);
-        validate_output_fields(this->output_data);
+        validate_input_fields(this->coupling_input);
+        validate_output_fields(this->coupling_output);
 
-        n_cells_ = this->input_data[0].dimensions();
+        n_cells_ = this->coupling_input[0].dimensions();
         active_cells_.resize(3);
         for (int axis = 0; axis < 3; ++axis)
         {
@@ -474,7 +533,7 @@ private:
         validate_model_buffers();
     }
 
-    static void validate_input_fields(const MLCouplingData<In> &raw_input)
+    static void validate_input_fields(const MLCouplingData<CouplingInput> &raw_input)
     {
         if (raw_input.size() != static_cast<size_t>(kFieldCount))
         {
@@ -498,7 +557,7 @@ private:
         }
     }
 
-    static void validate_output_fields(const MLCouplingData<Out> &raw_output)
+    static void validate_output_fields(const MLCouplingData<CouplingOutput> &raw_output)
     {
         if (raw_output.size() != static_cast<size_t>(kFieldCount))
         {
@@ -524,11 +583,11 @@ private:
 
     void validate_model_buffers() const
     {
-        if (this->input_data_after_preprocessing.size() != 1)
+        if (this->library_input.size() != 1)
         {
             throw std::invalid_argument("FlowExtrapolator: preprocessed input must contain exactly one tensor");
         }
-        if (this->output_data_before_postprocessing.size() != 1)
+        if (this->library_output.size() != 1 || working_output_.size() != 1)
         {
             throw std::invalid_argument("FlowExtrapolator: model output buffer must contain exactly one tensor");
         }
@@ -536,17 +595,18 @@ private:
         const std::vector<int> expected_input_dims = {kFieldCount * num_cubes_, input_sequence_length_, cube_size_};
         const std::vector<int> expected_output_dims = {kFieldCount * num_cubes_, forecast_window_, cube_size_};
 
-        if (this->input_data_after_preprocessing[0].dimensions() != expected_input_dims)
+        if (this->library_input[0].dimensions() != expected_input_dims)
         {
             throw std::invalid_argument("FlowExtrapolator: preprocessed input tensor has unexpected shape");
         }
-        if (this->output_data_before_postprocessing[0].dimensions() != expected_output_dims)
+        if (this->library_output[0].dimensions() != expected_output_dims ||
+            working_output_[0].dimensions() != expected_output_dims)
         {
             throw std::invalid_argument("FlowExtrapolator: model output tensor has unexpected shape");
         }
     }
 
-    void validate_model_output(const MLCouplingData<Out> &model_output) const
+    void validate_model_output(const MLCouplingData<LibraryOutput> &model_output) const
     {
         if (model_output.size() != 1 || !model_output[0].is_contiguous())
         {
@@ -594,10 +654,10 @@ private:
         }
     }
 
-    std::vector<In> extract_field_cubes(const MLCouplingTensor<In> &tensor) const
+    std::vector<CouplingInput> extract_field_cubes(const MLCouplingTensor<CouplingInput> &tensor) const
     {
-        const In *src = static_cast<const In *>(tensor.root());
-        std::vector<In> cubes(static_cast<size_t>(num_cubes_) * static_cast<size_t>(cube_size_));
+        const CouplingInput *src = static_cast<const CouplingInput *>(tensor.root());
+        std::vector<CouplingInput> cubes(static_cast<size_t>(num_cubes_) * static_cast<size_t>(cube_size_));
         size_t cube_index = 0;
         for (const auto &mapping : cube_volume_indices_)
         {
@@ -614,14 +674,14 @@ private:
     {
         for (int field = 0; field < kFieldCount; ++field)
         {
-            Out *dst = static_cast<Out *>(this->output_data[static_cast<size_t>(field)].root());
+            CouplingOutput *dst = static_cast<CouplingOutput *>(this->coupling_output[static_cast<size_t>(field)].root());
             for (int z = n_ghost_layers_; z < n_cells_[0] - n_ghost_layers_; ++z)
             {
                 const int base_z = z * yz_stride_;
                 for (int y = n_ghost_layers_; y < n_cells_[1] - n_ghost_layers_; ++y)
                 {
                     const int start = base_z + y * row_stride_ + n_ghost_layers_;
-                    std::fill(dst + start, dst + start + active_cells_[2], static_cast<Out>(0));
+                    std::fill(dst + start, dst + start + active_cells_[2], static_cast<CouplingOutput>(0));
                 }
             }
         }

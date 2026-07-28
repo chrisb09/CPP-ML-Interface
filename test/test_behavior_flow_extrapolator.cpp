@@ -226,9 +226,10 @@ static void test_hdf_avoidance() {
     }
     report(true, "hdf: call 30 inference fires");
 
-    // Next inference is at 54 (shifted).
-    // Calls 31-51: no send, no inf.
-    for (int call = 31; call <= 51; ++call) {
+    // Next inference is at 53 (shifted). The solver's normal post-ML
+    // increment is included in the effective global-step tracking.
+    // Calls 31-50: no send, no inf.
+    for (int call = 31; call <= 50; ++call) {
         bool send = beh.should_send_data();
         bool inf = beh.should_perform_inference();
         if (send || inf) {
@@ -236,8 +237,8 @@ static void test_hdf_avoidance() {
             return;
         }
     }
-    // Calls 52-53: send, no inf.
-    for (int call = 52; call <= 53; ++call) {
+    // Calls 51-52: send, no inf.
+    for (int call = 51; call <= 52; ++call) {
         bool send = beh.should_send_data();
         bool inf = beh.should_perform_inference();
         if (!send || inf) {
@@ -245,16 +246,16 @@ static void test_hdf_avoidance() {
             return;
         }
     }
-    // Call 54: send + inf.
+    // Call 53: send + inf.
     {
         bool send = beh.should_send_data();
         bool inf = beh.should_perform_inference();
         if (!send || !inf) {
-            report(false, "hdf: call 54 should send+inf (shifted)");
+            report(false, "hdf: call 53 should send+inf (shifted)");
             return;
         }
     }
-    report(true, "hdf: call 54 shifted inference fires");
+    report(true, "hdf: call 53 shifted inference fires");
 }
 
 // ---------------------------------------------------------------------------
@@ -293,7 +294,7 @@ static void test_global_step_offset() {
         }
     }
 
-    for (int call = 31; call <= 53; ++call) {
+    for (int call = 31; call <= 52; ++call) {
         beh.should_send_data();
         beh.should_perform_inference();
     }
@@ -302,15 +303,44 @@ static void test_global_step_offset() {
         bool send = beh.should_send_data();
         bool inf = beh.should_perform_inference();
         if (!send || !inf) {
-            report(false, "offset: call 54 shifted inference with offset");
+            report(false, "offset: call 53 shifted inference with offset");
             return;
         }
     }
-    report(true, "offset: call 54 shifted inference with offset");
+    report(true, "offset: call 53 shifted inference with offset");
 }
 
 // ---------------------------------------------------------------------------
-// Test 5: End-of-simulation
+// Test 5: Restarted Maia timing across consecutive ML jumps
+// ---------------------------------------------------------------------------
+// Maia restarts at global step 10 and increments globalTimeStep once after an
+// ML delta.  With hdf=50 and delta=24, the third inference must be logical
+// call 43 (global step 101), rather than call 44 (global step 102).
+
+static void test_restart_hdf_timing_after_jumps() {
+    MLCouplingBehaviorFlowExtrapolator beh(5, 5, 12, 50, 300, 1.0, 2, 1, 5, 10);
+    int inference_calls[3] = {};
+    int inference_count = 0;
+
+    for (int call = 1; call <= 43; ++call) {
+        beh.should_send_data();
+        if (beh.should_perform_inference()) {
+            if (inference_count < 3) {
+                inference_calls[inference_count] = call;
+            }
+            ++inference_count;
+        }
+    }
+
+    const bool correct = inference_count == 3
+        && inference_calls[0] == 5
+        && inference_calls[1] == 17
+        && inference_calls[2] == 43;
+    report(correct, "restart: inferences at calls 5, 17, 43 (global 15, 51, 101)");
+}
+
+// ---------------------------------------------------------------------------
+// Test 6: End-of-simulation
 // ---------------------------------------------------------------------------
 
 static void test_end_of_simulation() {
@@ -358,6 +388,7 @@ int main() {
     test_stride();
     test_hdf_avoidance();
     test_global_step_offset();
+    test_restart_hdf_timing_after_jumps();
     test_end_of_simulation();
 
     if (g_any_failure) {

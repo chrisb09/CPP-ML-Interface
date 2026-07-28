@@ -6,7 +6,7 @@
 #include <vector>
 #include <mpi.h>
 
-#include "ml_coupling_provider.hpp"
+#include "../library/ml_coupling_library.hpp"
 #include "../tool.h"
 
 // for debugging and to disabled greyed out code in some IDEs
@@ -23,7 +23,7 @@
 // @registry_name: Aixelerator
 // @registry_aliases: aixelerator, AIxelerator, aix, AIx, AIX
 template <typename In, typename Out>
-class MLCouplingProviderAixelerator : public MLCouplingProvider<In, Out>
+class MLCouplingLibraryAixelerator : public MLCouplingLibrary<In, Out>
 {
 
 public:
@@ -45,7 +45,7 @@ public:
     bool enable_hybrid;
     std::optional<float> host_fraction;
 
-    MLCouplingProviderAixelerator(std::string model_file,
+    MLCouplingLibraryAixelerator(std::string model_file,
                                   int batchsize = 1,
                                   MPI_Comm app_comm = MPI_COMM_WORLD,
                                   bool enable_hybrid = false,
@@ -127,7 +127,7 @@ public:
         }
         else
         {
-            guarantee(false, "MLCouplingProviderAixelerator currently only supports same-type float/float or double/double data. The linked AIxeleratorService backend only provides float and double template instantiations.");
+            guarantee(false, "MLCouplingLibraryAixelerator currently only supports same-type float/float or double/double data. The linked AIxeleratorService backend only provides float and double template instantiations.");
         }
 #else
         guarantee(false, "AIxelerator provider is not enabled. Please make sure WITH_AIX is defined and the necessary dependencies are installed.");

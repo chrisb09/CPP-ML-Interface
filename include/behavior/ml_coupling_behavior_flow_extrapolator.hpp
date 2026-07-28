@@ -61,7 +61,9 @@ public:
         {
             if (last_inference_successful_)
             {
-                effective_global_step_ += time_step_delta();
+                // Maia advances globalTimeStep once more after applying the
+                // ML delta, before this behavior is called again.
+                effective_global_step_ += time_step_delta() + 1;
             }
             else
             {

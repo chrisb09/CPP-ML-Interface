@@ -5,7 +5,7 @@
 // not necessarily) and set up the MLCoupling instance accordingly.
 
 // This entails parsing the configuration, checking in which order the various
-// components (normalization, data processor, behavior, application, provider)
+// components (normalization, data processor, behavior, application, library)
 // need to be created and initialized, and then creating and initializing them
 // with the appropriate parameters obtained from the configuration.
 
@@ -302,12 +302,13 @@ inline void upsert_override_value(
 }
 
 // Function to create and configure an MLCoupling instance based on a configuration string
-template <typename In, typename Out>
-MLCoupling<In, Out> *create_mlcoupling_from_config_impl(const std::string &config_str,
-                                                        MLCouplingData<In> input_data,
-                                                        MLCouplingData<Out> output_data,
-                                                        MLCouplingData<In> input_data_after_preprocessing,
-                                                        MLCouplingData<Out> output_data_before_postprocessing,
+template <typename CouplingInput, typename CouplingOutput,
+          typename LibraryInput = CouplingInput, typename LibraryOutput = CouplingOutput>
+MLCoupling<CouplingInput, CouplingOutput, LibraryInput, LibraryOutput> *create_mlcoupling_from_config_impl(const std::string &config_str,
+                                                         MLCouplingData<CouplingInput> coupling_input,
+                                                         MLCouplingData<CouplingOutput> coupling_output,
+                                                         MLCouplingData<LibraryInput> library_input,
+                                                         MLCouplingData<LibraryOutput> library_output,
                                                         bool allow_two_buffer_application_fallback,
                                                         ConfigCastMode cast_mode,
                                                         ConfigParameterMatchMode parameter_match_mode,
@@ -320,7 +321,7 @@ MLCoupling<In, Out> *create_mlcoupling_from_config_impl(const std::string &confi
         toml::v3::table config = toml::parse(config_str);
         auto [log_level, error_separate] = extract_logging_settings(config);
 
-        // Let's iterate through the configs "sections" or "categories" or whatever you want to call them (like [provider], [application], etc. but not hardcoded but all that is in the config)
+        // Let's iterate through the configs "sections" or "categories" (like [library], [application], etc.).
 
         std::unordered_map<std::string, std::unordered_map<std::string, std::any>> sections;
 
@@ -482,12 +483,12 @@ MLCoupling<In, Out> *create_mlcoupling_from_config_impl(const std::string &confi
         }
 
         std::unordered_map<std::string, std::pair<int, void *>> normalization_params;
-        std::unordered_map<std::string, std::pair<int, void *>> provider_params;
+        std::unordered_map<std::string, std::pair<int, void *>> library_params;
         std::unordered_map<std::string, std::pair<int, void *>> behavior_params;
         std::unordered_map<std::string, std::pair<int, void *>> application_params;
 
         std::string normalization_class_name;
-        std::string provider_class_name;
+        std::string library_class_name;
         std::string behavior_class_name;
         std::string application_class_name;
 
@@ -499,9 +500,9 @@ MLCoupling<In, Out> *create_mlcoupling_from_config_impl(const std::string &confi
             {
                 params_map = &normalization_params;
             }
-            else if (section == "provider")
+            else if (section == "library")
             {
-                params_map = &provider_params;
+                params_map = &library_params;
             }
             else if (section == "behavior")
             {
@@ -526,9 +527,9 @@ MLCoupling<In, Out> *create_mlcoupling_from_config_impl(const std::string &confi
                         {
                             normalization_class_name = std::any_cast<std::string>(type_params[2][index_in_type]);
                         }
-                        else if (section == "provider")
+                        else if (section == "library")
                         {
-                            provider_class_name = std::any_cast<std::string>(type_params[2][index_in_type]);
+                            library_class_name = std::any_cast<std::string>(type_params[2][index_in_type]);
                         }
                         else if (section == "behavior")
                         {
@@ -614,17 +615,16 @@ MLCoupling<In, Out> *create_mlcoupling_from_config_impl(const std::string &confi
             }
         }
 
-        MLCouplingNormalization<In, Out> *normalization = nullptr;
-        MLCouplingProvider<In, Out> *provider = nullptr;
+        MLCouplingNormalization<LibraryInput, CouplingOutput> *normalization = nullptr;
+        MLCouplingLibrary<LibraryInput, LibraryOutput> *library = nullptr;
         MLCouplingBehavior *behavior = nullptr;
-        MLCouplingApplication<In, Out> *application = nullptr;
-        MLCoupling<In, Out> *coupling = nullptr;
+        MLCouplingApplication<CouplingInput, CouplingOutput, LibraryInput, LibraryOutput> *application = nullptr;
 
         std::unordered_map<std::string, std::pair<int, void *>> module_instances;
 
         if (!normalization_class_name.empty())
         {
-            normalization = static_cast<MLCouplingNormalization<In, Out> *>(create_mlcoupling_object<In, Out>(normalization_class_name, normalization_params, module_instances, create_instance_mlcouplingnormalization<In, Out>));
+            normalization = static_cast<MLCouplingNormalization<LibraryInput, CouplingOutput> *>(create_mlcoupling_object<LibraryInput, CouplingOutput>(normalization_class_name, normalization_params, module_instances, create_instance_mlcouplingnormalization<LibraryInput, CouplingOutput>));
             if (normalization)
             {
                 module_instances[resolve_normalization_class_name(normalization_class_name)] = std::make_pair(-1, static_cast<void *>(normalization));
@@ -635,11 +635,11 @@ MLCoupling<In, Out> *create_mlcoupling_from_config_impl(const std::string &confi
                 print_failed_constructor(normalization_class_name, normalization_params, module_instances);
                 exit(1);
             }
-            In dummy_values[2] = {static_cast<In>(-0.5), static_cast<In>(0.5)};
+            LibraryInput dummy_values[2] = {static_cast<LibraryInput>(-0.5), static_cast<LibraryInput>(0.5)};
             std::vector<int> dummy_dimensions = std::vector<int>{2};
-            MLCouplingData<In> dummy_input_data =
-                MLCouplingData<In>(std::vector<MLCouplingTensor<In>>{
-                    MLCouplingTensor<In>::wrap_flat(dummy_values, dummy_dimensions)});
+            MLCouplingData<LibraryInput> dummy_input_data =
+                MLCouplingData<LibraryInput>(std::vector<MLCouplingTensor<LibraryInput>>{
+                    MLCouplingTensor<LibraryInput>::wrap_flat(dummy_values, dummy_dimensions)});
             std::ostringstream norm_stream;
             norm_stream << *normalization;
             logging::debug("Normalization: " + norm_stream.str());
@@ -680,16 +680,16 @@ MLCoupling<In, Out> *create_mlcoupling_from_config_impl(const std::string &confi
         }
         else
         {
-            application_params["input_data"] = std::make_pair(0, static_cast<void *>(&input_data));
-            application_params["output_data"] = std::make_pair(0, static_cast<void *>(&output_data));
-            application_params["input_data_after_preprocessing"] = std::make_pair(0, static_cast<void *>(&input_data_after_preprocessing));
-            application_params["output_data_before_postprocessing"] = std::make_pair(0, static_cast<void *>(&output_data_before_postprocessing));
-            application = static_cast<MLCouplingApplication<In, Out> *>(create_mlcoupling_object<In, Out>(application_class_name, application_params, module_instances, create_instance_mlcouplingapplication<In, Out>));
+            application_params["coupling_input"] = std::make_pair(0, static_cast<void *>(&coupling_input));
+            application_params["coupling_output"] = std::make_pair(0, static_cast<void *>(&coupling_output));
+            application_params["library_input"] = std::make_pair(0, static_cast<void *>(&library_input));
+            application_params["library_output"] = std::make_pair(0, static_cast<void *>(&library_output));
+            application = static_cast<MLCouplingApplication<CouplingInput, CouplingOutput, LibraryInput, LibraryOutput> *>(create_mlcoupling_object<CouplingInput, CouplingOutput>(application_class_name, application_params, module_instances, create_instance_mlcouplingapplication<CouplingInput, CouplingOutput, LibraryInput, LibraryOutput>));
             if (application == nullptr && allow_two_buffer_application_fallback)
             {
-                application_params.erase("input_data_after_preprocessing");
-                application_params.erase("output_data_before_postprocessing");
-                application = static_cast<MLCouplingApplication<In, Out> *>(create_mlcoupling_object<In, Out>(application_class_name, application_params, module_instances, create_instance_mlcouplingapplication<In, Out>));
+                application_params.erase("library_input");
+                application_params.erase("library_output");
+                application = static_cast<MLCouplingApplication<CouplingInput, CouplingOutput, LibraryInput, LibraryOutput> *>(create_mlcoupling_object<CouplingInput, CouplingOutput>(application_class_name, application_params, module_instances, create_instance_mlcouplingapplication<CouplingInput, CouplingOutput, LibraryInput, LibraryOutput>));
             }
             if (application)
             {
@@ -703,36 +703,36 @@ MLCoupling<In, Out> *create_mlcoupling_from_config_impl(const std::string &confi
             }
         }
 
-        MLCouplingData<In> *input_after_preprocessing_ptr = nullptr;
-        MLCouplingData<Out> *output_before_postprocessing_ptr = nullptr;
+        MLCouplingData<LibraryInput> *library_input_ptr = nullptr;
+        MLCouplingData<LibraryOutput> *library_output_ptr = nullptr;
         if (coupling_type == CouplingType::STATIC)
         {
-            auto buffers = application->get_pre_post_buffers();
-            input_after_preprocessing_ptr = buffers.first;
-            output_before_postprocessing_ptr = buffers.second;
+            auto buffers = application->get_library_buffers();
+            library_input_ptr = buffers.first;
+            library_output_ptr = buffers.second;
         }
 
-        if (provider_class_name.empty())
+        if (library_class_name.empty())
         {
-            logging::error("No provider class specified in configuration.");
+            logging::error("No library class specified in configuration.");
             return nullptr;
         }
         else
         {
             if (coupling_type == CouplingType::STATIC)
             {
-                provider_params["input_after_preprocessing"] = std::make_pair(-1, static_cast<void *>(input_after_preprocessing_ptr));
-                provider_params["output_before_postprocessing"] = std::make_pair(-1, static_cast<void *>(output_before_postprocessing_ptr));
+                library_params["input_after_preprocessing"] = std::make_pair(-1, static_cast<void *>(library_input_ptr));
+                library_params["output_before_postprocessing"] = std::make_pair(-1, static_cast<void *>(library_output_ptr));
             }
-            provider = static_cast<MLCouplingProvider<In, Out> *>(create_mlcoupling_object<In, Out>(provider_class_name, provider_params, module_instances, create_instance_mlcouplingprovider<In, Out>));
-            if (provider)
+            library = static_cast<MLCouplingLibrary<LibraryInput, LibraryOutput> *>(create_mlcoupling_object<LibraryInput, LibraryOutput>(library_class_name, library_params, module_instances, create_instance_mlcouplinglibrary<LibraryInput, LibraryOutput>));
+            if (library)
             {
-                module_instances[resolve_provider_class_name(provider_class_name)] = std::make_pair(-1, static_cast<void *>(provider));
+                module_instances[resolve_library_class_name(library_class_name)] = std::make_pair(-1, static_cast<void *>(library));
             }
             else
             {
-                logging::error("Failed to create provider instance of class: " + provider_class_name);
-                print_failed_constructor(provider_class_name, provider_params, module_instances);
+                logging::error("Failed to create library instance of class: " + library_class_name);
+                print_failed_constructor(library_class_name, library_params, module_instances);
                 exit(1);
             }
         }
@@ -746,7 +746,7 @@ MLCoupling<In, Out> *create_mlcoupling_from_config_impl(const std::string &confi
         }
         else
         {
-            behavior = static_cast<MLCouplingBehavior *>(create_mlcoupling_object<In, Out>(behavior_class_name, behavior_params, module_instances, create_instance_mlcouplingbehavior));
+            behavior = static_cast<MLCouplingBehavior *>(create_mlcoupling_object<CouplingInput, CouplingOutput>(behavior_class_name, behavior_params, module_instances, create_instance_mlcouplingbehavior));
             if (behavior)
             {
                 module_instances[resolve_behavior_class_name(behavior_class_name)] = std::make_pair(-1, static_cast<void *>(behavior));
@@ -765,11 +765,11 @@ MLCoupling<In, Out> *create_mlcoupling_from_config_impl(const std::string &confi
             normalization_stream << *normalization;
             logging::debug("Created normalization instance: " + normalization_stream.str() + " of type " + get_type_name(*normalization));
         }
-        if (provider)
+        if (library)
         {
-            std::ostringstream provider_ptr_stream;
-            provider_ptr_stream << provider;
-            logging::debug("Created provider instance at " + provider_ptr_stream.str() + " of type " + get_type_name(*provider));
+            std::ostringstream library_ptr_stream;
+            library_ptr_stream << library;
+            logging::debug("Created library instance at " + library_ptr_stream.str() + " of type " + get_type_name(*library));
         }
         if (behavior)
         {
@@ -784,12 +784,12 @@ MLCoupling<In, Out> *create_mlcoupling_from_config_impl(const std::string &confi
             logging::debug("Created application instance at " + application_ptr_stream.str() + " of type " + get_type_name(*application));
         }
 
-        return new MLCoupling<In, Out>(provider,
+        return new MLCoupling<CouplingInput, CouplingOutput, LibraryInput, LibraryOutput>(library,
                                        application,
                                        behavior,
                                        coupling_type,
-                                       input_after_preprocessing_ptr,
-                                       output_before_postprocessing_ptr,
+                                        library_input_ptr,
+                                        library_output_ptr,
                                        log_level,
                                        error_separate);
     }
@@ -803,6 +803,27 @@ MLCoupling<In, Out> *create_mlcoupling_from_config_impl(const std::string &confi
     }
 
     return nullptr;
+}
+
+template <typename CouplingInput, typename CouplingOutput,
+          typename LibraryInput, typename LibraryOutput>
+MLCoupling<CouplingInput, CouplingOutput, LibraryInput, LibraryOutput> *
+create_mlcoupling_from_config_with_library_types(
+    const std::string &config_str,
+    MLCouplingData<CouplingInput> coupling_input,
+    MLCouplingData<CouplingOutput> coupling_output,
+    const ConfigOverrides &overrides)
+{
+    return create_mlcoupling_from_config_impl<CouplingInput, CouplingOutput, LibraryInput, LibraryOutput>(
+        config_str,
+        std::move(coupling_input),
+        std::move(coupling_output),
+        MLCouplingData<LibraryInput>(),
+        MLCouplingData<LibraryOutput>(),
+        true,
+        ConfigCastMode::Relaxed,
+        ConfigParameterMatchMode::Strict,
+        overrides);
 }
 
 template <typename In, typename Out>

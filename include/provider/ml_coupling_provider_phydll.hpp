@@ -1,6 +1,6 @@
 #pragma once
 
-#include "ml_coupling_provider.hpp"
+#include "../library/ml_coupling_library.hpp"
 #include "../data/ml_coupling_data_type.hpp"
 #include "../data/ml_coupling_memory_layout.hpp"
 
@@ -39,11 +39,11 @@ extern "C"
 // @registry_name: Phydll
 // @registry_aliases: phydll, PhyDLL
 template <typename In, typename Out>
-class MLCouplingProviderPhydll : public MLCouplingProvider<In, Out>
+class MLCouplingLibraryPhydll : public MLCouplingLibrary<In, Out>
 {
 
 public:
-    MLCouplingProviderPhydll(std::string model_file,
+    MLCouplingLibraryPhydll(std::string model_file,
                              std::string backend = "TORCH",
                              std::string device = "GPU",
                              int batch_size = 0,
@@ -66,7 +66,7 @@ public:
 #endif
     }
 
-    ~MLCouplingProviderPhydll() override
+    ~MLCouplingLibraryPhydll() override
     {
 #ifdef WITH_PHYDLL
         if (phydll_initialized_)

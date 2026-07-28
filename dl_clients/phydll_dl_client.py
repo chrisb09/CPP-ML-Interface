@@ -1,15 +1,18 @@
 #!/usr/bin/env python3
+import mpi4py
+mpi4py.rc.initialize = False
+mpi4py.rc.finalize = False
+from mpi4py import MPI
+MPI.Init_thread(MPI.THREAD_FUNNELED)
+
+world_comm = MPI.COMM_WORLD
+
 import os
 import sys
 import struct
 import numpy as np
 PY_SCOREP_WRAPPER = os.environ.get("PHYDLL_PY_SCOREP_WRAPPER", "0") == "1"
-
-import mpi4py
-mpi4py.rc.thread_level = "funneled"
-mpi4py.rc.finalize = False
-from mpi4py import MPI
-import torch
+torch = None
 import contextlib
 ENABLE_SCOREP_USER = os.environ.get("ENABLE_SCOREP_USER", "0") == "1"
 try:
@@ -142,6 +145,11 @@ def main():
     dll = None
     world_comm = MPI.COMM_WORLD
     try:
+        global torch
+        print("[DL] importing torch...", flush=True)
+        import torch
+        print("[DL] imported torch", flush=True)
+
         # Configure Torch threading
         intra_threads = int(os.environ.get("MLCOUPLING_INTRA_OP_THREADS", os.environ.get("SLURM_CPUS_PER_TASK", "-1")))
         inter_threads = int(os.environ.get("MLCOUPLING_INTER_OP_THREADS", "-1"))
@@ -152,9 +160,9 @@ def main():
             torch.set_num_interop_threads(inter_threads)
 
         dl_count = int(os.environ.get("PHYDLL_DL_COUNT", "1"))
-        
-        # Match the original Python DL startup: participate in the MPMD split
-        # before entering PhyDLL's own internal MPI split.
+
+        # Pair MAIA's initial world split. PhyDLL's dl initialization performs
+        # the second split, which must pair with MAIA's physical initialization.
         color = MPI.UNDEFINED
         local_comm = world_comm.Split(color, 0)
         if local_comm != MPI.COMM_NULL:

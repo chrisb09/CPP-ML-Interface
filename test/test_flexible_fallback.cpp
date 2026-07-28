@@ -5,12 +5,12 @@
 
 // Include ml_coupling_data to use tensors
 #include "data/ml_coupling_data.hpp"
-#include "provider/ml_coupling_provider.hpp"
+#include "library/ml_coupling_library.hpp"
 #include "ml_coupling.hpp"
 
-// We need a dummy provider to test the fallback logic
+// We need a dummy coupling library to test the fallback logic.
 template <typename In, typename Out>
-class MLCouplingProviderTest : public MLCouplingProvider<In, Out> {
+class MLCouplingLibraryTest : public MLCouplingLibrary<In, Out> {
 public:
     MLCouplingData<In> received_input;
 
@@ -105,41 +105,41 @@ int main(int argc, char** argv) {
     print_tensor_2d(tensor_list_2, "Original List Tensor 2 [2, 2, 2]");
     print_tensor_2d(tensor_list_3, "Original List Tensor 3 [2, 2]");
     
-    MLCouplingProviderTest<float, float> provider;
+    MLCouplingLibraryTest<float, float> library;
     MLCouplingData<float> fallback_out; // dummy
     
-    provider.set_merge_strategy(MLCouplingMergeStrategy::List);
+    library.set_merge_strategy(MLCouplingMergeStrategy::List);
     
     MLCouplingData<float> cdata_list_1; cdata_list_1.add_tensor(tensor_list_1);
     MLCouplingData<float> cdata_list_2; cdata_list_2.add_tensor(tensor_list_2);
     MLCouplingData<float> cdata_list_3; cdata_list_3.add_tensor(tensor_list_3);
     
-    provider.flex_ordered_set(cdata_list_1);
-    provider.flex_ordered_set(cdata_list_2);
-    provider.flex_ordered_set(cdata_list_3);
+    library.flex_ordered_set(cdata_list_1);
+    library.flex_ordered_set(cdata_list_2);
+    library.flex_ordered_set(cdata_list_3);
     
-    provider.flex_ordered_inference(&fallback_out);
+    library.flex_ordered_inference(&fallback_out);
     
-    std::cout << "Merged List Result contains " << provider.received_input.size() << " tensors.\n";
-    assert(provider.received_input.size() == 1);
-    print_tensor_2d(provider.received_input[0], "List Output Tensor [2, 9]");
+    std::cout << "Merged List Result contains " << library.received_input.size() << " tensors.\n";
+    assert(library.received_input.size() == 1);
+    print_tensor_2d(library.received_input[0], "List Output Tensor [2, 9]");
     
-    assert(provider.received_input[0].numel() == 18);
-    auto list_dims = provider.received_input[0].dimensions();
+    assert(library.received_input[0].numel() == 18);
+    auto list_dims = library.received_input[0].dimensions();
     assert(list_dims.size() == 2);
     assert(list_dims[0] == 2);
     assert(list_dims[1] == 9); // 3 + 4 + 2
     
     // Batch 0
-    assert(provider.received_input[0].at_linear(0) == 1);
-    assert(provider.received_input[0].at_linear(2) == 3);
-    assert(provider.received_input[0].at_linear(3) == 7);
-    assert(provider.received_input[0].at_linear(6) == 10);
-    assert(provider.received_input[0].at_linear(7) == 15);
+    assert(library.received_input[0].at_linear(0) == 1);
+    assert(library.received_input[0].at_linear(2) == 3);
+    assert(library.received_input[0].at_linear(3) == 7);
+    assert(library.received_input[0].at_linear(6) == 10);
+    assert(library.received_input[0].at_linear(7) == 15);
     // Batch 1
-    assert(provider.received_input[0].at_linear(9) == 4);
-    assert(provider.received_input[0].at_linear(12) == 11);
-    assert(provider.received_input[0].at_linear(17) == 18);
+    assert(library.received_input[0].at_linear(9) == 4);
+    assert(library.received_input[0].at_linear(12) == 11);
+    assert(library.received_input[0].at_linear(17) == 18);
     std::cout << "SUCCESS: List Strategy concatenated the Data objects correctly per batch item.\n\n";
     
     
@@ -149,20 +149,20 @@ int main(int argc, char** argv) {
     print_tensor_2d(tensor_stack_1, "Original Stack Tensor 1 [2, 3]");
     print_tensor_2d(tensor_stack_2, "Original Stack Tensor 2 [2, 3]");
     
-    provider.set_merge_strategy(MLCouplingMergeStrategy::Stack);
+    library.set_merge_strategy(MLCouplingMergeStrategy::Stack);
     
     MLCouplingData<float> cdata_stack_1; cdata_stack_1.add_tensor(tensor_stack_1);
     MLCouplingData<float> cdata_stack_2; cdata_stack_2.add_tensor(tensor_stack_2);
     
-    provider.flex_ordered_set(cdata_stack_1);
-    provider.flex_ordered_set(cdata_stack_2);
+    library.flex_ordered_set(cdata_stack_1);
+    library.flex_ordered_set(cdata_stack_2);
     
-    provider.flex_ordered_inference(&fallback_out);
+    library.flex_ordered_inference(&fallback_out);
     
-    std::cout << "Merged Stack Result contains " << provider.received_input.size() << " tensors.\n";
-    assert(provider.received_input.size() == 1); // Should be 1 interleaved tensor!
+    std::cout << "Merged Stack Result contains " << library.received_input.size() << " tensors.\n";
+    assert(library.received_input.size() == 1); // Should be 1 interleaved tensor!
     
-    MLCouplingTensor<float>& stacked_tensor = provider.received_input[0];
+    MLCouplingTensor<float>& stacked_tensor = library.received_input[0];
     
     print_tensor_2d(stacked_tensor, "Stacked Tensor [B, m, D1]");
     

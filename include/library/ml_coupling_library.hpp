@@ -30,9 +30,9 @@ enum class MLCouplingMergeStrategy {
     None
 };
 
-// @category: provider
-template <typename In, typename Out>
-class MLCouplingProvider
+// @category: library
+template <typename LibraryInput, typename LibraryOutput>
+class MLCouplingLibrary
 {
 public:
     MLCouplingMergeStrategy merge_strategy = MLCouplingMergeStrategy::Auto;
@@ -43,7 +43,7 @@ public:
 
     int rank = 0;
 
-    MLCouplingProvider()
+    MLCouplingLibrary()
     {
 #ifdef MLCOUPLING_PROVIDER_HAS_MPI
         // check if MPI is initialized and get the rank if it is, otherwise set rank to -1
@@ -58,12 +58,12 @@ public:
 
     // Manually set the rank if needed, for example if MPI is initialized after the provider is created, or if we use something other than MPI for parallelism
 
-    MLCouplingProvider(int rank)
+    MLCouplingLibrary(int rank)
     {
         this->rank = rank;
     }
 
-    virtual ~MLCouplingProvider() = default;
+    virtual ~MLCouplingLibrary() = default;
 
     void set_rank(int rank)
     {
@@ -72,11 +72,11 @@ public:
 
     // --- Tier 0: Static (Mandatory) ---
     // Perform inference with the ML model and get the output data
-    virtual void static_inference(MLCouplingData<In> *input,
-                                  MLCouplingData<Out> *output) = 0;
+    virtual void static_inference(MLCouplingData<LibraryInput> *input,
+                                  MLCouplingData<LibraryOutput> *output) = 0;
 
-    virtual std::map<std::string, double> static_train(MLCouplingData<In> *input,
-                                                       MLCouplingData<Out> *target)
+    virtual std::map<std::string, double> static_train(MLCouplingData<LibraryInput> *input,
+                                                        MLCouplingData<LibraryOutput> *target)
     {
         (void)input;
         (void)target;
@@ -89,17 +89,17 @@ public:
     }
 
     // --- Tier 1: Ordered Flexible (Optional, with Fallback) ---
-    virtual void flex_ordered_set(MLCouplingData<In> data)
+    virtual void flex_ordered_set(MLCouplingData<LibraryInput> data)
     {
         staged_inputs.push_back(std::move(data));
     }
 
-    virtual void flex_ordered_set_target(MLCouplingData<Out> data)
+    virtual void flex_ordered_set_target(MLCouplingData<LibraryOutput> data)
     {
         staged_targets.push_back(std::move(data));
     }
 
-    virtual void flex_ordered_get(MLCouplingData<Out> *data)
+    virtual void flex_ordered_get(MLCouplingData<LibraryOutput> *data)
     {
         // Fallback is a no-op because flex_ordered_inference populates the fallback_output directly.
         (void)data;
@@ -116,15 +116,15 @@ public:
         return h;
     }
 
-    static void debug_log_merged(const std::string& label, MLCouplingData<In>& data, int rank) {
+    static void debug_log_merged(const std::string& label, MLCouplingData<LibraryInput>& data, int rank) {
         if (!std::getenv("DEBUG_PROVIDER_INPUT")) return;
         for (size_t ti = 0; ti < data.size(); ++ti) {
             auto &t = data[ti];
             int n = static_cast<int>(t.numel());
-            unsigned long long h = fnv1a(t.root(), n * sizeof(In));
+            unsigned long long h = fnv1a(t.root(), n * sizeof(LibraryInput));
             double sum = 0;
             float first = 0, last = 0;
-            if constexpr (std::is_same_v<In, float>) {
+            if constexpr (std::is_same_v<LibraryInput, float>) {
                 const float* raw = static_cast<const float*>(t.root());
                 first = raw[0]; last = raw[n-1];
                 for (int i = 0; i < n; ++i) sum += raw[i];
@@ -135,7 +135,7 @@ public:
         }
     }
 
-    virtual void flex_ordered_inference(MLCouplingData<Out> *fallback_output = nullptr)
+    virtual void flex_ordered_inference(MLCouplingData<LibraryOutput> *fallback_output = nullptr)
     {
         if (staged_inputs.size() > 0 && fallback_output != nullptr)
         {
@@ -167,17 +167,17 @@ public:
     }
 
     // --- Tier 2: Keyed Flexible (Optional, with Fallback) ---
-    virtual void flex_keyed_set(const std::string &key, MLCouplingData<In> data)
+    virtual void flex_keyed_set(const std::string &key, MLCouplingData<LibraryInput> data)
     {
         keyed_inputs[key] = std::move(data);
     }
 
-    virtual void flex_keyed_set_target(const std::string &key, MLCouplingData<Out> data)
+    virtual void flex_keyed_set_target(const std::string &key, MLCouplingData<LibraryOutput> data)
     {
         keyed_targets[key] = std::move(data);
     }
 
-    virtual void flex_keyed_get(const std::string &key, MLCouplingData<Out> *data)
+    virtual void flex_keyed_get(const std::string &key, MLCouplingData<LibraryOutput> *data)
     {
         // Fallback is a no-op because flex_keyed_inference populates the fallback_output directly.
         (void)key;
@@ -186,7 +186,7 @@ public:
 
     virtual void flex_keyed_inference(const std::vector<std::string> &in_keys,
                                       const std::vector<std::string> &out_keys,
-                                      MLCouplingData<Out> *fallback_output = nullptr)
+                                       MLCouplingData<LibraryOutput> *fallback_output = nullptr)
     {
         (void)out_keys; // The fallback maps all expected outputs to the static buffer
         if (in_keys.size() > 0 && fallback_output != nullptr)
@@ -577,13 +577,13 @@ protected:
         }
     }
 
-    std::vector<MLCouplingData<In>> staged_inputs;
-    std::vector<MLCouplingData<Out>> staged_targets;
-    std::vector<MLCouplingData<Out> *> staged_outputs;
-    std::map<std::string, MLCouplingData<In>> keyed_inputs;
-    std::map<std::string, MLCouplingData<Out>> keyed_targets;
-    std::map<std::string, MLCouplingData<Out> *> keyed_outputs;
+    std::vector<MLCouplingData<LibraryInput>> staged_inputs;
+    std::vector<MLCouplingData<LibraryOutput>> staged_targets;
+    std::vector<MLCouplingData<LibraryOutput> *> staged_outputs;
+    std::map<std::string, MLCouplingData<LibraryInput>> keyed_inputs;
+    std::map<std::string, MLCouplingData<LibraryOutput>> keyed_targets;
+    std::map<std::string, MLCouplingData<LibraryOutput> *> keyed_outputs;
 
-    MLCouplingData<In> last_merged_input;
-    MLCouplingData<Out> last_merged_target;
+    MLCouplingData<LibraryInput> last_merged_input;
+    MLCouplingData<LibraryOutput> last_merged_target;
 };

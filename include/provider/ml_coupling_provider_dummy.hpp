@@ -5,7 +5,7 @@
 #include <string>
 #include <vector>
 
-#include "ml_coupling_provider.hpp"
+#include "../library/ml_coupling_library.hpp"
 #include "../tool.h"
 #include "../logging.hpp"
 
@@ -13,13 +13,13 @@
 // @registry_name: Dummy
 // @registry_aliases: dummy, Dummy
 template <typename In, typename Out>
-class MLCouplingProviderDummy : public MLCouplingProvider<In, Out>
+class MLCouplingLibraryDummy : public MLCouplingLibrary<In, Out>
 {
 
 public:
 
 
-    MLCouplingProviderDummy(MLCouplingData<In> *input_after_preprocessing = nullptr,
+    MLCouplingLibraryDummy(MLCouplingData<In> *input_after_preprocessing = nullptr,
                             MLCouplingData<Out> *output_before_postprocessing = nullptr)
         : input_after_preprocessing(input_after_preprocessing),
           output_before_postprocessing(output_before_postprocessing)

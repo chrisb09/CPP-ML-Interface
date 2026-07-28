@@ -1,6 +1,6 @@
 #pragma once
 
-#include "ml_coupling_provider.hpp"
+#include "../library/ml_coupling_library.hpp"
 #include "../tool.h"
 #include "../data/ml_coupling_data_type.hpp"
 #include "../data/ml_coupling_memory_layout.hpp"
@@ -23,7 +23,7 @@
 // @registry_name: Smartsim
 // @registry_aliases: smartsim, SmartSim
 template <typename In, typename Out>
-class MLCouplingProviderSmartsim : public MLCouplingProvider<In, Out>
+class MLCouplingLibrarySmartsim : public MLCouplingLibrary<In, Out>
 {
 
 // local variables
@@ -96,7 +96,7 @@ class MLCouplingProviderSmartsim : public MLCouplingProvider<In, Out>
     }
 
 private:
-    MLCouplingProviderSmartsim(std::string device = std::string(),
+    MLCouplingLibrarySmartsim(std::string device = std::string(),
                                std::string model_backend = std::string(),
                                std::string model_path = std::string(),
                                std::string_view model = std::string_view(),
@@ -276,7 +276,7 @@ private:
     }
 
 public:
-    MLCouplingProviderSmartsim(std::string device,
+    MLCouplingLibrarySmartsim(std::string device,
                                std::string model_backend,
                                std::string model_path,
                                std::string model_name = "model",
@@ -296,9 +296,9 @@ public:
                                const std::vector<std::string>& tf_input_keys = {},
                                MLCouplingData<In>* input_after_preprocessing = nullptr,
                                MLCouplingData<Out> *output_before_postprocessing = nullptr)
-        : MLCouplingProviderSmartsim(std::move(device), std::move(model_backend), std::move(model_path), std::string_view(), std::move(model_name), std::move(host), port, std::vector<std::string>(), std::vector<int>(), nodes, num_gpus, first_gpu, batch_size, min_batch_size, min_batch_timeout, command_timeout, socket_timeout, model_timeout, tf_input_labels, tf_output_labels, tf_input_keys, input_after_preprocessing, output_before_postprocessing) {};
+        : MLCouplingLibrarySmartsim(std::move(device), std::move(model_backend), std::move(model_path), std::string_view(), std::move(model_name), std::move(host), port, std::vector<std::string>(), std::vector<int>(), nodes, num_gpus, first_gpu, batch_size, min_batch_size, min_batch_timeout, command_timeout, socket_timeout, model_timeout, tf_input_labels, tf_output_labels, tf_input_keys, input_after_preprocessing, output_before_postprocessing) {};
 
-    MLCouplingProviderSmartsim(std::string device,
+    MLCouplingLibrarySmartsim(std::string device,
                                std::string model_backend,
                                std::string_view model,
                                std::string model_name = "model",
@@ -318,7 +318,7 @@ public:
                                const std::vector<std::string>& tf_input_keys = {},
                                MLCouplingData<In>* input_after_preprocessing = nullptr,
                                MLCouplingData<Out> *output_before_postprocessing = nullptr)
-        : MLCouplingProviderSmartsim(std::move(device), std::move(model_backend), std::string(), std::move(model), std::move(model_name), std::move(host), port, std::vector<std::string>(), std::vector<int>(), nodes, num_gpus, first_gpu, batch_size, min_batch_size, min_batch_timeout, command_timeout, socket_timeout, model_timeout, tf_input_labels, tf_output_labels, tf_input_keys, input_after_preprocessing, output_before_postprocessing) {};
+        : MLCouplingLibrarySmartsim(std::move(device), std::move(model_backend), std::string(), std::move(model), std::move(model_name), std::move(host), port, std::vector<std::string>(), std::vector<int>(), nodes, num_gpus, first_gpu, batch_size, min_batch_size, min_batch_timeout, command_timeout, socket_timeout, model_timeout, tf_input_labels, tf_output_labels, tf_input_keys, input_after_preprocessing, output_before_postprocessing) {};
 
     void validate_parameter(const std::string &device,
                             const std::string &model_backend,

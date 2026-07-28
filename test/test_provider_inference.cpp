@@ -119,13 +119,13 @@ static std::vector<float> read_output(const MLCouplingData<float>& data) {
 static void test_aixelerator(const std::string& model_path) {
     std::cout << "\n=== MLCouplingProviderAixelerator ===\n";
     try {
-        MLCouplingProviderAixelerator<float, float> provider(model_path, B);
+        MLCouplingLibraryAixelerator<float, float> library(model_path, B);
 
         auto in = make_input();
         std::vector<float> buf;
         auto out = make_output(buf);
 
-        provider.static_inference(&in, &out);
+        library.static_inference(&in, &out);
 
         // Read result — either from the external buffer or through the tensor API
         std::vector<float> result = read_output(out);

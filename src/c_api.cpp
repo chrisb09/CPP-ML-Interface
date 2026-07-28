@@ -10,7 +10,7 @@
 #include "../include/data/ml_coupling_data_type.hpp" // get_type_tag function
 
 
-void* create_provider(const char* name, int in_selection, int out_selection, char** param_names, void** params, int param_count) {
+void* create_library(const char* name, int in_selection, int out_selection, char** param_names, void** params, int param_count) {
     std::unordered_map<std::string, std::pair<int, void*>> params_map;
     for (int i = 0; i < param_count; ++i) {
         params_map[std::string(param_names[i])] = std::pair(0, params[i]);
@@ -35,14 +35,14 @@ void* create_provider(const char* name, int in_selection, int out_selection, cha
         if (std::string(name) == "Aixelerator" &&
             (!std::is_same_v<InType, OutType> || !aix_supported_scalar)) {
             // fallback
-            std::cerr << "Warning: AIxelerator provider requires same-type float/float or double/double data. Falling back to double.\n";
-            return static_cast<void*>(create_instance_mlcouplingprovider<double, double>(name, params_map));
+            std::cerr << "Warning: AIxelerator library requires same-type float/float or double/double data. Falling back to double.\n";
+            return static_cast<void*>(create_instance_mlcouplinglibrary<double, double>(name, params_map));
         }
         
-        return static_cast<void*>(create_instance_mlcouplingprovider<InType, OutType>(name, params_map));
+        return static_cast<void*>(create_instance_mlcouplinglibrary<InType, OutType>(name, params_map));
         
     }, in_tag, out_tag);
 
     // fallback, should never reach here due to the default cases, but just in case
-    return create_instance_mlcouplingprovider<double, double>(name, params_map);
+    return create_instance_mlcouplinglibrary<double, double>(name, params_map);
 }
