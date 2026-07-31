@@ -308,16 +308,27 @@ protected:
 
             guarantee_fallback_buffer_fit(existing_data, t_idx, new_dims);
 
+#ifdef USE_SCOREP
+            SCOREP_USER_REGION_DEFINE(handle_flex_merge_allocate_stack)
+            SCOREP_USER_REGION_BEGIN(handle_flex_merge_allocate_stack, "flex_merge_allocate_or_reuse", SCOREP_USER_REGION_TYPE_COMMON)
+#endif
             if (existing_data.size() > t_idx && existing_data[t_idx].dimensions() == new_dims && existing_data[t_idx].is_contiguous()) {
                 buffer = static_cast<T*>(existing_data[t_idx].root());
                 reuse_buffer = true;
             } else {
                 buffer = new T[total_numel];
             }
+#ifdef USE_SCOREP
+            SCOREP_USER_REGION_END(handle_flex_merge_allocate_stack)
+#endif
             
             for (size_t i = 0; i < m; ++i) {
                 const auto& tensor = data_list[i][t_idx];
                 if (tensor.is_contiguous()) {
+#ifdef USE_SCOREP
+                    SCOREP_USER_REGION_DEFINE(handle_flex_merge_copy_stack)
+                    SCOREP_USER_REGION_BEGIN(handle_flex_merge_copy_stack, "flex_merge_copy", SCOREP_USER_REGION_TYPE_COMMON)
+#endif
                     const T* src = static_cast<const T*>(tensor.root());
                     for (int b = 0; b < B; ++b) {
                         std::copy(
@@ -326,8 +337,20 @@ protected:
                             buffer + (b * m + i) * slice_numel
                         );
                     }
+#ifdef USE_SCOREP
+                    SCOREP_USER_REGION_END(handle_flex_merge_copy_stack)
+#endif
                 } else {
+#ifdef USE_SCOREP
+                    SCOREP_USER_REGION_DEFINE(handle_flex_merge_flatten_stack)
+                    SCOREP_USER_REGION_BEGIN(handle_flex_merge_flatten_stack, "flex_merge_flatten_noncontiguous", SCOREP_USER_REGION_TYPE_COMMON)
+#endif
                     std::vector<T> flat = tensor.as_flat_vector();
+#ifdef USE_SCOREP
+                    SCOREP_USER_REGION_END(handle_flex_merge_flatten_stack)
+                    SCOREP_USER_REGION_DEFINE(handle_flex_merge_copy_stack2)
+                    SCOREP_USER_REGION_BEGIN(handle_flex_merge_copy_stack2, "flex_merge_copy", SCOREP_USER_REGION_TYPE_COMMON)
+#endif
                     for (int b = 0; b < B; ++b) {
                         std::copy(
                             flat.begin() + b * slice_numel,
@@ -335,6 +358,9 @@ protected:
                             buffer + (b * m + i) * slice_numel
                         );
                     }
+#ifdef USE_SCOREP
+                    SCOREP_USER_REGION_END(handle_flex_merge_copy_stack2)
+#endif
                 }
             }
             
@@ -450,6 +476,10 @@ protected:
             T* buffer = nullptr;
             bool reuse_buffer = false;
             guarantee_fallback_buffer_fit(existing_data, t_idx, new_dims);
+#ifdef USE_SCOREP
+            SCOREP_USER_REGION_DEFINE(handle_flex_merge_allocate_list)
+            SCOREP_USER_REGION_BEGIN(handle_flex_merge_allocate_list, "flex_merge_allocate_or_reuse", SCOREP_USER_REGION_TYPE_COMMON)
+#endif
             if (existing_data.size() > t_idx &&
                 existing_data[t_idx].dimensions() == new_dims &&
                 existing_data[t_idx].is_contiguous()) {
@@ -458,6 +488,9 @@ protected:
             } else {
                 buffer = new T[total_numel];
             }
+#ifdef USE_SCOREP
+            SCOREP_USER_REGION_END(handle_flex_merge_allocate_list)
+#endif
 
             // For each batch item b, copy the per-slice data from each input i.
             for (int b = 0; b < B; ++b) {
@@ -467,12 +500,31 @@ protected:
                     const auto& tensor = data_list[i][t_idx];
                     size_t sn = slice_numels[i];
                     if (tensor.is_contiguous()) {
+#ifdef USE_SCOREP
+                        SCOREP_USER_REGION_DEFINE(handle_flex_merge_copy_list)
+                        SCOREP_USER_REGION_BEGIN(handle_flex_merge_copy_list, "flex_merge_copy", SCOREP_USER_REGION_TYPE_COMMON)
+#endif
                         const T* src = static_cast<const T*>(tensor.root());
                         std::copy(src + b * sn, src + (b + 1) * sn, buffer + row_offset + col_offset);
+#ifdef USE_SCOREP
+                        SCOREP_USER_REGION_END(handle_flex_merge_copy_list)
+#endif
                     } else {
+#ifdef USE_SCOREP
+                        SCOREP_USER_REGION_DEFINE(handle_flex_merge_flatten_list)
+                        SCOREP_USER_REGION_BEGIN(handle_flex_merge_flatten_list, "flex_merge_flatten_noncontiguous", SCOREP_USER_REGION_TYPE_COMMON)
+#endif
                         std::vector<T> flat = tensor.as_flat_vector();
+#ifdef USE_SCOREP
+                        SCOREP_USER_REGION_END(handle_flex_merge_flatten_list)
+                        SCOREP_USER_REGION_DEFINE(handle_flex_merge_copy_list2)
+                        SCOREP_USER_REGION_BEGIN(handle_flex_merge_copy_list2, "flex_merge_copy", SCOREP_USER_REGION_TYPE_COMMON)
+#endif
                         std::copy(flat.begin() + b * sn, flat.begin() + (b + 1) * sn,
                                   buffer + row_offset + col_offset);
+#ifdef USE_SCOREP
+                        SCOREP_USER_REGION_END(handle_flex_merge_copy_list2)
+#endif
                     }
                     col_offset += sn;
                 }

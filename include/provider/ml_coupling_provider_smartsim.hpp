@@ -5,6 +5,8 @@
 #include "../data/ml_coupling_data_type.hpp"
 #include "../data/ml_coupling_memory_layout.hpp"
 #include "../logging.hpp"
+#include "../scorep_profiling_state.hpp"
+#include "../smartsim_key_balancing.hpp"
 
 #include <string>
 #include <string_view>
@@ -47,6 +49,7 @@ class MLCouplingLibrarySmartsim : public MLCouplingLibrary<In, Out>
     const std::vector<std::string> tf_input_labels;
     const std::vector<std::string> tf_output_labels;
     const std::vector<std::string> tf_input_keys; // Added new member
+    mlcoupling::smartsim_key_balancing::RedisKeyBalancer key_balancer;
 
     static int env_int(const char *name, int fallback)
     {
@@ -173,6 +176,31 @@ private:
                            tf_input_labels,
                            tf_output_labels,
                            tf_input_keys);
+
+        const int key_balance_streams = this->num_gpus > 0 ? this->num_gpus : 0;
+        key_balancer = mlcoupling::smartsim_key_balancing::RedisKeyBalancer::from_environment(
+            this->rank, key_balance_streams, resolved_nodes);
+        if (key_balancer.enabled()) {
+            if (this->rank == 0) {
+                for (std::size_t shard = 0; shard < key_balancer.tags().size(); ++shard) {
+                    const std::string& tag = key_balancer.tags()[shard];
+                    logging::info("SMARTSIM_KEY_BALANCE shard=" + std::to_string(shard) +
+                                  " tag=" + tag +
+                                  " slot=" + std::to_string(
+                                      mlcoupling::smartsim_key_balancing::redis_hash_slot(tag)) +
+                                  " expected_slot_range=[" + std::to_string(
+                                      mlcoupling::smartsim_key_balancing::RedisKeyBalancer::slot_first(
+                                          static_cast<int>(shard), resolved_nodes)) +
+                                  "," + std::to_string(
+                                      mlcoupling::smartsim_key_balancing::RedisKeyBalancer::slot_last(
+                                          static_cast<int>(shard), resolved_nodes)) + "]");
+                }
+            }
+            logging::info("SMARTSIM_KEY_BALANCE_ASSIGNMENT rank=" + std::to_string(this->rank) +
+                          " target_shard=" + std::to_string(key_balancer.target_shard()) +
+                          " gpu=" + std::to_string(
+                              this->rank % (key_balance_streams > 0 ? key_balance_streams : 1)));
+        }
 
         // Before creating a smartsim client (SmartRedis to be exact), we need to set the appropriate env vars
 
@@ -396,15 +424,31 @@ public:
         };
 
 #ifdef USE_SCOREP
+        const bool profile_details = ml_coupling_scorep::detailed_regions_are_enabled();
         SCOREP_USER_METRIC_LOCAL(smartsim_input_bytes);
-        SCOREP_USER_METRIC_INIT(smartsim_input_bytes, "smartsim_input_bytes", "bytes", SCOREP_USER_METRIC_TYPE_UINT64, SCOREP_USER_METRIC_CONTEXT_CALLPATH);
         SCOREP_USER_METRIC_LOCAL(smartsim_output_bytes);
-        SCOREP_USER_METRIC_INIT(smartsim_output_bytes, "smartsim_output_bytes", "bytes", SCOREP_USER_METRIC_TYPE_UINT64, SCOREP_USER_METRIC_CONTEXT_CALLPATH);
+        SCOREP_USER_REGION_DEFINE(handle_smartsim_chunk_plan)
+        SCOREP_USER_REGION_DEFINE(handle_smartsim_put_tensor)
+        SCOREP_USER_REGION_DEFINE(handle_smartsim_run_model)
+        SCOREP_USER_REGION_DEFINE(handle_smartsim_unpack_tensor)
+        if (profile_details) {
+        static bool scorep_smartsim_metrics_initialized = false;
+        if (!scorep_smartsim_metrics_initialized) {
+            SCOREP_USER_METRIC_INIT(smartsim_input_bytes, "smartsim_input_bytes", "bytes", SCOREP_USER_METRIC_TYPE_UINT64, SCOREP_USER_METRIC_CONTEXT_CALLPATH);
+            SCOREP_USER_METRIC_INIT(smartsim_output_bytes, "smartsim_output_bytes", "bytes", SCOREP_USER_METRIC_TYPE_UINT64, SCOREP_USER_METRIC_CONTEXT_CALLPATH);
+            scorep_smartsim_metrics_initialized = true;
+        }
+        }
 #endif
 
         size_t max_bytes = 500ULL * 1024 * 1024; // 500 MiB limit
         size_t num_chunks = 1;
 
+#ifdef USE_SCOREP
+        if (profile_details) {
+        SCOREP_USER_REGION_BEGIN(handle_smartsim_chunk_plan, "smartsim_chunk_plan", SCOREP_USER_REGION_TYPE_COMMON)
+        }
+#endif
         for (size_t i = 0; i < input_data_after_preprocessing.size(); ++i) {
             auto &tensor = input_data_after_preprocessing[i];
             size_t bytes = tensor.numel() * tensor.element_size();
@@ -441,6 +485,11 @@ public:
             }
             logging::debug("Tensor size exceeds 500 MiB limit. Splitting inference into " + std::to_string(num_chunks) + " chunks.");
         }
+#ifdef USE_SCOREP
+        if (profile_details) {
+        SCOREP_USER_REGION_END(handle_smartsim_chunk_plan)
+        }
+#endif
 
         if (std::getenv("DEBUG_PROVIDER_INPUT")) {
             for (size_t ti = 0; ti < input_data_after_preprocessing.size(); ++ti) {
@@ -477,6 +526,7 @@ public:
                     guarantee(tensor_index < this->tf_input_keys.size(), "Not enough tf_input_keys provided for multi-input model.");
                     input_name = this->tf_input_keys[tensor_index];
                 }
+                input_name = key_balancer.prefix_key(input_name);
                 
                 auto &tensor = input_data_after_preprocessing[tensor_index];
                 
@@ -499,13 +549,16 @@ public:
                 logging::debug("  " + tensor.to_string("Tensor " + std::to_string(tensor_index)));
 
 #ifdef USE_SCOREP
+                if (profile_details) {
                 SCOREP_USER_METRIC_UINT64(smartsim_input_bytes, tensor.numel() * tensor.element_size());
-                SCOREP_USER_REGION_DEFINE(handle_smartsim_put_tensor)
                 SCOREP_USER_REGION_BEGIN(handle_smartsim_put_tensor, "smartsim_put_tensor", SCOREP_USER_REGION_TYPE_COMMON)
+                }
 #endif
                 client->put_tensor(input_name, data, dims, sr_type, to_sr_memory_layout(tensor.layout()));
 #ifdef USE_SCOREP
+                if (profile_details) {
                 SCOREP_USER_REGION_END(handle_smartsim_put_tensor)
+                }
 #endif
                 input_tensor_names.push_back(input_name);
 
@@ -521,7 +574,7 @@ public:
             for (size_t tensor_index = 0; tensor_index < output_data_before_postprocessing.size(); ++tensor_index)
             {
                 std::string output_name = "output_" + std::to_string(this->rank) + "_" + std::to_string(tensor_index);
-                output_tensor_names.push_back(output_name);
+                output_tensor_names.push_back(key_balancer.prefix_key(output_name));
             }
 
             logging::debug("Output tensor names expected from SmartSim:");
@@ -529,25 +582,20 @@ public:
 
             try {
 #ifdef USE_SCOREP
-                SCOREP_USER_REGION_DEFINE(handle_smartsim_run_model)
+                if (profile_details) {
                 SCOREP_USER_REGION_BEGIN(handle_smartsim_run_model, "smartsim_run_model", SCOREP_USER_REGION_TYPE_COMMON)
+                }
 #endif
                 if (this->device == "GPU") {
                     const int offset = this->rank >= 0 ? this->rank : 0;
-                    if (this->tf_input_keys.empty()) {
-                        client->run_model_multigpu(this->model_name, input_tensor_names, output_tensor_names, offset, this->first_gpu, this->num_gpus);
-                    } else {
-                        client->run_model_multigpu(this->model_name, this->tf_input_keys, output_tensor_names, offset, this->first_gpu, this->num_gpus);
-                    }
+                    client->run_model_multigpu(this->model_name, input_tensor_names, output_tensor_names, offset, this->first_gpu, this->num_gpus);
                 } else {
-                    if (this->tf_input_keys.empty()) {
-                        client->run_model(this->model_name, input_tensor_names, output_tensor_names);
-                    } else {
-                        client->run_model(this->model_name, this->tf_input_keys, output_tensor_names);
-                    }
+                    client->run_model(this->model_name, input_tensor_names, output_tensor_names);
                 }
 #ifdef USE_SCOREP
+                if (profile_details) {
                 SCOREP_USER_REGION_END(handle_smartsim_run_model)
+                }
 #endif
             } catch (const std::exception& ex) {
                 std::cerr << "run_model failed: " << ex.what() << std::endl;
@@ -557,7 +605,7 @@ public:
             logging::debug("Retrieve these tensors from SmartSim:");
             for (size_t tensor_index = 0; tensor_index < output_data_before_postprocessing.size(); ++tensor_index)
             {
-                std::string output_name = "output_" + std::to_string(this->rank) + "_" + std::to_string(tensor_index);
+                const std::string& output_name = output_tensor_names[tensor_index];
                 auto &tensor = output_data_before_postprocessing[tensor_index];
                 
                 if (num_chunks > 1 && !tensor.is_contiguous()) {
@@ -587,13 +635,16 @@ public:
 
                 try {
 #ifdef USE_SCOREP
+                    if (profile_details) {
                     SCOREP_USER_METRIC_UINT64(smartsim_output_bytes, tensor.numel() * tensor.element_size());
-                    SCOREP_USER_REGION_DEFINE(handle_smartsim_unpack_tensor)
                     SCOREP_USER_REGION_BEGIN(handle_smartsim_unpack_tensor, "smartsim_unpack_tensor", SCOREP_USER_REGION_TYPE_COMMON)
+                    }
 #endif
                     client->unpack_tensor(output_name, data, dims, sr_type, sr_layout);
 #ifdef USE_SCOREP
+                    if (profile_details) {
                     SCOREP_USER_REGION_END(handle_smartsim_unpack_tensor)
+                    }
 #endif
                 } catch (const std::exception& ex) {
                     std::cerr << "unpack_tensor failed for " << output_name << ": " << ex.what() << std::endl;

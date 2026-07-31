@@ -5,7 +5,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 BASE_DIR="$(realpath "${SCRIPT_DIR}/..")"
 source "${BASE_DIR}/set_env_claix23_cuda12.4.sh"
 
-if [[ -n "${USE_SCOREP:-}" ]]; then
+if [[ "${USE_SCOREP}" == "1" ]]; then
     if [ -f "${SCRIPT_DIR}/env_scorep.sh" ]; then
         source "${SCRIPT_DIR}/env_scorep.sh"
     else
@@ -54,7 +54,7 @@ USER_PYTHON="$USER_PYTHON_ENV/bin/python"
 CUDA_ROOT="/cvmfs/software.hpc.rwth.de/Linux/RH9/x86_64/intel/sapphirerapids/software/CUDA/12.4.0"
 
 # Explicitly set compilers to ensure consistency and CUDA compatibility
-if [[ -n "${USE_SCOREP:-}" ]]; then
+if [[ "${USE_SCOREP}" == "1" ]]; then
     export CC=scorep-mpicc
     export CXX=scorep-mpicxx
     scorep_flag="-DWITH_SCOREP=ON"

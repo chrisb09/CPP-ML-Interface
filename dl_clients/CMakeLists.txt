@@ -1,5 +1,15 @@
 cmake_minimum_required(VERSION 3.10)
 
+# Prevent CUDA stubs from being added to the RUNPATH/RPATH of binaries compiled on CPU login nodes
+list(APPEND CMAKE_PLATFORM_IMPLICIT_LINK_DIRECTORIES
+  "/cvmfs/software.hpc.rwth.de/Linux/RH9/x86_64/intel/sapphirerapids/software/CUDA/12.4.0/lib/stubs"
+  "/cvmfs/software.hpc.rwth.de/Linux/RH9/x86_64/intel/sapphirerapids/software/CUDA/12.4.0/targets/x86_64-linux/lib/stubs"
+)
+list(APPEND CMAKE_CXX_IMPLICIT_LINK_DIRECTORIES
+  "/cvmfs/software.hpc.rwth.de/Linux/RH9/x86_64/intel/sapphirerapids/software/CUDA/12.4.0/lib/stubs"
+  "/cvmfs/software.hpc.rwth.de/Linux/RH9/x86_64/intel/sapphirerapids/software/CUDA/12.4.0/targets/x86_64-linux/lib/stubs"
+)
+
 # Honor <Package>_ROOT variables like CUDA_ROOT.
 cmake_policy(SET CMP0074 NEW)
 
@@ -64,6 +74,10 @@ if(WITH_SCOREP)
         # scorep-mpicxx compiler wrapper, the wrapper already injects scorep_init.o
         # at link time. Calling scorep_instrument_target additionally would produce
         # a duplicate-symbol linker error (scorep_subsystems defined twice).
+        target_include_directories(phydll_dl_runtime PRIVATE ${SCOREP_ROOT_DIR}/include ${SCOREP_ROOT_DIR}/include/scorep)
+        target_include_directories(phydll_dl_client PRIVATE ${SCOREP_ROOT_DIR}/include ${SCOREP_ROOT_DIR}/include/scorep)
+        target_link_libraries(phydll_dl_runtime PRIVATE Scorep::Plugin)
+        target_link_libraries(phydll_dl_client PRIVATE Scorep::Plugin)
         target_link_options(phydll_dl_client PRIVATE -no-pie)
     endif()
     target_compile_definitions(phydll_dl_runtime PRIVATE USE_SCOREP)

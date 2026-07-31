@@ -3,9 +3,11 @@
 #include <scorep/SCOREP_User.h>
 SCOREP_USER_REGION_DEFINE(handle_dl_recv);
 SCOREP_USER_REGION_DEFINE(handle_dl_send);
+SCOREP_USER_REGION_DEFINE(handle_dl_frame_copy);
 #endif
 
 #include <algorithm>
+#include <cstdio>
 #include <cstring>
 #include <iostream>
 #include <limits>
@@ -66,8 +68,16 @@ void DlRuntime::initialize() {
     if (initialized_) {
         return;
     }
+    std::fprintf(stderr, "[PHYDLL:DL] runtime before phydll_init\n");
+    std::fflush(stderr);
     phydll_init(const_cast<char*>("dl"));
+    std::fprintf(stderr, "[PHYDLL:DL] runtime after phydll_init\n");
+    std::fflush(stderr);
+    std::fprintf(stderr, "[PHYDLL:DL] runtime before phydll_define_dl count=%d\n", dl_count_);
+    std::fflush(stderr);
     phydll_define_dl(dl_count_);
+    std::fprintf(stderr, "[PHYDLL:DL] runtime after phydll_define_dl\n");
+    std::fflush(stderr);
     phydll_get_field_size(&field_size_);
     phydll_get_field_counts(&phy_count_, &dl_count_);
     source_count_ = phydll_get_ndest();
@@ -106,9 +116,19 @@ Frame DlRuntime::receive_frame() {
     reset_buffers();
     receive_fields();
 
+#ifdef USE_SCOREP
+    if (detailed_profile_enabled_) {
+        SCOREP_USER_REGION_BEGIN(handle_dl_frame_copy, "dl_frame_copy", SCOREP_USER_REGION_TYPE_COMMON);
+    }
+#endif
     Frame frame;
     frame.data = combined_data_;
     frame.has_meta = false;
+#ifdef USE_SCOREP
+    if (detailed_profile_enabled_) {
+        SCOREP_USER_REGION_END(handle_dl_frame_copy);
+    }
+#endif
     return frame;
 }
 
@@ -122,8 +142,12 @@ void DlRuntime::send_output(const std::vector<double>& output) {
         throw std::runtime_error("Output data exceeds registered field size.");
     }
 
+    const bool profile_details = detailed_profile_enabled_;
+
     #ifdef USE_SCOREP
-    SCOREP_USER_REGION_BEGIN(handle_dl_send, "dl_send", SCOREP_USER_REGION_TYPE_COMMON);
+    if (profile_details) {
+        SCOREP_USER_REGION_BEGIN(handle_dl_send, "dl_send", SCOREP_USER_REGION_TYPE_COMMON);
+    }
     #endif
 
     char out_label[] = "DL-OUT";
@@ -143,14 +167,21 @@ void DlRuntime::send_output(const std::vector<double>& output) {
     
     phydll_send();
 
-    #ifdef USE_SCOREP
-    SCOREP_USER_REGION_END(handle_dl_send);
+    // The first response completes the initialization frame.
+    detailed_profile_enabled_ = true;
+
+#ifdef USE_SCOREP
+    if (profile_details) {
+        SCOREP_USER_REGION_END(handle_dl_send);
+    }
     #endif
 }
 
 void DlRuntime::receive_fields() {
-    #ifdef USE_SCOREP
-    SCOREP_USER_REGION_BEGIN(handle_dl_recv, "dl_recv", SCOREP_USER_REGION_TYPE_COMMON);
+#ifdef USE_SCOREP
+    if (detailed_profile_enabled_) {
+        SCOREP_USER_REGION_BEGIN(handle_dl_recv, "dl_recv", SCOREP_USER_REGION_TYPE_COMMON);
+    }
     #endif
     phydll_irecv();
     phydll_wait_irecv();
@@ -174,8 +205,10 @@ void DlRuntime::receive_fields() {
             free(buffer_ptr);
         }
     }
-    #ifdef USE_SCOREP
-    SCOREP_USER_REGION_END(handle_dl_recv);
+#ifdef USE_SCOREP
+    if (detailed_profile_enabled_) {
+        SCOREP_USER_REGION_END(handle_dl_recv);
+    }
     #endif
 }
 

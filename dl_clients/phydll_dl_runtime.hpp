@@ -73,6 +73,7 @@ private:
     int source_count_ = 1;
     int field_size_ = 0;
     bool initialized_ = false;
+    bool detailed_profile_enabled_ = false;
 
     std::vector<double> meta_buffer_;
     std::vector<double> data_buffer_;

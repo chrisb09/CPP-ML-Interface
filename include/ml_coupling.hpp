@@ -23,6 +23,7 @@
 #include "config_overrides.hpp"
 #include "tool.h"
 #include "training_tracker.hpp"
+#include "scorep_profiling_state.hpp"
 #include <optional>
 #include "logging.hpp"
 
@@ -326,6 +327,11 @@ class MLCoupling
             return application->ml_step(*library, *behavior);
         }
         return 0;
+    }
+
+    void set_scorep_detailed_regions_enabled(bool enabled)
+    {
+        ml_coupling_scorep::set_detailed_regions_enabled(enabled);
     }
 
     /**

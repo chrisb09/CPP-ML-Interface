@@ -71,9 +71,16 @@ file(GLOB_RECURSE ALL_HEADERS "${CMAKE_CURRENT_SOURCE_DIR}/include/**/*.hpp")
 set(GENERATED_SRC "${CMAKE_CURRENT_BINARY_DIR}/generated_registry.hpp")
 
 if(NOT CPPML_DISABLE_REGISTRY_GEN)
+    if(NOT DEFINED PYTHON_EXECUTABLE OR NOT PYTHON_EXECUTABLE)
+        if(DEFINED SMARTSIM_PYTHON AND SMARTSIM_PYTHON)
+            set(PYTHON_EXECUTABLE "${SMARTSIM_PYTHON}")
+        else()
+            set(PYTHON_EXECUTABLE "python3")
+        endif()
+    endif()
     # 3. Custom Command für Code-Generierung
     add_custom_target(generate_registry
-        COMMAND python3 "${CMAKE_CURRENT_SOURCE_DIR}/scripts/generate_registry.py" 
+        COMMAND "${PYTHON_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/scripts/generate_registry.py" 
                 "${GENERATED_SRC}" "MLCouplingLibrary,MLCouplingNormalization,MLCouplingBehavior,MLCouplingApplication" ${ALL_HEADERS}
         DEPENDS ${ALL_HEADERS} "${CMAKE_CURRENT_SOURCE_DIR}/scripts/generate_registry.py"
         COMMENT "Generating registry from headers..."
@@ -181,6 +188,10 @@ if(WITH_AIX)
 
             set(_aixelerator_cmake_args "${AIXELERATOR_CMAKE_ARGS}")
             separate_arguments(_aixelerator_cmake_args NATIVE_COMMAND "${_aixelerator_cmake_args}")
+            set(_aixelerator_scorep_arg)
+            if(WITH_SCOREP)
+                set(_aixelerator_scorep_arg -DWITH_SCOREP=ON)
+            endif()
 
             message(STATUS "Configuring AIxelerator prebuilt bootstrap build in ${AIXELERATOR_PREBUILT_BUILD_DIR}...")
             execute_process(
@@ -189,8 +200,10 @@ if(WITH_AIX)
                     -B ${AIXELERATOR_PREBUILT_BUILD_DIR}
                     -DCMAKE_BUILD_TYPE=${CMAKE_BUILD_TYPE}
                     -DCMAKE_INSTALL_PREFIX=${AIXELERATOR_PREBUILT_INSTALL_PREFIX}
+                    -DBUILD_TESTS=OFF
                     -DUSE_PYTHON_TORCH_CMAKE_PREFIX=${USE_PYTHON_TORCH_CMAKE_PREFIX}
                     -DTORCH_VERSION=${TORCH_VERSION}
+                    ${_aixelerator_scorep_arg}
                     ${_aixelerator_cmake_args}
                 RESULT_VARIABLE AIXELERATOR_CONFIGURE_RESULT
             )
@@ -295,6 +308,10 @@ if(BUILD_TESTING)
     add_executable(ml_coupling_data_tests test/test_ml_coupling_data.cpp)
     target_include_directories(ml_coupling_data_tests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/include")
     add_test(NAME ml_coupling_data_tests COMMAND ml_coupling_data_tests)
+
+    add_executable(smartsim_key_balancing_tests test/test_smartsim_key_balancing.cpp)
+    target_include_directories(smartsim_key_balancing_tests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/include")
+    add_test(NAME smartsim_key_balancing_tests COMMAND smartsim_key_balancing_tests)
 
     add_executable(test_flexible_fallback test/test_flexible_fallback.cpp)
     target_include_directories(test_flexible_fallback PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/include")

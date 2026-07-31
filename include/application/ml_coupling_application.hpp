@@ -1,5 +1,7 @@
 #pragma once
 
+#include "scorep_profiling_state.hpp"
+
 #include <memory>
 #include <stdexcept>
 #include <type_traits>
@@ -9,6 +11,10 @@
 #include "../library/ml_coupling_library.hpp"
 #include "../behavior/ml_coupling_behavior.hpp"
 #include "../normalization/ml_coupling_normalization.hpp"
+
+#ifdef USE_SCOREP
+#include <scorep/SCOREP_User.h>
+#endif
 
 // @category: application
 // Applications own conversion between the public coupling boundary and the
@@ -66,7 +72,18 @@ public:
         if (behavior.should_perform_inference())
         {
             prepare_library_input();
+#ifdef USE_SCOREP
+            SCOREP_USER_REGION_DEFINE(handle_app_provider_inference)
+            if (ml_coupling_scorep::detailed_regions_are_enabled()) {
+            SCOREP_USER_REGION_BEGIN(handle_app_provider_inference, "app_provider_inference", SCOREP_USER_REGION_TYPE_COMMON)
+            }
+#endif
             library.static_inference(&library_input, &library_output);
+#ifdef USE_SCOREP
+            if (ml_coupling_scorep::detailed_regions_are_enabled()) {
+            SCOREP_USER_REGION_END(handle_app_provider_inference)
+            }
+#endif
             finalize_coupling_output();
             return behavior.time_step_delta();
         }
@@ -75,12 +92,34 @@ public:
 
     void prepare_library_input()
     {
+#ifdef USE_SCOREP
+        SCOREP_USER_REGION_DEFINE(handle_app_prepare_input)
+        if (ml_coupling_scorep::detailed_regions_are_enabled()) {
+        SCOREP_USER_REGION_BEGIN(handle_app_prepare_input, "app_prepare_input", SCOREP_USER_REGION_TYPE_COMMON)
+        }
+#endif
         library_input = preprocess_coupling_input(coupling_input);
+#ifdef USE_SCOREP
+        if (ml_coupling_scorep::detailed_regions_are_enabled()) {
+        SCOREP_USER_REGION_END(handle_app_prepare_input)
+        }
+#endif
     }
 
     void finalize_coupling_output()
     {
+#ifdef USE_SCOREP
+        SCOREP_USER_REGION_DEFINE(handle_app_finalize_output)
+        if (ml_coupling_scorep::detailed_regions_are_enabled()) {
+        SCOREP_USER_REGION_BEGIN(handle_app_finalize_output, "app_finalize_output", SCOREP_USER_REGION_TYPE_COMMON)
+        }
+#endif
         coupling_output = postprocess_library_output(library_output);
+#ifdef USE_SCOREP
+        if (ml_coupling_scorep::detailed_regions_are_enabled()) {
+        SCOREP_USER_REGION_END(handle_app_finalize_output)
+        }
+#endif
     }
 
     std::pair<MLCouplingData<LibraryInput>*, MLCouplingData<LibraryOutput>*> get_library_buffers()
