@@ -500,7 +500,7 @@ MLCoupling<CouplingInput, CouplingOutput, LibraryInput, LibraryOutput> *create_m
             {
                 params_map = &normalization_params;
             }
-            else if (section == "library")
+            else if (section == "library" || section == "provider")
             {
                 params_map = &library_params;
             }
@@ -527,7 +527,7 @@ MLCoupling<CouplingInput, CouplingOutput, LibraryInput, LibraryOutput> *create_m
                         {
                             normalization_class_name = std::any_cast<std::string>(type_params[2][index_in_type]);
                         }
-                        else if (section == "library")
+                        else if (section == "library" || section == "provider")
                         {
                             library_class_name = std::any_cast<std::string>(type_params[2][index_in_type]);
                         }

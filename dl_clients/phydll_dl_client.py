@@ -369,4 +369,9 @@ def main():
 if __name__ == "__main__":
     main()
     from mpi4py import MPI
-    MPI.Finalize()
+    if MPI.Is_initialized() and not MPI.Is_finalized():
+        MPI.Finalize()
+    grace_seconds = float(os.environ.get("PHYDLL_DL_EXIT_GRACE_SECONDS", "5"))
+    if grace_seconds > 0:
+        import time
+        time.sleep(grace_seconds)
