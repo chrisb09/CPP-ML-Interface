@@ -16,14 +16,22 @@ import torch
 print("[DL] torch imported successfully.", flush=True)
 import contextlib
 ENABLE_SCOREP_USER = os.environ.get("ENABLE_SCOREP_USER", "0") == "1"
+HAS_SCOREP = False
 try:
     if ENABLE_SCOREP_USER:
+        print("[DL] ENABLE_SCOREP_USER is set. Importing scorep.user...", flush=True)
         import scorep.user
+        import scorep.instrumenter
+        scorep.instrumenter.enable()
         HAS_SCOREP = True
+        print("[DL] scorep.user and instrumenter enabled successfully. HAS_SCOREP=True", flush=True)
+        inst = scorep.instrumenter.get_instrumenter()
+        print(f"[DL] Instrumenter class: {inst.__class__.__name__}", flush=True)
+        print(f"[DL] Instrumenter registered status: {inst.get_registered()}", flush=True)
     else:
-        HAS_SCOREP = False
-except ImportError:
-    HAS_SCOREP = False
+        print("[DL] ENABLE_SCOREP_USER not set to 1.", flush=True)
+except Exception as e:
+    print(f"[DL] Error importing/enabling scorep: {e}", flush=True)
 
 @contextlib.contextmanager
 def scorep_region(name):
@@ -161,7 +169,7 @@ def main():
         # before entering PhyDLL's own internal MPI split.
         color = MPI.UNDEFINED
         print("[DL] Entering world_comm.Split(color=MPI.UNDEFINED)", flush=True)
-        local_comm = world_comm.Split(color, 0)
+        local_comm = world_comm.Split(color, world_comm.Get_rank())
         print("[DL] Returned from world_comm.Split", flush=True)
         if local_comm != MPI.COMM_NULL:
             local_comm.Free()
@@ -376,6 +384,13 @@ if __name__ == "__main__":
     try:
         main()
     finally:
+        if HAS_SCOREP:
+            try:
+                print("[DL] Forcing Score-P finalization...", flush=True)
+                scorep.user.force_finalize()
+                print("[DL] Score-P finalization complete.", flush=True)
+            except Exception as e:
+                print(f"[DL] Warning: force_finalize failed: {e}", flush=True)
         if MPI.Is_initialized() and not MPI.Is_finalized():
             print("[DL] Entering MPI.Finalize()", flush=True)
             MPI.Finalize()

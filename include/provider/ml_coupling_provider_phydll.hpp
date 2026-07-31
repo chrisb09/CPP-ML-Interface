@@ -1,6 +1,7 @@
 #pragma once
 
 #include "ml_coupling_provider.hpp"
+#include "../scorep_profiling_state.hpp"
 #include "../data/ml_coupling_data_type.hpp"
 #include "../data/ml_coupling_memory_layout.hpp"
 
@@ -88,12 +89,29 @@ public:
         initialize_if_needed();
 
 #ifdef USE_SCOREP
+        const bool profile_details = ml_coupling_scorep::detailed_regions_are_enabled();
         SCOREP_USER_REGION_DEFINE(handle_phydll_prepack)
-        SCOREP_USER_REGION_BEGIN(handle_phydll_prepack, "phydll_prepack", SCOREP_USER_REGION_TYPE_COMMON)
+         SCOREP_USER_REGION_DEFINE(handle_phydll_send)
+         SCOREP_USER_REGION_DEFINE(handle_phydll_recv)
+         SCOREP_USER_REGION_DEFINE(handle_phydll_unpack)
+         SCOREP_USER_REGION_DEFINE(handle_phydll_library_static_step)
+        SCOREP_USER_METRIC_LOCAL(bytes_sent_logical);
+        SCOREP_USER_METRIC_LOCAL(bytes_sent_actual);
+        SCOREP_USER_METRIC_LOCAL(bytes_recv_logical);
+        SCOREP_USER_METRIC_LOCAL(bytes_recv_actual);
+#endif
+
+#ifdef USE_SCOREP
+         if (profile_details) {
+         SCOREP_USER_REGION_BEGIN(handle_phydll_library_static_step, "phydll_library_static_step", SCOREP_USER_REGION_TYPE_COMMON)
+         SCOREP_USER_REGION_BEGIN(handle_phydll_prepack, "phydll_prepack", SCOREP_USER_REGION_TYPE_COMMON)
+        }
 #endif
         prepare_data_buffer();
 #ifdef USE_SCOREP
+        if (profile_details) {
         SCOREP_USER_REGION_END(handle_phydll_prepack)
+        }
 #endif
 
         if (std::getenv("DEBUG_PROVIDER_INPUT")) {
@@ -119,14 +137,20 @@ public:
         }
 
 #ifdef USE_SCOREP
-        SCOREP_USER_METRIC_LOCAL(bytes_sent_logical);
-        SCOREP_USER_METRIC_INIT(bytes_sent_logical, "bytes_sent_logical", "bytes", SCOREP_USER_METRIC_TYPE_UINT64, SCOREP_USER_METRIC_CONTEXT_CALLPATH);
-        SCOREP_USER_METRIC_LOCAL(bytes_sent_actual);
-        SCOREP_USER_METRIC_INIT(bytes_sent_actual, "bytes_sent_actual", "bytes", SCOREP_USER_METRIC_TYPE_UINT64, SCOREP_USER_METRIC_CONTEXT_CALLPATH);
+        if (profile_details) {
+        static bool scorep_phydll_metrics_initialized = false;
+        if (!scorep_phydll_metrics_initialized) {
+            SCOREP_USER_METRIC_INIT(bytes_sent_logical, "bytes_sent_logical", "bytes", SCOREP_USER_METRIC_TYPE_UINT64, SCOREP_USER_METRIC_CONTEXT_CALLPATH);
+            SCOREP_USER_METRIC_INIT(bytes_sent_actual, "bytes_sent_actual", "bytes", SCOREP_USER_METRIC_TYPE_UINT64, SCOREP_USER_METRIC_CONTEXT_CALLPATH);
+            SCOREP_USER_METRIC_INIT(bytes_recv_logical, "bytes_recv_logical", "bytes", SCOREP_USER_METRIC_TYPE_UINT64, SCOREP_USER_METRIC_CONTEXT_CALLPATH);
+            SCOREP_USER_METRIC_INIT(bytes_recv_actual, "bytes_recv_actual", "bytes", SCOREP_USER_METRIC_TYPE_UINT64, SCOREP_USER_METRIC_CONTEXT_CALLPATH);
+            scorep_phydll_metrics_initialized = true;
+        }
         SCOREP_USER_METRIC_UINT64(bytes_sent_logical, sum_sizes(input_sizes_) * sizeof(float));
-        SCOREP_USER_METRIC_UINT64(bytes_sent_actual, sum_sizes(input_sizes_) * sizeof(double));
-        SCOREP_USER_REGION_DEFINE(handle_phydll_send)
+        // PhyDLL transmits the registered fixed-size field, not just the useful input.
+        SCOREP_USER_METRIC_UINT64(bytes_sent_actual, static_cast<uint64_t>(field_size_) * sizeof(double));
         SCOREP_USER_REGION_BEGIN(handle_phydll_send, "phydll_send", SCOREP_USER_REGION_TYPE_COMMON)
+        }
 #endif
         double *data_ptr = data_buffer_.data();
         char data_label[] = "PHY-DATA";
@@ -134,14 +158,11 @@ public:
         phydll_set_field(&data_ptr, data_label);
         phydll_send();
 #ifdef USE_SCOREP
+        if (profile_details) {
         SCOREP_USER_REGION_END(handle_phydll_send)
 
-        SCOREP_USER_METRIC_LOCAL(bytes_recv_logical);
-        SCOREP_USER_METRIC_INIT(bytes_recv_logical, "bytes_recv_logical", "bytes", SCOREP_USER_METRIC_TYPE_UINT64, SCOREP_USER_METRIC_CONTEXT_CALLPATH);
-        SCOREP_USER_METRIC_LOCAL(bytes_recv_actual);
-        SCOREP_USER_METRIC_INIT(bytes_recv_actual, "bytes_recv_actual", "bytes", SCOREP_USER_METRIC_TYPE_UINT64, SCOREP_USER_METRIC_CONTEXT_CALLPATH);
-        SCOREP_USER_REGION_DEFINE(handle_phydll_recv)
         SCOREP_USER_REGION_BEGIN(handle_phydll_recv, "phydll_recv", SCOREP_USER_REGION_TYPE_COMMON)
+        }
 #endif
 
         phydll_recv();
@@ -163,17 +184,22 @@ public:
             }
         }
 #ifdef USE_SCOREP
+        if (profile_details) {
         SCOREP_USER_REGION_END(handle_phydll_recv)
         SCOREP_USER_METRIC_UINT64(bytes_recv_logical, sum_sizes(output_sizes_) * sizeof(float));
-        SCOREP_USER_METRIC_UINT64(bytes_recv_actual, sum_sizes(output_sizes_) * sizeof(double));
+        // The response uses the same fixed-size field and includes output padding.
+        SCOREP_USER_METRIC_UINT64(bytes_recv_actual, static_cast<uint64_t>(field_size_) * sizeof(double));
 
-        SCOREP_USER_REGION_DEFINE(handle_phydll_unpack)
         SCOREP_USER_REGION_BEGIN(handle_phydll_unpack, "phydll_unpack", SCOREP_USER_REGION_TYPE_COMMON)
+        }
 #endif
 
         unpack_output_buffer();
 #ifdef USE_SCOREP
-        SCOREP_USER_REGION_END(handle_phydll_unpack)
+         if (profile_details) {
+         SCOREP_USER_REGION_END(handle_phydll_unpack)
+         SCOREP_USER_REGION_END(handle_phydll_library_static_step)
+         }
 #endif
         metadata_sent_ = true;
 #endif

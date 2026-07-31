@@ -8,6 +8,7 @@
 
 #include "ml_coupling_provider.hpp"
 #include "../tool.h"
+#include "../scorep_profiling_state.hpp"
 
 // for debugging and to disabled greyed out code in some IDEs
 // # define WITH_AIX
@@ -83,6 +84,13 @@ public:
         auto &output_data_before_postprocessing = *output_before_postprocessing;
 
 #ifdef WITH_AIX
+#ifdef USE_SCOREP
+        const bool profile_details = ml_coupling_scorep::detailed_regions_are_enabled();
+        SCOREP_USER_REGION_DEFINE(handle_aix_library_static_step)
+        if (profile_details) {
+            SCOREP_USER_REGION_BEGIN(handle_aix_library_static_step, "aix_library_static_step", SCOREP_USER_REGION_TYPE_COMMON)
+        }
+#endif
         constexpr bool aix_supported_scalar =
             std::is_same_v<In, float> || std::is_same_v<In, double>;
 
@@ -103,6 +111,12 @@ public:
 
                 // TODO: this only works for 1 tensor, we'd need to change AIxeleratorService to support multiple tensors if needed
                 // It also assumes that the tensor is flattened and in contiguous layout
+#ifdef USE_SCOREP
+                SCOREP_USER_REGION_DEFINE(handle_aix_provider_setup)
+                if (ml_coupling_scorep::detailed_regions_are_enabled()) {
+                SCOREP_USER_REGION_BEGIN(handle_aix_provider_setup, "aix_provider_setup", SCOREP_USER_REGION_TYPE_COMMON)
+                }
+#endif
                 service = std::make_unique<AIxeleratorService<In>>(model_file,
                                                                    input_data_after_preprocessing[0].dimensions_as_int64(),
                                                                    static_cast<In *>(input_data_after_preprocessing[0].root()),
@@ -112,15 +126,24 @@ public:
                                                                    app_comm,
                                                                    enable_hybrid,
                                                                    host_fraction);
+#ifdef USE_SCOREP
+                if (ml_coupling_scorep::detailed_regions_are_enabled()) {
+                SCOREP_USER_REGION_END(handle_aix_provider_setup)
+                }
+#endif
             }
 
 #ifdef USE_SCOREP
             SCOREP_USER_REGION_DEFINE(handle_aix_inference)
+            if (ml_coupling_scorep::detailed_regions_are_enabled()) {
             SCOREP_USER_REGION_BEGIN(handle_aix_inference, "aix_inference", SCOREP_USER_REGION_TYPE_COMMON)
+            }
 #endif
             service->inference();
 #ifdef USE_SCOREP
+            if (ml_coupling_scorep::detailed_regions_are_enabled()) {
             SCOREP_USER_REGION_END(handle_aix_inference)
+            }
 #endif
 
 
@@ -131,6 +154,12 @@ public:
         }
 #else
         guarantee(false, "AIxelerator provider is not enabled. Please make sure WITH_AIX is defined and the necessary dependencies are installed.");
+#endif
+
+#if defined(USE_SCOREP) && defined(WITH_AIX)
+        if (profile_details) {
+            SCOREP_USER_REGION_END(handle_aix_library_static_step)
+        }
 #endif
     }
 

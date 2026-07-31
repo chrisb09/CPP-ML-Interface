@@ -23,29 +23,30 @@ strings) to the DL client at startup:
 ```cpp
 struct BcastMetaHeader {
     int32_t magic;          // 0x4D4C434D 'MLCM'
-    int32_t version;        // 1
+    int32_t version;        // 2 (v2 protocol)
     int32_t model_len;      // length of model path string
     int32_t backend_len;    // length of backend name string
     int32_t device_len;     // length of device name string
-    int32_t batch_size;     // <-- new: per-call chunk size, 0 = no chunking
+    int32_t batch_size;     // per-call chunk size, 0 = no chunking
     int32_t num_inputs;     // number of distinct input tensors
     int32_t num_outputs;    // number of distinct output tensors
     int64_t total_input;    // total input element count across all inputs
     int64_t total_output;   // total output element count across all outputs
+    int64_t field_size;     // physical field size sent by this source rank
     int32_t dtype;          // element dtype tag
     int32_t layout;         // element layout tag
     int32_t num_input_dims; // total dim count across all input tensors
     int32_t num_output_dims;// total dim count across all output tensors
 };
-// (Total: 64 bytes)
+// (Total: 72 bytes)
 ```
 
 The Python client unpacks the same layout:
 
 ```python
 magic, version, m_len, b_len, d_len, batch_size_arg, n_in, n_out, \
-    t_in, t_out, dtype, layout, n_in_dims, n_out_dims = \
-    struct.unpack("=8i 2q 4i", header_buf)
+    t_in, t_out, f_size, dtype, layout, n_in_dims, n_out_dims = \
+    struct.unpack("=8i 3q 4i", header_buf)
 ```
 
 `batch_size` is the **per-call chunk size** that the PHY side intends to
@@ -65,16 +66,19 @@ if (!final_meta.input_shapes.empty() && !final_meta.input_shapes.front().empty()
     client_batch_size = final_meta.input_shapes.front().front();
 }
 const long long batch_size = std::max(1LL, static_cast<long long>(ndest) * client_batch_size);
-const long long field_size_per_rank = runtime.field_size() / std::max(1, ndest);
+std::vector<long long> rank_field_offsets(ndest + 1, 0);
+for (int i = 0; i < ndest; ++i) {
+    rank_field_offsets[i + 1] = rank_field_offsets[i] + meta_per_rank[i].field_size;
+}
 ```
 
 For each output element `b`, the client maps it to `(client_id, sample_id)`
-and uses the **per-rank** field size to walk the gather/scatter loop:
+and uses cumulative per-rank field offsets (`rank_field_offsets[client_id]`) to walk non-uniform rank partitions:
 
 ```cpp
 long long client_id = b / client_batch_size;
 long long sample_id = b % client_batch_size;
-long long src_start = client_id * field_size_per_rank + sample_id * input_per_rank_used;
+long long src_start = rank_field_offsets[client_id] + sample_id * input_per_rank_used;
 ```
 
 The Python client mirrors the same math.

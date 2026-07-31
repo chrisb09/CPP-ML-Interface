@@ -14,9 +14,13 @@
 
 #ifdef USE_SCOREP
 #include <scorep/SCOREP_User.h>
+SCOREP_USER_REGION_DEFINE(handle_dl_input_unpack);
+SCOREP_USER_REGION_DEFINE(handle_dl_output_allocate);
+SCOREP_USER_REGION_DEFINE(handle_dl_input_allocate);
 SCOREP_USER_REGION_DEFINE(handle_dl_h2d);
 SCOREP_USER_REGION_DEFINE(handle_dl_torch_forward);
-SCOREP_USER_REGION_DEFINE(handle_dl_d2h_scatter);
+SCOREP_USER_REGION_DEFINE(handle_dl_d2h);
+SCOREP_USER_REGION_DEFINE(handle_dl_output_reorder);
 SCOREP_USER_REGION_DEFINE(handle_dl_send_output);
 #endif
 
@@ -322,12 +326,25 @@ int main(int argc, char **argv) {
             continue;
         }
 
+        const bool profile_details = frame_id > 0;
+#ifdef USE_SCOREP
+        if (profile_details) SCOREP_USER_REGION_BEGIN(handle_dl_output_allocate, "dl_output_allocate", SCOREP_USER_REGION_TYPE_COMMON);
+#endif
         std::vector<double> output(static_cast<size_t>(runtime.field_size()), 0.0);
+#ifdef USE_SCOREP
+        if (profile_details) SCOREP_USER_REGION_END(handle_dl_output_allocate);
+#endif
         bool used_model = false;
 
 #ifdef PHYDLL_DL_USE_TORCH
         if (!model_path.empty()) {
+            #ifdef USE_SCOREP
+            if (profile_details) SCOREP_USER_REGION_BEGIN(handle_dl_input_allocate, "dl_input_allocate", SCOREP_USER_REGION_TYPE_COMMON);
+            #endif
             std::vector<float> input(static_cast<size_t>(total_input_size));
+            #ifdef USE_SCOREP
+            if (profile_details) SCOREP_USER_REGION_END(handle_dl_input_allocate);
+            #endif
             int ndest = phydll_get_ndest();
             long long batch_size = 0;
             for (int i = 0; i < ndest; ++i) {
@@ -342,6 +359,9 @@ int main(int argc, char **argv) {
 
             long long offset_so_far = 0;
             long long src_rank_start = 0;
+            #ifdef USE_SCOREP
+            if (profile_details) SCOREP_USER_REGION_BEGIN(handle_dl_input_unpack, "dl_input_unpack", SCOREP_USER_REGION_TYPE_COMMON);
+            #endif
             for (int i = 0; i < ndest; ++i) {
                 long long rank_batch = rank_batch_sizes[i];
                 for (long long s = 0; s < rank_batch; ++s) {
@@ -354,6 +374,9 @@ int main(int argc, char **argv) {
                 offset_so_far += rank_batch;
                 src_rank_start += rank_field_sizes[i];
             }
+            #ifdef USE_SCOREP
+            if (profile_details) SCOREP_USER_REGION_END(handle_dl_input_unpack);
+            #endif
 
             std::fprintf(stderr, "[PHYDLL:DL] Frame %llu running inference\n", (unsigned long long)frame_id); std::fflush(stderr);
 
@@ -375,20 +398,20 @@ int main(int argc, char **argv) {
             }
 
             #ifdef USE_SCOREP
-            SCOREP_USER_REGION_BEGIN(handle_dl_h2d, "dl_h2d", SCOREP_USER_REGION_TYPE_COMMON);
+            if (profile_details) SCOREP_USER_REGION_BEGIN(handle_dl_h2d, "dl_h2d", SCOREP_USER_REGION_TYPE_COMMON);
             #endif
             auto input_tensor = torch::from_blob(input.data(), {batch_size, input_per_rank_used}, options).clone();
             input_tensor = input_tensor.view(actual_shape);
             input_tensor = input_tensor.to(torch_device);
             #ifdef USE_SCOREP
-            SCOREP_USER_REGION_END(handle_dl_h2d);
+            if (profile_details) SCOREP_USER_REGION_END(handle_dl_h2d);
             #endif
             try {
                 torch::NoGradGuard no_grad;
                 long long max_chunk_size = final_meta.batch_size > 0 ? static_cast<long long>(final_meta.batch_size) : batch_size;
                 std::vector<torch::Tensor> outputs;
                 #ifdef USE_SCOREP
-                SCOREP_USER_REGION_BEGIN(handle_dl_torch_forward, "dl_torch_forward", SCOREP_USER_REGION_TYPE_COMMON);
+                if (profile_details) SCOREP_USER_REGION_BEGIN(handle_dl_torch_forward, "dl_torch_forward", SCOREP_USER_REGION_TYPE_COMMON);
                 #endif
                 for (long long chunk_idx = 0; chunk_idx < batch_size; chunk_idx += max_chunk_size) {
                     long long chunk_size = std::min(max_chunk_size, batch_size - chunk_idx);
@@ -397,18 +420,24 @@ int main(int argc, char **argv) {
                 }
                 auto output_tensor = torch::cat(outputs, 0);
                 #ifdef USE_SCOREP
-                SCOREP_USER_REGION_END(handle_dl_torch_forward);
+                if (profile_details) SCOREP_USER_REGION_END(handle_dl_torch_forward);
                 #endif
                 #ifdef USE_SCOREP
-                SCOREP_USER_REGION_BEGIN(handle_dl_d2h_scatter, "dl_d2h_scatter", SCOREP_USER_REGION_TYPE_COMMON);
+                if (profile_details) SCOREP_USER_REGION_BEGIN(handle_dl_d2h, "dl_d2h", SCOREP_USER_REGION_TYPE_COMMON);
                 #endif
                 output_tensor = output_tensor.to(torch::kCPU).contiguous().view({-1});
+                #ifdef USE_SCOREP
+                if (profile_details) SCOREP_USER_REGION_END(handle_dl_d2h);
+                #endif
 
                 auto output_ptr = output_tensor.data_ptr<float>();
                 const long long outputs_per_rank_used = static_cast<long long>(total_output_size) / batch_size;
 
                 offset_so_far = 0;
                 long long dest_rank_start = 0;
+                #ifdef USE_SCOREP
+                if (profile_details) SCOREP_USER_REGION_BEGIN(handle_dl_output_reorder, "dl_output_reorder", SCOREP_USER_REGION_TYPE_COMMON);
+                #endif
                 for (int i = 0; i < ndest; ++i) {
                     long long rank_batch = rank_batch_sizes[i];
                     for (long long s = 0; s < rank_batch; ++s) {
@@ -422,7 +451,7 @@ int main(int argc, char **argv) {
                     dest_rank_start += rank_field_sizes[i];
                 }
                 #ifdef USE_SCOREP
-                SCOREP_USER_REGION_END(handle_dl_d2h_scatter);
+                if (profile_details) SCOREP_USER_REGION_END(handle_dl_output_reorder);
                 #endif
                 used_model = true;
             } catch (const c10::Error &e) {
@@ -443,17 +472,23 @@ int main(int argc, char **argv) {
         }
 
         #ifdef USE_SCOREP
-        SCOREP_USER_REGION_BEGIN(handle_dl_send_output, "dl_send_output", SCOREP_USER_REGION_TYPE_COMMON);
+        if (frame_id > 0) SCOREP_USER_REGION_BEGIN(handle_dl_send_output, "dl_send_output", SCOREP_USER_REGION_TYPE_COMMON);
         #endif
         runtime.send_output(output);
         #ifdef USE_SCOREP
-        SCOREP_USER_REGION_END(handle_dl_send_output);
+        if (frame_id > 0) SCOREP_USER_REGION_END(handle_dl_send_output);
         #endif
 
         ++frame_id;
     }
 
     phydll_finalize();
+    if (const char* barrier_env = std::getenv("PHYDLL_MPMD_SHUTDOWN_BARRIER");
+        barrier_env != nullptr && std::strcmp(barrier_env, "1") == 0) {
+        std::fprintf(stderr, "[PHYDLL:DL] waiting for solver teardown\n");
+        std::fflush(stderr);
+        MPI_Barrier(MPI_COMM_WORLD);
+    }
     MPI_Finalize();
     std::fprintf(stderr, "[PHYDLL:DL] client exiting cleanly\n");
     std::fflush(stderr);

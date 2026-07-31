@@ -92,26 +92,45 @@ Then run Python programs through Score-P with:
 
 ## Running jobs with PAPI counters
 
-If you want hardware counters through Score-P, request the PAPI hardware counter resource in Slurm:
+If you want network or hardware counters through Score-P, request the PAPI hardware counter resource in Slurm:
 
 ```bash
 #SBATCH --hwctr=papi
 ```
 
-Then set the Score-P PAPI metric variables **before launching the application**:
+This makes the PAPI measurement component active. The mini-app job script has an **auto-detection block** that queries `papi_native_avail` to find the correct active InfiniBand/network device prefixes (e.g. `mlx5_0_1_ext` and `ib0`), setting the metrics dynamically.
+
+Alternatively, you can manually set the Score-P PAPI metric variables **before launching the application**:
 
 ```bash
 export SCOREP_METRIC_PAPI_SEP=,
 export SCOREP_METRIC_PAPI='net:::ib0:rx:byte,net:::ib0:tx:byte,infiniband:::mlx5_0_1_ext:port_rcv_data,infiniband:::mlx5_0_1_ext:port_xmit_data'
 ```
 
-This is a launch-time setting, not a CMI C++ API. The application itself just needs to be built with `USE_SCOREP=1` and started with these environment variables in scope.
-
-If you are not requesting that resource, keep the PAPI metric setting empty:
+If you are not requesting the `--hwctr=papi` resource, keep the PAPI metric setting empty:
 
 ```bash
 export SCOREP_METRIC_PAPI=""
 ```
+
+## Python manual user regions
+
+To profile user regions in Python (e.g., `py_recv`, `py_inference`) when auto-instrumentation is disabled (`--noinstrumenter`), you must:
+1. Export `ENABLE_SCOREP_USER=1` in the environment.
+2. Call `scorep.instrumenter.enable()` at Python startup:
+   ```python
+   import scorep.user
+   import scorep.instrumenter
+   scorep.instrumenter.enable()
+   ```
+3. Call `scorep.user.force_finalize()` before Python exits (especially if using `mpi4py` or other libraries registering atexit handlers):
+   ```python
+   scorep.user.force_finalize()
+   ```
+
+## CUDA instrumentation status
+
+The current local custom Score-P build has CUPTI/CUDA instrumentation adapter disabled (`--disable-cuda`). GPU memory timing and usage should be profiled via NVML (`nvmlDeviceGetMemoryInfo`) or by spawning an `nvidia-smi dmon` sidecar process.
 
 If one run cannot fit all requested counters, split them across multiple runs and compare the resulting traces/profiles.
 
