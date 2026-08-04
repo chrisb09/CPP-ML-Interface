@@ -23,3 +23,8 @@ tmp/
 build-cpp-ml-interface.*.err
 build-cpp-ml-interface.*.out
 phydll-*.log
+
+# Diagnostic build directories
+build_diag_noscorep/
+build_diag_scorep/
+build_diag_*/
