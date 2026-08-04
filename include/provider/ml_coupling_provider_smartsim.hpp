@@ -545,7 +545,7 @@ public:
                 MPI_Comm_size(MPI_COMM_WORLD, &world_size);
                 if (world_size > 1 && this->rank >= num_chains) {
                     int token = 0;
-                    MPI_Recv(&token, 1, MPI_INT, this->rank - num_chains, 9993, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+                    MPI_Recv((void*)&token, 1, MPI_INT, this->rank - num_chains, 9993, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
                 }
             }
         }
@@ -612,7 +612,7 @@ public:
 #if defined(MLCOUPLING_PROVIDER_HAS_MPI)
             if (num_chains > 0 && mpi_initialized && world_size > 1 && (this->rank + num_chains) < world_size) {
                 int token = 1;
-                MPI_Send(&token, 1, MPI_INT, this->rank + num_chains, 9993, MPI_COMM_WORLD);
+                MPI_Send((const void*)&token, 1, MPI_INT, this->rank + num_chains, 9993, MPI_COMM_WORLD);
             }
 #endif
 
