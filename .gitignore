@@ -1,8 +1,7 @@
 .*
 !.gitignore
 !*/.gitignore
-/build
-/build_release
+/build*
 /BUILD*
 __pycache__
 venv
