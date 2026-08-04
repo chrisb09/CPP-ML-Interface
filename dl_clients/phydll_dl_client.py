@@ -384,9 +384,12 @@ def main():
                 print(f"[PHYDLL:DL:PY] dll.finalize() failed: {e}", file=sys.stderr)
         
         prefix = f"[DL {world_comm.rank}]" if world_comm is not None else "[DL]"
-        print(f"{prefix} entering global shutdown barrier...", flush=True)
-        world_comm.Barrier()
-        print(f"{prefix} passed barrier, finalizing MPI and returning...", flush=True)
+        if os.environ.get("PHYDLL_DL_SHUTDOWN_BARRIER", "0") == "1":
+            print(f"{prefix} entering global shutdown barrier...", flush=True)
+            world_comm.Barrier()
+            print(f"{prefix} passed barrier, finalizing MPI and returning...", flush=True)
+        else:
+            print(f"{prefix} skipping global shutdown barrier...", flush=True)
 
 if __name__ == "__main__":
     try:

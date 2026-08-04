@@ -512,6 +512,45 @@ public:
             }
         }
 
+        // OPTIONAL/EXPERIMENTAL: Multi-chain MPI token passing for SmartSim put_tensor.
+        // Enabled via environment variable: SMARTSIM_MPI_SEQUENTIAL_PUT=C (where C >= 1 is number of chains).
+        //   - 0: Deactivated (default, all ranks put concurrently).
+        //   - 1: Single global chain (0 -> 1 -> 2 -> ... -> N-1).
+        //   - C >= 2: C interleaved chains (rank r receives from r-C and sends to r+C).
+        //
+        // Purpose:
+        //   Stagger network writes to RedisAI across C parallel chains of solver ranks
+        //   to control write concurrency and prevent socket buffer overflow / DB network congestion.
+        //
+        // Limitations / Nuances:
+        //   This token passing operates sequentially across MPI_COMM_WORLD (assumes a single shared DB).
+        //   In multi-database / sharded setups, token passing should ideally group ranks per DB node.
+        int num_chains = 0;
+        const char* env_chains = std::getenv("SMARTSIM_MPI_SEQUENTIAL_PUT");
+        if (env_chains) {
+            std::string s(env_chains);
+            if (s == "true" || s == "YES" || s == "1") {
+                num_chains = 1;
+            } else {
+                try { num_chains = std::stoi(s); } catch (...) { num_chains = 0; }
+            }
+        }
+
+#if defined(MLCOUPLING_PROVIDER_HAS_MPI)
+        int mpi_initialized = 0;
+        int world_size = 1;
+        if (num_chains > 0) {
+            MPI_Initialized(&mpi_initialized);
+            if (mpi_initialized) {
+                MPI_Comm_size(MPI_COMM_WORLD, &world_size);
+                if (world_size > 1 && this->rank >= num_chains) {
+                    int token = 0;
+                    MPI_Recv(&token, 1, MPI_INT, this->rank - num_chains, 9993, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+                }
+            }
+        }
+#endif
+
         for (size_t chunk_idx = 0; chunk_idx < num_chunks; ++chunk_idx) {
             if (num_chunks > 1) logging::debug("Write these tensors to SmartSim (chunk " + std::to_string(chunk_idx+1) + "/" + std::to_string(num_chunks) + "):");
             else logging::debug("Write these tensors to SmartSim:");
@@ -569,6 +608,13 @@ public:
 
             logging::debug("Input tensor names sent to SmartSim:");
             for (const auto &name : input_tensor_names) { logging::debug("  " + name); }
+
+#if defined(MLCOUPLING_PROVIDER_HAS_MPI)
+            if (num_chains > 0 && mpi_initialized && world_size > 1 && (this->rank + num_chains) < world_size) {
+                int token = 1;
+                MPI_Send(&token, 1, MPI_INT, this->rank + num_chains, 9993, MPI_COMM_WORLD);
+            }
+#endif
 
             std::vector<std::string> output_tensor_names;
             for (size_t tensor_index = 0; tensor_index < output_data_before_postprocessing.size(); ++tensor_index)
