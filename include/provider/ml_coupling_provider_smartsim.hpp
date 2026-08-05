@@ -288,6 +288,23 @@ private:
                 }
             }
         }
+        else
+        {
+            // Non-rank-0 clients poll until rank 0 has finished loading the model into RedisAI
+            const int poll_freq_ms = 200;
+            int num_tries = (this->model_timeout > 0)
+                ? (this->model_timeout / poll_freq_ms)
+                : 600; // 120s default timeout
+            if (num_tries < 1) num_tries = 1;
+            logging::debug("Rank " + std::to_string(this->rank) + " waiting for model '" + this->model_name + "' in SmartSim DB...");
+            bool found = client->poll_model(this->model_name, poll_freq_ms, num_tries);
+            if (!found)
+            {
+                logging::error("Rank " + std::to_string(this->rank) + ": SmartSim model '" + this->model_name + "' not available after " + std::to_string(num_tries * poll_freq_ms / 1000) + "s.");
+                throw std::runtime_error("SmartSim model '" + this->model_name + "' not available in database.");
+            }
+            logging::debug("Rank " + std::to_string(this->rank) + " confirmed model '" + this->model_name + "' is ready in SmartSim DB.");
+        }
 
 #ifdef MLCOUPLING_PROVIDER_HAS_MPI
         int mpi_initialized = 0;
