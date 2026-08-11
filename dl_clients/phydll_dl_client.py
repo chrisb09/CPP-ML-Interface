@@ -1,19 +1,19 @@
 #!/usr/bin/env python3
-import mpi4py
-mpi4py.rc.initialize = False
-mpi4py.rc.finalize = False
-from mpi4py import MPI
-MPI.Init_thread(MPI.THREAD_FUNNELED)
-
-world_comm = MPI.COMM_WORLD
-
 import os
 import sys
 print("[DL] Starting Python DL Client...", flush=True)
 import struct
 import numpy as np
 PY_SCOREP_WRAPPER = os.environ.get("PHYDLL_PY_SCOREP_WRAPPER", "0") == "1"
-torch = None
+
+print("[DL] Importing mpi4py...", flush=True)
+import mpi4py
+mpi4py.rc.thread_level = "funneled"
+from mpi4py import MPI
+print("[DL] mpi4py imported successfully. MPI world size =", MPI.COMM_WORLD.Get_size(), "rank =", MPI.COMM_WORLD.Get_rank(), flush=True)
+print("[DL] Importing torch...", flush=True)
+import torch
+print("[DL] torch imported successfully.", flush=True)
 import contextlib
 ENABLE_SCOREP_USER = os.environ.get("ENABLE_SCOREP_USER", "0") == "1"
 HAS_SCOREP = False
@@ -63,34 +63,21 @@ def receive_p2p_metadata(comm, source_rank):
     """
     from mpi4py import MPI
 
-    #     int32_t magic;           // 0
-    #     int32_t version;         // 4
-    #     int32_t model_len;       // 8
-    #     int32_t backend_len;     // 12
-    #     int32_t device_len;      // 16
-    #     int32_t batch_size;      // 20
-    #     int32_t num_inputs;      // 24
-    #     int32_t num_outputs;     // 28
-    #     int64_t total_input;     // 32
-    #     int64_t total_output;    // 40
-    #     int32_t dtype;           // 48
-    #     int32_t layout;          // 52
-    #     int32_t num_input_dims;  // 56
-    #     int32_t num_output_dims; // 60
-    #     int64_t field_size;      // 64
-    # } (Total: 72 bytes)
-    
-    header_size = 72
+    header_size = 88
     header_buf = bytearray(header_size)
     status = MPI.Status()
     # Tag is source_rank to match C++ provider
     comm.Recv([header_buf, MPI.BYTE], source=source_rank, tag=source_rank, status=status)
-    
-    magic, version, m_len, b_len, d_len, batch_size_arg, n_in, n_out, t_in, t_out, dtype, layout, n_in_dims, n_out_dims, field_size_arg = struct.unpack("=8i 2q 4i q", header_buf)
-    
-    if magic != 0x4D4C434D or version != 2:
-        return {'valid': False}
-        
+
+    header = decode_metadata_header(header_buf)
+    if not header['valid']:
+        return header
+
+    m_len, b_len, d_len, n_in, n_out, n_in_dims, n_out_dims = (
+        header['model_len'], header['backend_len'], header['device_len'],
+        header['num_inputs'], header['num_outputs'],
+        header['num_input_dims'], header['num_output_dims'])
+
     payload_size = m_len + b_len + d_len + (n_in_dims + n_out_dims) * 8
     payload_buf = bytearray(payload_size)
     if payload_size > 0:
@@ -142,23 +129,85 @@ def receive_p2p_metadata(comm, source_rank):
         'model_path': model_path,
         'backend': backend,
         'device': device,
-        'batch_size': batch_size_arg,
-        'total_input': t_in,
-        'total_output': t_out,
+        'batch_size': header['batch_size'],
+        'total_input': header['total_input'],
+        'total_output': header['total_output'],
         'in_shapes': in_shapes,
         'out_shapes': out_shapes,
-        'field_size': field_size_arg
+        'field_size': header['field_size'],
+        'layout_kind': header['layout_kind'],
+        'phy_count': header['phy_count'],
+        'dl_count': header['dl_count']
+    }
+
+
+def decode_metadata_header(header_buf):
+    """
+    Decode the 88-byte BcastMetaHeader sent by the C++ provider
+    (ml_coupling_provider_phydll.hpp BcastMetaHeader), matching dl_client.cpp.
+
+    Layout (natural C++ alignment):
+        int32_t magic;           // 0
+        int32_t version;         // 4
+        int32_t model_len;       // 8
+        int32_t backend_len;     // 12
+        int32_t device_len;      // 16
+        int32_t batch_size;      // 20
+        int32_t num_inputs;      // 24
+        int32_t num_outputs;     // 28
+        int64_t total_input;     // 32
+        int64_t total_output;    // 40
+        int32_t dtype;           // 48
+        int32_t layout;          // 52
+        int32_t num_input_dims;  // 56
+        int32_t num_output_dims; // 60
+        int32_t layout_kind;     // 64 (0 = packed, 1 = uniform_chunks)
+        int32_t phy_count;       // 68
+        int32_t dl_count;        // 72
+        [4-byte alignment pad]   // 76
+        int64_t field_size;      // 80
+    } (Total: 88 bytes)
+
+    "=8i 2q 7i 4x q": 8 int32, 2 int64, 7 int32, 4 pad bytes, 1 int64 == 88 bytes.
+    """
+    (magic, version, model_len, backend_len, device_len, batch_size,
+     num_inputs, num_outputs, total_input, total_output, dtype, layout,
+     num_input_dims, num_output_dims, layout_kind, phy_count, dl_count,
+     field_size) = struct.unpack("=8i 2q 7i 4x q", header_buf)
+
+    if magic != 0x4D4C434D or version != 3:
+        return {'valid': False}
+    if layout_kind not in (0, 1):
+        print(f"[DL] ERROR: unsupported transport layout {layout_kind} "
+              "(valid: 0 = packed, 1 = uniform_chunks).", flush=True)
+        raise RuntimeError(f"Unknown PhyDLL transport layout {layout_kind}.")
+
+    return {
+        'valid': True,
+        'magic': magic,
+        'version': version,
+        'model_len': model_len,
+        'backend_len': backend_len,
+        'device_len': device_len,
+        'batch_size': batch_size,
+        'num_inputs': num_inputs,
+        'num_outputs': num_outputs,
+        'total_input': total_input,
+        'total_output': total_output,
+        'dtype': dtype,
+        'layout': layout,
+        'num_input_dims': num_input_dims,
+        'num_output_dims': num_output_dims,
+        'layout_kind': layout_kind,
+        'phy_count': phy_count,
+        'dl_count': dl_count,
+        'field_size': field_size,
     }
 
 def main():
     dll = None
     world_comm = MPI.COMM_WORLD
     try:
-        global torch
-        print("[DL] importing torch...", flush=True)
-        import torch
-        print("[DL] imported torch", flush=True)
-
         # Configure Torch threading
         intra_threads = int(os.environ.get("MLCOUPLING_INTRA_OP_THREADS", os.environ.get("SLURM_CPUS_PER_TASK", "-1")))
         inter_threads = int(os.environ.get("MLCOUPLING_INTER_OP_THREADS", "-1"))
@@ -168,10 +217,10 @@ def main():
         if inter_threads > 0:
             torch.set_num_interop_threads(inter_threads)
 
-        dl_count = int(os.environ.get("PHYDLL_DL_COUNT", "1"))
-
-        # Pair MAIA's initial world split. PhyDLL's dl initialization performs
-        # the second split, which must pair with MAIA's physical initialization.
+        dl_count = int(os.environ.get("PHYDLL_DL_FIELD_COUNT", os.environ.get("PHYDLL_DL_COUNT", "1")))
+        
+        # Match the original Python DL startup: participate in the MPMD split
+        # before entering PhyDLL's own internal MPI split.
         color = MPI.UNDEFINED
         print("[DL] Entering world_comm.Split(color=MPI.UNDEFINED)", flush=True)
         local_comm = world_comm.Split(color, world_comm.Get_rank())
@@ -210,6 +259,11 @@ def main():
         final_meta = None
         rank_batch_sizes = {}
         rank_field_sizes = {}
+        rank_total_input = {}
+        rank_total_output = {}
+        rank_layout_kind = {}
+        rank_phy_count = {}
+        rank_dl_count = {}
         
         # Receive metadata from each connected physical rank
         for source_rank in dests:
@@ -225,6 +279,54 @@ def main():
                 if p2p_meta.get('in_shapes') and len(p2p_meta['in_shapes']) > 0:
                     rank_batch_sizes[source_rank] = p2p_meta['in_shapes'][0][0]
                 rank_field_sizes[source_rank] = p2p_meta.get('field_size', 0)
+                rank_total_input[source_rank] = p2p_meta.get('total_input', 0)
+                rank_total_output[source_rank] = p2p_meta.get('total_output', 0)
+                rank_layout_kind[source_rank] = p2p_meta.get('layout_kind', 0)
+                rank_phy_count[source_rank] = p2p_meta.get('phy_count', 0)
+                rank_dl_count[source_rank] = p2p_meta.get('dl_count', 0)
+
+        # Resolve and validate the transport layout across all coupled ranks.
+        first_rank = dests[0]
+        uniform_chunks = rank_layout_kind.get(first_rank, 0) == 1
+        for source_rank in dests:
+            if rank_layout_kind.get(source_rank, 0) != rank_layout_kind.get(first_rank, 0):
+                print(f"[DL] ERROR: mixed transport layouts across coupled ranks "
+                      f"(rank {source_rank}: {rank_layout_kind.get(source_rank, 0)}, "
+                      f"rank {first_rank}: {rank_layout_kind.get(first_rank, 0)}).", file=sys.stderr, flush=True)
+                world_comm.Abort(1)
+            if uniform_chunks and rank_phy_count.get(source_rank, 0) != rank_phy_count.get(first_rank, 0):
+                print(f"[DL] ERROR: uniform_chunks requires identical PHY field counts across ranks "
+                      f"(rank {source_rank}: {rank_phy_count.get(source_rank, 0)}, "
+                      f"rank {first_rank}: {rank_phy_count.get(first_rank, 0)}).", file=sys.stderr, flush=True)
+                world_comm.Abort(1)
+
+        if uniform_chunks:
+            if dll.dl_count != final_meta.get('dl_count', 0):
+                print(f"[DL] ERROR: uniform_chunks provider expects dl_count={final_meta.get('dl_count', 0)} "
+                      f"but the client was launched with PHYDLL_DL_FIELD_COUNT={dll.dl_count}.", file=sys.stderr, flush=True)
+                world_comm.Abort(1)
+            if dll.phy_count != final_meta.get('phy_count', 0):
+                print(f"[DL] ERROR: uniform_chunks PHY field count mismatch: PhyDLL reports {dll.phy_count}, "
+                      f"provider sent {final_meta.get('phy_count', 0)}.", file=sys.stderr, flush=True)
+                world_comm.Abort(1)
+            # dll.size must equal the sum of per-rank per-field sizes.
+            expected_agg = sum(rank_field_sizes.get(r, 0) for r in dests)
+            if dll.size != expected_agg:
+                print(f"[DL] ERROR: uniform_chunks aggregated field size mismatch: PhyDLL reports {dll.size}, "
+                      f"expected sum of per-rank sizes = {expected_agg}.", file=sys.stderr, flush=True)
+                world_comm.Abort(1)
+            for source_rank in dests:
+                g_r = rank_field_sizes.get(source_rank, 0)
+                t_in = rank_total_input.get(source_rank, 0)
+                t_out = rank_total_output.get(source_rank, 0)
+                phy_c = rank_phy_count.get(source_rank, 0)
+                dl_c = rank_dl_count.get(source_rank, 0)
+                if t_in != phy_c * g_r or t_out != dl_c * g_r:
+                    print(f"[DL] ERROR: uniform_chunks invariant violated for rank {source_rank}: "
+                          f"total_input={t_in} != phy_count*field_size={phy_c}*{g_r}, "
+                          f"total_output={t_out} != dl_count*field_size={dl_c}*{g_r}.",
+                          file=sys.stderr, flush=True)
+                    world_comm.Abort(1)
 
         torch_device = torch.device('cpu')
         model = None
@@ -233,18 +335,40 @@ def main():
         frame_id = 0
         while dll.is_phy_signal():
             # Receive fields from PhyDLL
-            # With dl_count=1, pyphydll.recv() returns a dict with one entry
-            print(f"[DL {world_comm.rank}] Calling dll.recv()...", flush=True)
-            with scorep_region("py_recv"):
-                fields = dll.recv()
-            print(f"[DL {world_comm.rank}] Returned from dll.recv().", flush=True)
-            combined_data = fields.get("PHY-DATA", None)
-            if combined_data is None:
-                # Fallback
-                if fields:
-                    combined_data = next(iter(fields.values()))
-                else:
-                    combined_data = np.zeros(field_size)
+            if uniform_chunks:
+                # Bypass the dict: retrieve each field in core order via get_field().
+                # Labels are distinct (PHY-IN-###) so they cannot be stored in a dict
+                # without losing order; we use them for validation only.
+                print(f"[DL {world_comm.rank}] Calling dll.recv(only=True) (uniform_chunks)...", flush=True)
+                with scorep_region("py_recv"):
+                    dll.recv(only=True)
+                received = []
+                for i in range(dll.phy_count):
+                    field, label = dll.get_field()
+                    expected_label = f"PHY-IN-{i:03d}"
+                    if label != expected_label:
+                        print(f"[DL] ERROR: unexpected field label '{label}' at index {i} "
+                              f"(expected '{expected_label}').", file=sys.stderr, flush=True)
+                        world_comm.Abort(1)
+                    if field.shape[0] != dll.size:
+                        print(f"[DL] ERROR: field {i} has length {field.shape[0]}, "
+                              f"expected aggregated size {dll.size}.", file=sys.stderr, flush=True)
+                        world_comm.Abort(1)
+                    received.append(field)
+                combined_data = None
+            else:
+                # With dl_count=1, pyphydll.recv() returns a dict with one entry
+                print(f"[DL {world_comm.rank}] Calling dll.recv()...", flush=True)
+                with scorep_region("py_recv"):
+                    fields = dll.recv()
+                print(f"[DL {world_comm.rank}] Returned from dll.recv().", flush=True)
+                combined_data = fields.get("PHY-DATA", None)
+                if combined_data is None:
+                    # Fallback
+                    if fields:
+                        combined_data = next(iter(fields.values()))
+                    else:
+                        combined_data = np.zeros(field_size)
 
             # Load model if metadata was received (deferred load like C++ client)
             if meta_initialized and not model_loaded:
@@ -286,7 +410,8 @@ def main():
                 print(f"[PHYDLL:DL:PY] meta init model_path='{model_path}' total_input={total_input_size} total_output={total_output_size}", file=sys.stderr)
                 model_loaded = True
 
-            output = np.zeros(field_size, dtype=np.float64)
+            out_capacity = dll.size * dll.dl_count if uniform_chunks else field_size
+            output = np.zeros(out_capacity, dtype=np.float64)
             used_model = False
             
             if model_loaded and model is not None:
@@ -298,7 +423,6 @@ def main():
                         source_rank = dests[i]
                         batch_size += rank_batch_sizes.get(source_rank, 1)
 
-                    field_size_per_rank = len(combined_data) // max(1, ndest)
                     input_per_rank_used = total_input_size // batch_size
                     
                     # Check for dynamic shapes
@@ -314,18 +438,34 @@ def main():
                     
                     # Extract input features per sample (accounting for any rank padding)
                     input_flat = np.zeros(total_input_size, dtype=np.float32)
-                    offset_so_far = 0
-                    src_rank_start = 0
-                    for i in range(ndest):
-                        source_rank = dests[i]
-                        rank_batch = rank_batch_sizes.get(source_rank, 1)
-                        for s in range(rank_batch):
-                            src_start = src_rank_start + s * input_per_rank_used
-                            dest_start = (offset_so_far + s) * input_per_rank_used
-                            input_flat[dest_start : dest_start + input_per_rank_used] = \
-                                combined_data[src_start : src_start + input_per_rank_used]
-                        offset_so_far += rank_batch
-                        src_rank_start += rank_field_sizes.get(source_rank, 0)
+                    if uniform_chunks:
+                        # received[f] holds all rank segments for field f, in rank order.
+                        # Reconstruct the rank-major flattened input directly:
+                        #   input_flat[in_off[r] + f*g_r + b] = received[f][agg_off[r] + b]
+                        agg_offsets = [0] * (ndest + 1)
+                        in_offsets = [0] * (ndest + 1)
+                        for i in range(ndest):
+                            agg_offsets[i + 1] = agg_offsets[i] + rank_field_sizes.get(dests[i], 0)
+                            in_offsets[i + 1] = in_offsets[i] + rank_total_input.get(dests[i], 0)
+                        for i in range(ndest):
+                            g_r = rank_field_sizes.get(dests[i], 0)
+                            for f in range(dll.phy_count):
+                                src = agg_offsets[i]
+                                dst = in_offsets[i] + f * g_r
+                                input_flat[dst:dst + g_r] = received[f][src:src + g_r]
+                    else:
+                        offset_so_far = 0
+                        src_rank_start = 0
+                        for i in range(ndest):
+                            source_rank = dests[i]
+                            rank_batch = rank_batch_sizes.get(source_rank, 1)
+                            for s in range(rank_batch):
+                                src_start = src_rank_start + s * input_per_rank_used
+                                dest_start = (offset_so_far + s) * input_per_rank_used
+                                input_flat[dest_start : dest_start + input_per_rank_used] = \
+                                    combined_data[src_start : src_start + input_per_rank_used]
+                            offset_so_far += rank_batch
+                            src_rank_start += rank_field_sizes.get(source_rank, 0)
                     
                     input_tensor = torch.from_numpy(input_flat).reshape(batch_size, input_per_rank_used)
                     input_tensor = input_tensor.view(*actual_shape)
@@ -345,32 +485,64 @@ def main():
                             output_np = output_tensor.cpu().contiguous().numpy().flatten()
                             
                         # Scatter back to output buffer dynamically (matching C++ logic)
-                        outputs_per_rank_used = total_output_size // batch_size
-                        offset_so_far = 0
-                        dest_rank_start = 0
-                        for i in range(ndest):
-                            source_rank = dests[i]
-                            rank_batch = rank_batch_sizes.get(source_rank, 1)
-                            for s in range(rank_batch):
-                                dest_start = dest_rank_start + s * outputs_per_rank_used
-                                src_start = (offset_so_far + s) * outputs_per_rank_used
-                                output[dest_start : dest_start + outputs_per_rank_used] = \
-                                    output_np[src_start : src_start + outputs_per_rank_used]
-                            offset_so_far += rank_batch
-                            dest_rank_start += rank_field_sizes.get(source_rank, 0)
+                        if output_np.shape[0] != total_output_size:
+                            print(f"[PHYDLL:DL:PY] ERROR: model produced {output_np.shape[0]} elements "
+                                  f"but metadata declared {total_output_size}. Refusing to send.", file=sys.stderr, flush=True)
+                            world_comm.Abort(1)
+                        if uniform_chunks:
+                            # Build field-major wire layout:
+                            #   wire[f][agg_off[r] + b] = out_np[out_off[r] + f*g_r + b]
+                            agg_offsets = [0] * (ndest + 1)
+                            out_offsets = [0] * (ndest + 1)
+                            for i in range(ndest):
+                                agg_offsets[i + 1] = agg_offsets[i] + rank_field_sizes.get(dests[i], 0)
+                                out_offsets[i + 1] = out_offsets[i] + rank_total_output.get(dests[i], 0)
+                            wire = np.zeros((dll.dl_count, dll.size), dtype=np.float64)
+                            for i in range(ndest):
+                                g_r = rank_field_sizes.get(dests[i], 0)
+                                for f in range(dll.dl_count):
+                                    src = out_offsets[i] + f * g_r
+                                    dst = agg_offsets[i]
+                                    wire[f, dst:dst + g_r] = output_np[src:src + g_r]
+                            output = wire
+                        else:
+                            outputs_per_rank_used = total_output_size // batch_size
+                            offset_so_far = 0
+                            dest_rank_start = 0
+                            for i in range(ndest):
+                                source_rank = dests[i]
+                                rank_batch = rank_batch_sizes.get(source_rank, 1)
+                                for s in range(rank_batch):
+                                    dest_start = dest_rank_start + s * outputs_per_rank_used
+                                    src_start = (offset_so_far + s) * outputs_per_rank_used
+                                    output[dest_start : dest_start + outputs_per_rank_used] = \
+                                        output_np[src_start : src_start + outputs_per_rank_used]
+                                offset_so_far += rank_batch
+                                dest_rank_start += rank_field_sizes.get(source_rank, 0)
                         used_model = True
                     except Exception as e:
                         print(f"[PHYDLL:DL:PY] forward failed: {e}", file=sys.stderr)
                         world_comm.Abort(1)
             
             if not used_model:
-                # Fallback: negate inputs
-                size = min(len(combined_data), len(output))
-                output[:size] = -combined_data[:size]
+                if uniform_chunks:
+                    # No model: send zeros in the field-major layout.
+                    output = np.zeros((dll.dl_count, dll.size), dtype=np.float64)
+                else:
+                    # Fallback: negate inputs
+                    size = min(len(combined_data), len(output))
+                    output[:size] = -combined_data[:size]
                 
             # Send results back
             with scorep_region("py_send"):
-                dll.send({"DL-OUT": output})
+                if uniform_chunks:
+                    # Register every DL output field (labels repeat; a dict would
+                    # overwrite them, so use set_field directly).
+                    for f in range(dll.dl_count):
+                        dll.set_field(output[f], "DL-OUT")
+                    dll.send()
+                else:
+                    dll.send({"DL-OUT": output})
             frame_id += 1
 
     finally:
@@ -382,14 +554,8 @@ def main():
                 print(f"{prefix} Exited dll.finalize()", flush=True)
             except Exception as e:
                 print(f"[PHYDLL:DL:PY] dll.finalize() failed: {e}", file=sys.stderr)
-        
         prefix = f"[DL {world_comm.rank}]" if world_comm is not None else "[DL]"
-        if os.environ.get("PHYDLL_DL_SHUTDOWN_BARRIER", "0") == "1":
-            print(f"{prefix} entering global shutdown barrier...", flush=True)
-            world_comm.Barrier()
-            print(f"{prefix} passed barrier, finalizing MPI and returning...", flush=True)
-        else:
-            print(f"{prefix} skipping global shutdown barrier...", flush=True)
+        print(f"{prefix} main() returning", flush=True)
 
 if __name__ == "__main__":
     try:
@@ -406,7 +572,3 @@ if __name__ == "__main__":
             print("[DL] Entering MPI.Finalize()", flush=True)
             MPI.Finalize()
             print("[DL] Exited MPI.Finalize()", flush=True)
-        grace_seconds = float(os.environ.get("PHYDLL_DL_EXIT_GRACE_SECONDS", "5"))
-        if grace_seconds > 0:
-            import time
-            time.sleep(grace_seconds)

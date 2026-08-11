@@ -66,6 +66,8 @@ public:
     void send_output(const std::vector<double>& output);
 
     int field_size() const { return field_size_; }
+    int dl_count() const { return dl_count_; }
+    int phy_count() const { return phy_count_; }
 
 private:
     int dl_count_ = 1;

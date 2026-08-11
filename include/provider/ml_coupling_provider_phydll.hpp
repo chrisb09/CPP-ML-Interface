@@ -6,6 +6,7 @@
 #include "../data/ml_coupling_memory_layout.hpp"
 
 #include <algorithm>
+#include <cstddef>
 #include <cstdlib>
 #include <cstring>
 #include <iostream>
@@ -48,6 +49,7 @@ public:
                              std::string backend = "TORCH",
                              std::string device = "GPU",
                              int batch_size = 0,
+                             std::string transport_layout = "packed",
                              MLCouplingData<In> *input_after_preprocessing = nullptr,
                              MLCouplingData<Out> *output_before_postprocessing = nullptr)
                 : model_file(std::move(model_file)),
@@ -57,6 +59,19 @@ public:
                     input_after_preprocessing(input_after_preprocessing),
                     output_before_postprocessing(output_before_postprocessing)
     {
+        if (transport_layout == "uniform_chunks")
+        {
+            transport_layout_ = TransportLayout::UniformChunks;
+        }
+        else if (transport_layout == "packed")
+        {
+            transport_layout_ = TransportLayout::Packed;
+        }
+        else
+        {
+            guarantee(false, ("PhyDLL provider: unknown transport_layout '" + transport_layout +
+                                 "'. Supported values are 'packed' and 'uniform_chunks'.").c_str());
+        }
 #ifndef WITH_PHYDLL
         guarantee(false, "PhyDLL provider is not enabled. Please make sure WITH_PHYDLL is defined and the necessary dependencies are installed.");
 #else
@@ -147,15 +162,27 @@ public:
             scorep_phydll_metrics_initialized = true;
         }
         SCOREP_USER_METRIC_UINT64(bytes_sent_logical, sum_sizes(input_sizes_) * sizeof(float));
-        // PhyDLL transmits the registered fixed-size field, not just the useful input.
-        SCOREP_USER_METRIC_UINT64(bytes_sent_actual, static_cast<uint64_t>(field_size_) * sizeof(double));
+        // PhyDLL transmits the registered fixed-size field(s), not just the useful input.
+        SCOREP_USER_METRIC_UINT64(bytes_sent_actual, static_cast<uint64_t>(field_size_) * static_cast<uint64_t>(phy_field_count_) * sizeof(double));
         SCOREP_USER_REGION_BEGIN(handle_phydll_send, "phydll_send", SCOREP_USER_REGION_TYPE_COMMON)
         }
 #endif
-        double *data_ptr = data_buffer_.data();
-        char data_label[] = "PHY-DATA";
-
-        phydll_set_field(&data_ptr, data_label);
+        if (transport_layout_ == TransportLayout::UniformChunks)
+        {
+            char chunk_label[16] = {0};
+            for (int i = 0; i < phy_field_count_; ++i)
+            {
+                double *data_ptr = chunk_buffers_[static_cast<size_t>(i)].data();
+                std::snprintf(chunk_label, sizeof(chunk_label), "PHY-IN-%03d", i);
+                phydll_set_field(&data_ptr, chunk_label);
+            }
+        }
+        else
+        {
+            double *data_ptr = data_buffer_.data();
+            char data_label[] = "PHY-DATA";
+            phydll_set_field(&data_ptr, data_label);
+        }
         phydll_send();
 #ifdef USE_SCOREP
         if (profile_details) {
@@ -167,28 +194,56 @@ public:
 
         phydll_recv();
 
-        double *recv_ptr = nullptr;
-        char recv_label[64] = {0};
-        for (int i = 0; i < kFieldCount; ++i) {
-            recv_ptr = nullptr;
-            std::memset(recv_label, 0, sizeof(recv_label));
-            phydll_get_field(&recv_ptr, recv_label);
-            if (std::string(recv_label) == "DL-OUT") {
-                const size_t per_rank = static_cast<size_t>(sum_sizes(output_sizes_));
-                if (recv_ptr && per_rank > 0) {
-                    std::copy(recv_ptr, recv_ptr + per_rank, data_buffer_.begin());
+        if (transport_layout_ == TransportLayout::UniformChunks)
+        {
+            bool found_output = false;
+            for (int i = 0; i < dl_field_count_; ++i)
+            {
+                double *recv_ptr = nullptr;
+                char recv_label[64] = {0};
+                phydll_get_field(&recv_ptr, recv_label);
+                if (recv_ptr)
+                {
+                    found_output = true;
+                    const size_t dst = static_cast<size_t>(i) * static_cast<size_t>(field_size_);
+                    std::copy(recv_ptr, recv_ptr + static_cast<size_t>(field_size_),
+                              recv_reassembly_.begin() + static_cast<std::ptrdiff_t>(dst));
+                    free(recv_ptr);
                 }
             }
-            if (recv_ptr) {
-                free(recv_ptr);
+            guarantee(found_output, "PhyDLL provider received no DL output fields.");
+        }
+        else
+        {
+            bool found_output = false;
+            for (int i = 0; i < dl_field_count_; ++i)
+            {
+                double *recv_ptr = nullptr;
+                char recv_label[64] = {0};
+                std::memset(recv_label, 0, sizeof(recv_label));
+                phydll_get_field(&recv_ptr, recv_label);
+                if (std::string(recv_label) == "DL-OUT")
+                {
+                    const size_t per_rank = static_cast<size_t>(sum_sizes(output_sizes_));
+                    if (recv_ptr && per_rank > 0)
+                    {
+                        std::copy(recv_ptr, recv_ptr + per_rank, data_buffer_.begin());
+                    }
+                    found_output = true;
+                }
+                if (recv_ptr)
+                {
+                    free(recv_ptr);
+                }
             }
+            guarantee(found_output, "PhyDLL provider received no DL-OUT field.");
         }
 #ifdef USE_SCOREP
         if (profile_details) {
         SCOREP_USER_REGION_END(handle_phydll_recv)
         SCOREP_USER_METRIC_UINT64(bytes_recv_logical, sum_sizes(output_sizes_) * sizeof(float));
-        // The response uses the same fixed-size field and includes output padding.
-        SCOREP_USER_METRIC_UINT64(bytes_recv_actual, static_cast<uint64_t>(field_size_) * sizeof(double));
+        // The response uses the same fixed-size field(s) and includes output padding in packed mode.
+        SCOREP_USER_METRIC_UINT64(bytes_recv_actual, static_cast<uint64_t>(field_size_) * static_cast<uint64_t>(dl_field_count_) * sizeof(double));
 
         SCOREP_USER_REGION_BEGIN(handle_phydll_unpack, "phydll_unpack", SCOREP_USER_REGION_TYPE_COMMON)
         }
@@ -212,19 +267,29 @@ private:
         Data = 2
     };
 
+    enum class TransportLayout : int
+    {
+        Packed = 0,
+        UniformChunks = 1
+    };
+
     static constexpr double kMetaMagic = 424242.0;
     static constexpr int kMetaVersion = 1;
-    static constexpr int kFieldCount = 1; // PHY-DATA (Metadata is OOB)
     static constexpr int kHeaderFixedCount = 14;
     static constexpr int kBcastMetaMagic = 0x4D4C434D; // "MLCM"
-    static constexpr int kBcastMetaVersion = 2;
+    static constexpr int kBcastMetaVersion = 3;
+    static constexpr int kMaxFieldCount = 4096;
 
     std::string model_file;
     std::string backend;
     std::string device;
     int batch_size = 0;
 
-    int field_size_ = 0;
+    TransportLayout transport_layout_ = TransportLayout::Packed;
+
+    int field_size_ = 0;          // per-field per-source size in doubles
+    int phy_field_count_ = 1;     // fields this PHY rank sends
+    int dl_field_count_ = 1;      // fields this PHY rank expects back
     bool initialized_ = false;
     bool phydll_initialized_ = false;
     bool metadata_sent_ = false;
@@ -237,7 +302,9 @@ private:
     std::vector<int64_t> output_sizes_;
 
     std::vector<double> meta_buffer_;
-    std::vector<double> data_buffer_;
+    std::vector<double> data_buffer_;                  // packed-mode transport buffer
+    std::vector<std::vector<double>> chunk_buffers_;   // uniform-chunk input fields
+    std::vector<double> recv_reassembly_;              // uniform-chunk output reassembly
 
     struct BcastMetaHeader
     {
@@ -255,6 +322,9 @@ private:
         int32_t layout = 0;
         int32_t num_input_dims = 0;
         int32_t num_output_dims = 0;
+        int32_t layout_kind = 0;
+        int32_t phy_count = 0;
+        int32_t dl_count = 0;
         int64_t field_size = 0;
     };
 
@@ -320,6 +390,9 @@ private:
 
         header.num_input_dims = static_cast<int32_t>(input_dims_.size());
         header.num_output_dims = static_cast<int32_t>(output_dims_.size());
+        header.layout_kind = static_cast<int32_t>(transport_layout_);
+        header.phy_count = static_cast<int32_t>(phy_field_count_);
+        header.dl_count = static_cast<int32_t>(dl_field_count_);
         header.field_size = static_cast<int64_t>(field_size_);
 
         const size_t sizes_bytes = (input_dims_.size() + output_dims_.size()) * sizeof(int64_t);
@@ -355,10 +428,10 @@ private:
         for (int i = 0; i < ndest; ++i)
         {
             int dl_rank = dests[i];
-            PMPI_Send(&header, sizeof(header), MPI_BYTE, dl_rank, world_rank, MPI_COMM_WORLD);
+            MPI_Send(&header, sizeof(header), MPI_BYTE, dl_rank, world_rank, MPI_COMM_WORLD);
             if (!payload.empty())
             {
-                PMPI_Send(payload.data(), static_cast<int>(payload.size()), MPI_BYTE, dl_rank, world_rank, MPI_COMM_WORLD);
+                MPI_Send(payload.data(), static_cast<int>(payload.size()), MPI_BYTE, dl_rank, world_rank, MPI_COMM_WORLD);
             }
         }
 
@@ -382,19 +455,58 @@ private:
         const int64_t total_input = sum_sizes(input_sizes_);
         const int64_t total_output = sum_sizes(output_sizes_);
         const int header_len = compute_header_content_len();
-        field_size_ = static_cast<int>(std::max<int64_t>({total_input, total_output, header_len}));
+
+        if (transport_layout_ == TransportLayout::UniformChunks)
+        {
+            guarantee(total_input > 0, "PhyDLL uniform_chunks layout requires non-empty input tensors.");
+            guarantee(total_output > 0, "PhyDLL uniform_chunks layout requires non-empty output tensors.");
+
+            const int64_t g = static_cast<int64_t>(std::gcd(total_input, total_output));
+            guarantee(g > 0, "PhyDLL uniform_chunks layout: gcd of input/output element counts must be positive.");
+
+            phy_field_count_ = static_cast<int>(total_input / g);
+            dl_field_count_ = static_cast<int>(total_output / g);
+            field_size_ = static_cast<int>(g);
+            guarantee(phy_field_count_ >= 1 && dl_field_count_ >= 1,
+                      "PhyDLL uniform_chunks layout derived a non-positive field count.");
+            guarantee(phy_field_count_ <= kMaxFieldCount && dl_field_count_ <= kMaxFieldCount,
+                      ("PhyDLL uniform_chunks layout derived more than " + std::to_string(kMaxFieldCount) +
+                          " fields (" + std::to_string(phy_field_count_) + "/" + std::to_string(dl_field_count_) +
+                          "). Increase kMaxFieldCount or use the packed layout.").c_str());
+
+            std::cerr << "[PHYDLL:PHY] uniform_chunks layout: total_input=" << total_input
+                      << " total_output=" << total_output << " gcd=" << g
+                      << " phy_count=" << phy_field_count_ << " dl_count=" << dl_field_count_ << std::endl;
+        }
+        else
+        {
+            field_size_ = static_cast<int>(std::max<int64_t>({total_input, total_output, header_len}));
+            phy_field_count_ = 1;
+            dl_field_count_ = 1;
+        }
 
         initialize_phydll_if_needed();
         phydll_opt_enable_cpl_loop();
-        std::cerr << "[PHYDLL:PHY] before phydll_define_phy field_size=" << field_size_ << std::endl;
-        phydll_define_phy(kFieldCount, field_size_);
+        std::cerr << "[PHYDLL:PHY] before phydll_define_phy count=" << phy_field_count_
+                  << " field_size=" << field_size_ << std::endl;
+        phydll_define_phy(phy_field_count_, field_size_);
         std::cerr << "[PHYDLL:PHY] after phydll_define_phy" << std::endl;
 
         broadcast_metadata_once();
 
         meta_buffer_.assign(static_cast<size_t>(field_size_), 0.0);
-        data_buffer_.assign(static_cast<size_t>(field_size_), 0.0);
-        
+        if (transport_layout_ == TransportLayout::UniformChunks)
+        {
+            chunk_buffers_.assign(static_cast<size_t>(phy_field_count_),
+                                  std::vector<double>(static_cast<size_t>(field_size_), 0.0));
+            recv_reassembly_.assign(static_cast<size_t>(total_output), 0.0);
+            data_buffer_.assign(static_cast<size_t>(field_size_), 0.0);
+        }
+        else
+        {
+            data_buffer_.assign(static_cast<size_t>(field_size_), 0.0);
+        }
+
         initialized_ = true;
 #endif
     }
@@ -484,6 +596,40 @@ private:
 
     void prepare_data_buffer()
     {
+        if (transport_layout_ == TransportLayout::UniformChunks)
+        {
+            for (auto &chunk : chunk_buffers_)
+            {
+                std::fill(chunk.begin(), chunk.end(), 0.0);
+            }
+            size_t cursor = 0;
+            for (size_t i = 0; i < input_after_preprocessing->size(); ++i)
+            {
+                const auto &tensor = (*input_after_preprocessing)[i];
+                if (tensor.is_contiguous())
+                {
+                    const In *ptr = static_cast<const In *>(tensor.root());
+                    for (size_t j = 0; j < tensor.numel(); ++j)
+                    {
+                        chunk_buffers_[cursor / static_cast<size_t>(field_size_)][cursor % static_cast<size_t>(field_size_)] =
+                            static_cast<double>(ptr[j]);
+                        ++cursor;
+                    }
+                }
+                else
+                {
+                    const auto flat = tensor.as_flat_vector();
+                    for (const auto value : flat)
+                    {
+                        chunk_buffers_[cursor / static_cast<size_t>(field_size_)][cursor % static_cast<size_t>(field_size_)] =
+                            static_cast<double>(value);
+                        ++cursor;
+                    }
+                }
+            }
+            return;
+        }
+
         std::fill(data_buffer_.begin(), data_buffer_.end(), 0.0);
         size_t cursor = 0;
         for (size_t i = 0; i < input_after_preprocessing->size(); ++i)
@@ -510,6 +656,8 @@ private:
 
     void unpack_output_buffer()
     {
+        const std::vector<double> &src =
+            (transport_layout_ == TransportLayout::UniformChunks) ? recv_reassembly_ : data_buffer_;
         size_t cursor = 0;
         for (size_t i = 0; i < output_before_postprocessing->size(); ++i)
         {
@@ -519,14 +667,14 @@ private:
                 Out *ptr = static_cast<Out *>(tensor.root());
                 for (size_t j = 0; j < tensor.numel(); ++j)
                 {
-                    ptr[j] = static_cast<Out>(data_buffer_[cursor++]);
+                    ptr[j] = static_cast<Out>(src[cursor++]);
                 }
             }
             else
             {
                 for (size_t j = 0; j < tensor.numel(); ++j)
                 {
-                    tensor.set_linear(j, static_cast<Out>(data_buffer_[cursor++]));
+                    tensor.set_linear(j, static_cast<Out>(src[cursor++]));
                 }
             }
         }

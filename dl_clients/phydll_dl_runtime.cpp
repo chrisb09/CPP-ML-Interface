@@ -197,7 +197,12 @@ void DlRuntime::receive_fields() {
         std::memset(label, 0, sizeof(label));
         phydll_get_field(&buffer_ptr, label);
 
-        if (std::string(label) == "PHY-DATA") {
+        // Accept the packed-mode label ("PHY-DATA") and the uniform_chunks
+        // labels ("PHY-IN-###"). Metadata travels out-of-band, so every
+        // received field is data.
+        const bool is_data_field = std::string(label) == "PHY-DATA" ||
+                                   std::strncmp(label, "PHY-IN-", 7) == 0;
+        if (buffer_ptr && is_data_field) {
             combined_data_.insert(combined_data_.end(), buffer_ptr, buffer_ptr + field_size_);
         }
         

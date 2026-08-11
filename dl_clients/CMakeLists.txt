@@ -63,6 +63,24 @@ if(MPI_FOUND)
     target_link_libraries(phydll_dl_client PRIVATE MPI::MPI_CXX)
 endif()
 
+# MPMD regression harness: 2 solver ranks + 1 DL rank. Links the full
+# CPP-ML-Interface library so the PhyDLL provider template is instantiated.
+add_executable(phydll_phy_test
+    ../test/phydll_phy_test.cpp
+)
+
+target_include_directories(phydll_phy_test PRIVATE
+    ${CPP_MODULE_DIR}/include
+    ${CPP_MODULE_DIR}/build
+    ${PHYDLL_BUILD_DIR}/include
+)
+target_link_directories(phydll_phy_test PRIVATE
+    ${PHYDLL_BUILD_DIR}/lib
+    ${CPP_MODULE_DIR}/build
+)
+target_link_libraries(phydll_phy_test PRIVATE phydll cpp_ml_interface_library MPI::MPI_CXX)
+target_compile_definitions(phydll_phy_test PRIVATE WITH_PHYDLL MPI_FOUND)
+
 if(WITH_SCOREP)
     list(APPEND CMAKE_MODULE_PATH "${CPP_MODULE_DIR}/extern/AIxeleratorService/cmake")
     find_package(Scorep REQUIRED)
