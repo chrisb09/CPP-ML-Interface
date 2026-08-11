@@ -23,3 +23,17 @@ tmp/
 build-cpp-ml-interface.*.err
 build-cpp-ml-interface.*.out
 phydll-*.log
+
+# Diagnostic build directories
+build_diag_noscorep/
+build_diag_scorep/
+build_diag_*/
+
+# PhyDLL MPMD regression test artifacts
+test/phydll_mpmd/phydll_mpmd_test_*.log
+test/phydll_mpmd/phydll_mpmd_test_*.err
+test/phydll_mpmd/phydll-*.log
+test/phydll_mpmd/phydll_mpmd.conf
+test/phydll_mpmd/scorep-*/
+test/phydll_mpmd/scorep-failed-*/
+test/phydll_mpmd/core.*

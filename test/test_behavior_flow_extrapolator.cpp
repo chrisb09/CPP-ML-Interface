@@ -380,6 +380,72 @@ static void test_end_of_simulation() {
 }
 
 // ---------------------------------------------------------------------------
+// Test 6: Cumulative-delta regression — effective_global_step_ tracking
+// ---------------------------------------------------------------------------
+// Reproduces the MMCP artifact bug: without effective_global_step_ the 3rd
+// inference cycle computes next_global ≈ 30 instead of ~101, causing a
+// spurious HDF-unsafe shift.
+//
+// Parameters: interval=5, coupled=5, increment=12, hdf=50, total=300,
+//             scaling=1, fw=2 → delta=24, start=5, offset=10
+// Derived timing (correct):
+//   Inference 1: logical=5,  eff_global=15  → next eff_global=44 → unsafe (44%50=44 ≥ 26)
+//                → delay=7 → next_inference_logical=17
+//   Inference 2: logical=17, eff_global=51  → next eff_global=80 → unsafe (80%50=30 ≥ 26)
+//                → delay=21 → next_inference_logical=43
+//   Inference 3: logical=43, eff_global=101 → next eff_global=130 → unsafe (130%50=30 ≥ 26)
+//                → delay=21 → next_inference_logical=69
+//
+// The old (buggy) code used next_logical + global_step_offset without
+// tracking cumulative jumps, so it computed next_global≈30 at cycle 3
+// and applied the wrong delay.
+
+static void test_cumulative_delta_regression() {
+    // artifact params: interval=5, coupled=5, increment=12, hdf=50,
+    //                  total=300, scaling=1, fw=2, stride=1, start=5, offset=10
+    MLCouplingBehaviorFlowExtrapolator beh(5, 5, 12, 50, 300, 1.0, 2, 1, 5, 10);
+
+    // Expected inference logical steps derived from simulation of effective_global_step_.
+    // These are the only calls on which should_perform_inference() must return true.
+    const long long int expected_inf[] = {5, 17, 43, 69, 95};
+    const int n_expected = 5;
+    int inf_idx = 0;
+
+    bool ok = true;
+    for (int call = 1; call <= 110 && ok; ++call) {
+        bool send = beh.should_send_data();
+        bool inf  = beh.should_perform_inference();
+
+        if (inf) {
+            if (inf_idx >= n_expected) {
+                report(false, ("cumulative: unexpected extra inference at call "
+                               + std::to_string(call)).c_str());
+                ok = false;
+                break;
+            }
+            if (call != expected_inf[inf_idx]) {
+                report(false, ("cumulative: inference " + std::to_string(inf_idx + 1)
+                               + " expected at call " + std::to_string(expected_inf[inf_idx])
+                               + " but fired at call " + std::to_string(call)).c_str());
+                ok = false;
+                break;
+            }
+            ++inf_idx;
+        }
+    }
+
+    if (ok) {
+        if (inf_idx != n_expected) {
+            report(false, ("cumulative: only " + std::to_string(inf_idx)
+                           + " of " + std::to_string(n_expected)
+                           + " expected inferences fired").c_str());
+        } else {
+            report(true, "cumulative: all 5 inferences at correct logical steps (5,17,43,69,95 via eff_global)");
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Main
 // ---------------------------------------------------------------------------
 
@@ -390,6 +456,7 @@ int main() {
     test_global_step_offset();
     test_restart_hdf_timing_after_jumps();
     test_end_of_simulation();
+    test_cumulative_delta_regression();
 
     if (g_any_failure) {
         std::cerr << "\nSome tests FAILED.\n";
