@@ -12,6 +12,12 @@ error_separate = false
 #model_backend = "TORCH"
 #model_path = "/hpcwork/ro092286/smartsim/mini_app/train_models/#best_model_field_jit_watercnn.pt"
 #model_name = "watercnn"
+#
+#class = "Aixelerator"
+#model_file = "/path/to/model.pt"
+#batchsize = 1
+#communication_mode = "collective"  # "collective" (default) or "pipelined"
+#enable_hybrid = false
 class = "Dummy"
 
 

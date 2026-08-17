@@ -212,9 +212,14 @@ The different providers supported by this interface employ varying strategies fo
 
 | Provider | Strategy | Execution Model | Parallelism Control |
 | :--- | :--- | :--- | :--- |
-| **AIxelerator** | Per-rank | In-process; one model instance inside every simulation rank. | Framework-level (OpenMP/MKL) |
+| **AIxelerator** | Per-rank / Controller | In-process GPU/CPU inference; `communication_mode = "collective"` (default gather/scatter) or `"pipelined"` (P2P credit exchange with CUDA range pipelining). | Framework-level (OpenMP/MKL / CUDA streams) |
 | **SmartSim** | Per-node | Remote; one model in an external Redis database serves many simulation ranks. | Managed by RedisAI thread pool |
 | **PhyDLL** | Batched MPMD | Separate MPI ranks; one DL rank aggregates data from multiple simulation ranks into a single batch. | Explicitly configurable via environment variables |
+
+### AIxelerator Communication Modes
+In `[provider]` config:
+- `communication_mode = "collective"` (default): Standard collective MPI gather/scatter exchange.
+- `communication_mode = "pipelined"`: Overlapped P2P credit-based exchange with multi-stream CUDA range-pipelined Torch inference on the GPU controller. Requires `MPI_THREAD_MULTIPLE` for asynchronous background progress; automatically falls back to synchronous progress polling when running under `MPI_THREAD_SINGLE`/`MPI_THREAD_FUNNELED`.
 
 ### PhyDLL Threading Configuration
 
