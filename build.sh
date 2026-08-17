@@ -63,7 +63,7 @@ else
     export CC=gcc
     export CXX=g++
     scorep_flag="-DWITH_SCOREP=OFF"
-    aix_use_prebuilt="${AIX_USE_PREBUILT:-OFF}"
+    aix_use_prebuilt="${AIX_USE_PREBUILT:-ON}"
 fi
 unset LD # Remove LD if set by install.sh to prevent CMake compiler checks from failing
 
@@ -78,6 +78,7 @@ cmake -S . -B build \
 	-DCUDAToolkit_ROOT="$CUDA_ROOT" \
 	-DCMAKE_CXX_FLAGS="-I$CUDA_ROOT/include -g -O0" \
 	-DUSE_PYTHON_TORCH_CMAKE_PREFIX=OFF \
+	-DAIX_SKIP_VENV_CREATION=ON \
 	-DTorch_DIR="" \
 	-DTORCH_VERSION="2.4.0" \
 	-DTORCH_CUDA_ARCH_LIST="9.0" \

@@ -36,11 +36,17 @@ CUDA_ROOT_DIR="${CUDA_ROOT:-/cvmfs/software.hpc.rwth.de/Linux/RH9/x86_64/intel/s
 # client never calls into the CUDA driver because device=CPU.
 export LD_LIBRARY_PATH="${PROJECT_ROOT}/extern/phydll/build/lib:${CUDA_ROOT_DIR}/lib64:${CUDA_ROOT_DIR}/lib/stubs:${LD_LIBRARY_PATH}"
 
+mkdir -p "${PROJECT_ROOT}/test/phydll_mpmd/models"
+MODEL_DIR="${PROJECT_ROOT}/test/phydll_mpmd/models"
+if [[ ! -f "${MODEL_DIR}/model_18to1.pt" || ! -f "${MODEL_DIR}/model_1to18.pt" ]]; then
+    python3 "${PROJECT_ROOT}/scripts/create_phydll_asym_models.py" "${MODEL_DIR}"
+fi
+
 MODEL=""
 if [[ "${MODE}" == "18to1" ]]; then
-    MODEL="${PROJECT_ROOT}/test/phydll_mpmd/models/model_18to1.pt"
+    MODEL="${MODEL_DIR}/model_18to1.pt"
 else
-    MODEL="${PROJECT_ROOT}/test/phydll_mpmd/models/model_1to18.pt"
+    MODEL="${MODEL_DIR}/model_1to18.pt"
 fi
 PHY_BIN="${PROJECT_ROOT}/build/dl_clients/phydll_phy_test"
 if [[ "${PHYDLL_TEST_DL_PYTHON:-0}" == "1" ]]; then

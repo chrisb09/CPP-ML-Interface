@@ -13,7 +13,11 @@
 #endif
 
 #ifdef USE_SCOREP
+#if __has_include(<scorep/SCOREP_User.h>)
 #include <scorep/SCOREP_User.h>
+#elif __has_include(<SCOREP_User.h>)
+#include <SCOREP_User.h>
+#endif
 SCOREP_USER_REGION_DEFINE(handle_dl_input_unpack);
 SCOREP_USER_REGION_DEFINE(handle_dl_output_allocate);
 SCOREP_USER_REGION_DEFINE(handle_dl_input_allocate);

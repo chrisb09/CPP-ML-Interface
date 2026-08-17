@@ -37,3 +37,13 @@ test/phydll_mpmd/phydll_mpmd.conf
 test/phydll_mpmd/scorep-*/
 test/phydll_mpmd/scorep-failed-*/
 test/phydll_mpmd/core.*
+test/phydll_mpmd/models/*.pt
+phydll_mpmd.conf
+
+# Score-P profiling measurements
+scorep-*/
+scorep-failed-*/
+scorep-measurement-*/
+
+# Local dependency symlinks
+extern/AIxeleratorService-pipelined

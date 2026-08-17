@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 import os
 import sys
+import time
 print("[DL] Starting Python DL Client...", flush=True)
 import struct
 import numpy as np
@@ -554,6 +555,16 @@ def main():
                 print(f"{prefix} Exited dll.finalize()", flush=True)
             except Exception as e:
                 print(f"[PHYDLL:DL:PY] dll.finalize() failed: {e}", file=sys.stderr)
+        # Keep this MPMD DL rank alive until every solver rank has destroyed its
+        # PhyDLL provider and reached teardown, mirroring the C++ DL client and
+        # the solver-side barrier in terrain_solver.cpp. Without this, srun aborts
+        # the whole hetjob step once the DL task exits ahead of the solver tasks.
+        if os.environ.get("PHYDLL_MPMD_SHUTDOWN_BARRIER", "0") == "1" and not MPI.Is_finalized():
+            prefix = f"[DL {world_comm.rank}]" if world_comm is not None else "[DL]"
+            print(f"{prefix} waiting for solver teardown (PHYDLL_MPMD_SHUTDOWN_BARRIER=1)", flush=True)
+            world_comm.Barrier()
+            print(f"{prefix} solver teardown barrier complete", flush=True)
+            time.sleep(5)
         prefix = f"[DL {world_comm.rank}]" if world_comm is not None else "[DL]"
         print(f"{prefix} main() returning", flush=True)
 

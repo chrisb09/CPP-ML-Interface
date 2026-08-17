@@ -49,7 +49,7 @@ public:
                              std::string backend = "TORCH",
                              std::string device = "GPU",
                              int batch_size = 0,
-                             std::string transport_layout = "packed",
+                             std::string transport_layout = "auto",
                              MLCouplingData<In> *input_after_preprocessing = nullptr,
                              MLCouplingData<Out> *output_before_postprocessing = nullptr)
                 : model_file(std::move(model_file)),
@@ -59,18 +59,22 @@ public:
                     input_after_preprocessing(input_after_preprocessing),
                     output_before_postprocessing(output_before_postprocessing)
     {
-        if (transport_layout == "uniform_chunks")
+        if (transport_layout == "auto" || transport_layout.empty())
         {
-            transport_layout_ = TransportLayout::UniformChunks;
+            layout_config_ = TransportLayoutConfig::Auto;
+        }
+        else if (transport_layout == "uniform_chunks")
+        {
+            layout_config_ = TransportLayoutConfig::UniformChunks;
         }
         else if (transport_layout == "packed")
         {
-            transport_layout_ = TransportLayout::Packed;
+            layout_config_ = TransportLayoutConfig::Packed;
         }
         else
         {
             guarantee(false, ("PhyDLL provider: unknown transport_layout '" + transport_layout +
-                                 "'. Supported values are 'packed' and 'uniform_chunks'.").c_str());
+                                 "'. Supported values are 'auto', 'uniform_chunks', and 'packed'.").c_str());
         }
 #ifndef WITH_PHYDLL
         guarantee(false, "PhyDLL provider is not enabled. Please make sure WITH_PHYDLL is defined and the necessary dependencies are installed.");
@@ -267,6 +271,13 @@ private:
         Data = 2
     };
 
+    enum class TransportLayoutConfig : int
+    {
+        Auto = 0,
+        Packed = 1,
+        UniformChunks = 2
+    };
+
     enum class TransportLayout : int
     {
         Packed = 0,
@@ -285,6 +296,7 @@ private:
     std::string device;
     int batch_size = 0;
 
+    TransportLayoutConfig layout_config_ = TransportLayoutConfig::Auto;
     TransportLayout transport_layout_ = TransportLayout::Packed;
 
     int field_size_ = 0;          // per-field per-source size in doubles
@@ -327,6 +339,8 @@ private:
         int32_t dl_count = 0;
         int64_t field_size = 0;
     };
+    static_assert(sizeof(BcastMetaHeader) == 88,
+                  "BcastMetaHeader size must be exactly 88 bytes to match dl_client wire protocol");
 
     std::vector<int64_t> input_dims_;
     std::vector<int64_t> output_dims_;
@@ -456,7 +470,7 @@ private:
         const int64_t total_output = sum_sizes(output_sizes_);
         const int header_len = compute_header_content_len();
 
-        if (transport_layout_ == TransportLayout::UniformChunks)
+        if (layout_config_ == TransportLayoutConfig::UniformChunks)
         {
             guarantee(total_input > 0, "PhyDLL uniform_chunks layout requires non-empty input tensors.");
             guarantee(total_output > 0, "PhyDLL uniform_chunks layout requires non-empty output tensors.");
@@ -474,15 +488,50 @@ private:
                           " fields (" + std::to_string(phy_field_count_) + "/" + std::to_string(dl_field_count_) +
                           "). Increase kMaxFieldCount or use the packed layout.").c_str());
 
+            transport_layout_ = TransportLayout::UniformChunks;
             std::cerr << "[PHYDLL:PHY] uniform_chunks layout: total_input=" << total_input
                       << " total_output=" << total_output << " gcd=" << g
                       << " phy_count=" << phy_field_count_ << " dl_count=" << dl_field_count_ << std::endl;
+        }
+        else if (layout_config_ == TransportLayoutConfig::Auto)
+        {
+            bool can_uniform = false;
+            if (total_input > 0 && total_output > 0)
+            {
+                const int64_t g = static_cast<int64_t>(std::gcd(total_input, total_output));
+                if (g > 0)
+                {
+                    const int64_t p_count = total_input / g;
+                    const int64_t d_count = total_output / g;
+                    if (p_count >= 1 && d_count >= 1 && p_count <= kMaxFieldCount && d_count <= kMaxFieldCount)
+                    {
+                        phy_field_count_ = static_cast<int>(p_count);
+                        dl_field_count_ = static_cast<int>(d_count);
+                        field_size_ = static_cast<int>(g);
+                        transport_layout_ = TransportLayout::UniformChunks;
+                        can_uniform = true;
+                        std::cerr << "[PHYDLL:PHY] auto layout selected uniform_chunks: total_input=" << total_input
+                                  << " total_output=" << total_output << " gcd=" << g
+                                  << " phy_count=" << phy_field_count_ << " dl_count=" << dl_field_count_ << std::endl;
+                    }
+                }
+            }
+            if (!can_uniform)
+            {
+                field_size_ = static_cast<int>(std::max<int64_t>({total_input, total_output, header_len}));
+                phy_field_count_ = 1;
+                dl_field_count_ = 1;
+                transport_layout_ = TransportLayout::Packed;
+                std::cerr << "[PHYDLL:PHY] auto layout falling back to packed: total_input=" << total_input
+                          << " total_output=" << total_output << " field_size=" << field_size_ << std::endl;
+            }
         }
         else
         {
             field_size_ = static_cast<int>(std::max<int64_t>({total_input, total_output, header_len}));
             phy_field_count_ = 1;
             dl_field_count_ = 1;
+            transport_layout_ = TransportLayout::Packed;
         }
 
         initialize_phydll_if_needed();

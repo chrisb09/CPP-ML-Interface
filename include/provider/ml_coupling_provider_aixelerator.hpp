@@ -1,7 +1,10 @@
 #pragma once
 
+#include <algorithm>
+#include <cctype>
 #include <memory>
 #include <optional>
+#include <stdexcept>
 #include <string>
 #include <vector>
 #include <mpi.h>
@@ -45,6 +48,26 @@ public:
     MPI_Comm app_comm;
     bool enable_hybrid;
     std::optional<float> host_fraction;
+    std::string communication_mode;
+
+#ifdef WITH_AIX
+    static CommunicationMode parse_communication_mode(const std::string &mode_str)
+    {
+        std::string lower = mode_str;
+        std::transform(lower.begin(), lower.end(), lower.begin(),
+                       [](unsigned char c) { return std::tolower(c); });
+        if (lower == "collective" || lower == "default" || lower.empty())
+        {
+            return CommunicationMode::Collective;
+        }
+        if (lower == "pipelined" || lower == "p2p")
+        {
+            return CommunicationMode::Pipelined;
+        }
+        throw std::invalid_argument("Unknown AIxelerator communication_mode: '" + mode_str +
+                                    "'. Supported values: 'collective', 'pipelined'.");
+    }
+#endif
 
     MLCouplingLibraryAixelerator(std::string model_file,
                                   int batchsize = 1,
@@ -52,12 +75,14 @@ public:
                                   bool enable_hybrid = false,
                                   std::optional<float> host_fraction = std::nullopt,
                                   MLCouplingData<In> *input_after_preprocessing = nullptr,
-                                  MLCouplingData<Out> *output_before_postprocessing = nullptr)
+                                  MLCouplingData<Out> *output_before_postprocessing = nullptr,
+                                  std::string communication_mode = "collective")
         : model_file(std::move(model_file)),
           batchsize(batchsize),
           app_comm(app_comm),
           enable_hybrid(enable_hybrid),
           host_fraction(host_fraction),
+          communication_mode(std::move(communication_mode)),
           input_after_preprocessing(input_after_preprocessing),
           output_before_postprocessing(output_before_postprocessing)
     {
@@ -125,7 +150,8 @@ public:
                                                                    batchsize, // batchsize, we can make this more flexible later if needed
                                                                    app_comm,
                                                                    enable_hybrid,
-                                                                   host_fraction);
+                                                                   host_fraction,
+                                                                   parse_communication_mode(communication_mode));
 #ifdef USE_SCOREP
                 if (ml_coupling_scorep::detailed_regions_are_enabled()) {
                 SCOREP_USER_REGION_END(handle_aix_provider_setup)
@@ -202,7 +228,8 @@ private:
                                                                    batchsize,
                                                                    app_comm,
                                                                    enable_hybrid,
-                                                                   host_fraction);
+                                                                   host_fraction,
+                                                                   parse_communication_mode(communication_mode));
             }
         }
 #endif

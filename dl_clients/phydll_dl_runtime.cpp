@@ -1,6 +1,10 @@
 #include "phydll_dl_runtime.hpp"
 #ifdef USE_SCOREP
+#if __has_include(<scorep/SCOREP_User.h>)
 #include <scorep/SCOREP_User.h>
+#elif __has_include(<SCOREP_User.h>)
+#include <SCOREP_User.h>
+#endif
 SCOREP_USER_REGION_DEFINE(handle_dl_recv);
 SCOREP_USER_REGION_DEFINE(handle_dl_send);
 SCOREP_USER_REGION_DEFINE(handle_dl_frame_copy);

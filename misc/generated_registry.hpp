@@ -20,18 +20,18 @@
 #include "application/ml_coupling_application.hpp" // MLCouplingApplication 
 
 // Includes for subclasses of MLCouplingLibrary
-#include "provider/ml_coupling_provider_aixelerator.hpp" // MLCouplingLibraryAixelerator 
-#include "provider/ml_coupling_provider_dummy.hpp" // MLCouplingLibraryDummy 
 #include "provider/ml_coupling_provider_phydll.hpp" // MLCouplingLibraryPhydll 
 #include "provider/ml_coupling_provider_smartsim.hpp" // MLCouplingLibrarySmartsim 
+#include "provider/ml_coupling_provider_dummy.hpp" // MLCouplingLibraryDummy 
+#include "provider/ml_coupling_provider_aixelerator.hpp" // MLCouplingLibraryAixelerator 
 
 // Includes for subclasses of MLCouplingNormalization
 #include "normalization/ml_coupling_minmax_normalization.hpp" // MLCouplingMinMaxNormalization 
 
 // Includes for subclasses of MLCouplingBehavior
 #include "behavior/ml_coupling_behavior_default.hpp" // MLCouplingBehaviorDefault 
-#include "behavior/ml_coupling_behavior_flow_extrapolator.hpp" // MLCouplingBehaviorFlowExtrapolator 
 #include "behavior/ml_coupling_behavior_periodic.hpp" // MLCouplingBehaviorPeriodic 
+#include "behavior/ml_coupling_behavior_flow_extrapolator.hpp" // MLCouplingBehaviorFlowExtrapolator 
 
 // Includes for subclasses of MLCouplingApplication
 #include "application/ml_coupling_application_flow_extrapolator.hpp" // MLCouplingApplicationFlowExtrapolator 
@@ -43,21 +43,21 @@
 // Maps registry names and aliases to actual class names
 inline std::string resolve_library_class_name(const std::string& name_or_alias) {
     static const std::unordered_map<std::string, std::string> lookup = {
-        {"Aixelerator", "MLCouplingLibraryAixelerator"},
-        {"aixelerator", "MLCouplingLibraryAixelerator"},
-        {"AIxelerator", "MLCouplingLibraryAixelerator"},
-        {"aix", "MLCouplingLibraryAixelerator"},
-        {"AIx", "MLCouplingLibraryAixelerator"},
-        {"AIX", "MLCouplingLibraryAixelerator"},
-        {"Dummy", "MLCouplingLibraryDummy"},
-        {"dummy", "MLCouplingLibraryDummy"},
-        {"Dummy", "MLCouplingLibraryDummy"},
         {"Phydll", "MLCouplingLibraryPhydll"},
         {"phydll", "MLCouplingLibraryPhydll"},
         {"PhyDLL", "MLCouplingLibraryPhydll"},
         {"Smartsim", "MLCouplingLibrarySmartsim"},
         {"smartsim", "MLCouplingLibrarySmartsim"},
         {"SmartSim", "MLCouplingLibrarySmartsim"},
+        {"Dummy", "MLCouplingLibraryDummy"},
+        {"dummy", "MLCouplingLibraryDummy"},
+        {"Dummy", "MLCouplingLibraryDummy"},
+        {"Aixelerator", "MLCouplingLibraryAixelerator"},
+        {"aixelerator", "MLCouplingLibraryAixelerator"},
+        {"AIxelerator", "MLCouplingLibraryAixelerator"},
+        {"aix", "MLCouplingLibraryAixelerator"},
+        {"AIx", "MLCouplingLibraryAixelerator"},
+        {"AIX", "MLCouplingLibraryAixelerator"},
     };
 
     auto it = lookup.find(name_or_alias);
@@ -90,11 +90,11 @@ inline std::string resolve_behavior_class_name(const std::string& name_or_alias)
     static const std::unordered_map<std::string, std::string> lookup = {
         {"Default", "MLCouplingBehaviorDefault"},
         {"default", "MLCouplingBehaviorDefault"},
+        {"Periodic", "MLCouplingBehaviorPeriodic"},
+        {"periodic", "MLCouplingBehaviorPeriodic"},
         {"FlowExtrapolatorBehavior", "MLCouplingBehaviorFlowExtrapolator"},
         {"flow-extrapolator-behavior", "MLCouplingBehaviorFlowExtrapolator"},
         {"maia-flow-extrapolator-behavior", "MLCouplingBehaviorFlowExtrapolator"},
-        {"Periodic", "MLCouplingBehaviorPeriodic"},
-        {"periodic", "MLCouplingBehaviorPeriodic"},
     };
 
     auto it = lookup.find(name_or_alias);
@@ -128,19 +128,19 @@ inline std::string resolve_application_class_name(const std::string& name_or_ali
 inline std::string resolve_class_name(const std::string& name_or_alias) {
     // This function checks all categories for a matching name or alias and returns the resolved class name.
     std::string resolved;
-    resolved = resolve_normalization_class_name(name_or_alias);
-    if (resolved != name_or_alias) {
-        return resolved;
-    }
     resolved = resolve_application_class_name(name_or_alias);
     if (resolved != name_or_alias) {
         return resolved;
     }
-    resolved = resolve_library_class_name(name_or_alias);
+    resolved = resolve_behavior_class_name(name_or_alias);
     if (resolved != name_or_alias) {
         return resolved;
     }
-    resolved = resolve_behavior_class_name(name_or_alias);
+    resolved = resolve_normalization_class_name(name_or_alias);
+    if (resolved != name_or_alias) {
+        return resolved;
+    }
+    resolved = resolve_library_class_name(name_or_alias);
     if (resolved != name_or_alias) {
         return resolved;
     }
@@ -168,14 +168,14 @@ inline std::string resolve_category_to_base_class(const std::string& category) {
 inline std::vector<std::pair<std::string, std::string>> get_constructor_dependencies(const std::string& class_name) {
     std::vector<std::pair<std::string, std::string>> dependencies;
 
-    if (class_name == "MLCouplingLibraryAixelerator") {
-    } else if (class_name == "MLCouplingLibraryDummy") {
-    } else if (class_name == "MLCouplingLibraryPhydll") {
+    if (class_name == "MLCouplingLibraryPhydll") {
     } else if (class_name == "MLCouplingLibrarySmartsim") {
+    } else if (class_name == "MLCouplingLibraryDummy") {
+    } else if (class_name == "MLCouplingLibraryAixelerator") {
     } else if (class_name == "MLCouplingMinMaxNormalization") {
     } else if (class_name == "MLCouplingBehaviorDefault") {
-    } else if (class_name == "MLCouplingBehaviorFlowExtrapolator") {
     } else if (class_name == "MLCouplingBehaviorPeriodic") {
+    } else if (class_name == "MLCouplingBehaviorFlowExtrapolator") {
     } else if (class_name == "MLCouplingApplicationFlowExtrapolator") {
     } else if (class_name == "MLCouplingApplicationTurbulenceClosure") {
         dependencies.push_back({"MLCouplingNormalization", "normalization"});
@@ -188,8 +188,14 @@ inline std::vector<std::pair<std::string, std::string>> get_constructor_dependen
 inline std::vector<std::string> get_constructor_signatures(const std::string& class_name) {
     std::vector<std::string> signatures;
 
-    if (class_name == "MLCouplingLibraryAixelerator") {
-        signatures.push_back("MLCouplingLibraryAixelerator(std::string model_file, int batchsize = 1, MPI_Comm app_comm = MPI_COMM_WORLD, bool enable_hybrid = false, std::optional<float> host_fraction = std::nullopt, MLCouplingData<In>* input_after_preprocessing = nullptr, MLCouplingData<Out>* output_before_postprocessing = nullptr)");
+    if (class_name == "MLCouplingLibraryPhydll") {
+        signatures.push_back("MLCouplingLibraryPhydll(std::string model_file, std::string backend = \"TORCH\", std::string device = \"GPU\", int batch_size = 0, std::string transport_layout = \"auto\", MLCouplingData<In>* input_after_preprocessing = nullptr, MLCouplingData<Out>* output_before_postprocessing = nullptr)");
+        return signatures;
+    }
+
+    if (class_name == "MLCouplingLibrarySmartsim") {
+        signatures.push_back("MLCouplingLibrarySmartsim(std::string device, std::string model_backend, std::string model_path, std::string model_name = \"model\", std::string host = \"\", int port = - 1, int nodes = - 1, int num_gpus = - 1, int first_gpu = 0, int batch_size = 0, int min_batch_size = 0, int min_batch_timeout = 0, int command_timeout = - 1, int socket_timeout = - 1, int model_timeout = - 1, const std::vector<std::string>& tf_input_labels = { }, const std::vector<std::string>& tf_output_labels = { }, const std::vector<std::string>& tf_input_keys = { }, MLCouplingData<In>* input_after_preprocessing = nullptr, MLCouplingData<Out>* output_before_postprocessing = nullptr)");
+        signatures.push_back("MLCouplingLibrarySmartsim(std::string device, std::string model_backend, std::string_view model, std::string model_name = \"model\", std::string host = \"\", int port = - 1, int nodes = - 1, int num_gpus = - 1, int first_gpu = 0, int batch_size = 0, int min_batch_size = 0, int min_batch_timeout = 0, int command_timeout = - 1, int socket_timeout = - 1, int model_timeout = - 1, const std::vector<std::string>& tf_input_labels = { }, const std::vector<std::string>& tf_output_labels = { }, const std::vector<std::string>& tf_input_keys = { }, MLCouplingData<In>* input_after_preprocessing = nullptr, MLCouplingData<Out>* output_before_postprocessing = nullptr)");
         return signatures;
     }
 
@@ -198,14 +204,8 @@ inline std::vector<std::string> get_constructor_signatures(const std::string& cl
         return signatures;
     }
 
-    if (class_name == "MLCouplingLibraryPhydll") {
-        signatures.push_back("MLCouplingLibraryPhydll(std::string model_file, std::string backend = \"TORCH\", std::string device = \"GPU\", int batch_size = 0, std::string transport_layout = \"packed\", MLCouplingData<In>* input_after_preprocessing = nullptr, MLCouplingData<Out>* output_before_postprocessing = nullptr)");
-        return signatures;
-    }
-
-    if (class_name == "MLCouplingLibrarySmartsim") {
-        signatures.push_back("MLCouplingLibrarySmartsim(std::string device, std::string model_backend, std::string model_path, std::string model_name = \"model\", std::string host = \"\", int port = - 1, int nodes = - 1, int num_gpus = - 1, int first_gpu = 0, int batch_size = 0, int min_batch_size = 0, int min_batch_timeout = 0, int command_timeout = - 1, int socket_timeout = - 1, int model_timeout = - 1, const std::vector<std::string>& tf_input_labels = { }, const std::vector<std::string>& tf_output_labels = { }, const std::vector<std::string>& tf_input_keys = { }, MLCouplingData<In>* input_after_preprocessing = nullptr, MLCouplingData<Out>* output_before_postprocessing = nullptr)");
-        signatures.push_back("MLCouplingLibrarySmartsim(std::string device, std::string model_backend, std::string_view model, std::string model_name = \"model\", std::string host = \"\", int port = - 1, int nodes = - 1, int num_gpus = - 1, int first_gpu = 0, int batch_size = 0, int min_batch_size = 0, int min_batch_timeout = 0, int command_timeout = - 1, int socket_timeout = - 1, int model_timeout = - 1, const std::vector<std::string>& tf_input_labels = { }, const std::vector<std::string>& tf_output_labels = { }, const std::vector<std::string>& tf_input_keys = { }, MLCouplingData<In>* input_after_preprocessing = nullptr, MLCouplingData<Out>* output_before_postprocessing = nullptr)");
+    if (class_name == "MLCouplingLibraryAixelerator") {
+        signatures.push_back("MLCouplingLibraryAixelerator(std::string model_file, int batchsize = 1, MPI_Comm app_comm = MPI_COMM_WORLD, bool enable_hybrid = false, std::optional<float> host_fraction = std::nullopt, MLCouplingData<In>* input_after_preprocessing = nullptr, MLCouplingData<Out>* output_before_postprocessing = nullptr, std::string communication_mode = \"collective\")");
         return signatures;
     }
 
@@ -221,13 +221,13 @@ inline std::vector<std::string> get_constructor_signatures(const std::string& cl
         return signatures;
     }
 
-    if (class_name == "MLCouplingBehaviorFlowExtrapolator") {
-        signatures.push_back("MLCouplingBehaviorFlowExtrapolator(int inference_interval, int coupled_steps_before_inference, int step_increment_after_inference, int hdf_output_interval, int total_timesteps, double scaling_factor = 1.0, int forecast_window = 1, int input_step_distance = 1, int inference_start_step = 0, int global_step_offset = 0)");
+    if (class_name == "MLCouplingBehaviorPeriodic") {
+        signatures.push_back("MLCouplingBehaviorPeriodic(int inference_interval, int coupled_steps_before_inference, int coupled_steps_stride, int step_increment_after_inference, std::function<bool ( int )> prohibit_inference = allow_inference_at_all_steps)");
         return signatures;
     }
 
-    if (class_name == "MLCouplingBehaviorPeriodic") {
-        signatures.push_back("MLCouplingBehaviorPeriodic(int inference_interval, int coupled_steps_before_inference, int coupled_steps_stride, int step_increment_after_inference, std::function<bool ( int )> prohibit_inference = allow_inference_at_all_steps)");
+    if (class_name == "MLCouplingBehaviorFlowExtrapolator") {
+        signatures.push_back("MLCouplingBehaviorFlowExtrapolator(int inference_interval, int coupled_steps_before_inference, int step_increment_after_inference, int hdf_output_interval, int total_timesteps, double scaling_factor = 1.0, int forecast_window = 1, int input_step_distance = 1, int inference_start_step = 0, int global_step_offset = 0)");
         return signatures;
     }
 
@@ -259,10 +259,10 @@ inline std::vector<std::string> get_subclasses(const std::string& base_class_nam
     std::vector<std::string> subclasses;
 
     if (base_class_name == "MLCouplingLibrary") {
-        subclasses.push_back("MLCouplingLibraryAixelerator");
-        subclasses.push_back("MLCouplingLibraryDummy");
         subclasses.push_back("MLCouplingLibraryPhydll");
         subclasses.push_back("MLCouplingLibrarySmartsim");
+        subclasses.push_back("MLCouplingLibraryDummy");
+        subclasses.push_back("MLCouplingLibraryAixelerator");
     }
 
     if (base_class_name == "MLCouplingNormalization") {
@@ -271,8 +271,8 @@ inline std::vector<std::string> get_subclasses(const std::string& base_class_nam
 
     if (base_class_name == "MLCouplingBehavior") {
         subclasses.push_back("MLCouplingBehaviorDefault");
-        subclasses.push_back("MLCouplingBehaviorFlowExtrapolator");
         subclasses.push_back("MLCouplingBehaviorPeriodic");
+        subclasses.push_back("MLCouplingBehaviorFlowExtrapolator");
     }
 
     if (base_class_name == "MLCouplingApplication") {
@@ -287,14 +287,14 @@ inline std::vector<std::string> get_subclasses(const std::string& base_class_nam
 inline std::vector<std::string> get_superclasses(const std::string& class_name) {
     std::vector<std::string> superclasses;
     static const std::unordered_map<std::string, std::string> hierarchy = {
-        {"MLCouplingLibraryAixelerator", "MLCouplingLibrary"},
-        {"MLCouplingLibraryDummy", "MLCouplingLibrary"},
         {"MLCouplingLibraryPhydll", "MLCouplingLibrary"},
         {"MLCouplingLibrarySmartsim", "MLCouplingLibrary"},
+        {"MLCouplingLibraryDummy", "MLCouplingLibrary"},
+        {"MLCouplingLibraryAixelerator", "MLCouplingLibrary"},
         {"MLCouplingMinMaxNormalization", "MLCouplingNormalization"},
         {"MLCouplingBehaviorDefault", "MLCouplingBehavior"},
-        {"MLCouplingBehaviorFlowExtrapolator", "MLCouplingBehavior"},
         {"MLCouplingBehaviorPeriodic", "MLCouplingBehavior"},
+        {"MLCouplingBehaviorFlowExtrapolator", "MLCouplingBehavior"},
         {"MLCouplingApplicationFlowExtrapolator", "MLCouplingApplication"},
         {"MLCouplingApplicationTurbulenceClosure", "MLCouplingApplication"},
     };
@@ -317,10 +317,10 @@ inline std::vector<std::string> get_superclasses(const std::string& class_name) 
 template<typename LibraryInput, typename LibraryOutput>
 inline std::string get_type_name(const MLCouplingLibrary<LibraryInput, LibraryOutput>* obj) {
     if (!obj) return "nullptr";
-    if (typeid(*obj) == typeid(MLCouplingLibraryAixelerator<LibraryInput, LibraryOutput>)) return "MLCouplingLibraryAixelerator";
-    if (typeid(*obj) == typeid(MLCouplingLibraryDummy<LibraryInput, LibraryOutput>)) return "MLCouplingLibraryDummy";
     if (typeid(*obj) == typeid(MLCouplingLibraryPhydll<LibraryInput, LibraryOutput>)) return "MLCouplingLibraryPhydll";
     if (typeid(*obj) == typeid(MLCouplingLibrarySmartsim<LibraryInput, LibraryOutput>)) return "MLCouplingLibrarySmartsim";
+    if (typeid(*obj) == typeid(MLCouplingLibraryDummy<LibraryInput, LibraryOutput>)) return "MLCouplingLibraryDummy";
+    if (typeid(*obj) == typeid(MLCouplingLibraryAixelerator<LibraryInput, LibraryOutput>)) return "MLCouplingLibraryAixelerator";
     if (typeid(*obj) == typeid(MLCouplingLibrary<LibraryInput, LibraryOutput>)) return "MLCouplingLibrary";
     return "unknown";
 }
@@ -346,8 +346,8 @@ inline std::string get_type_name(const MLCouplingNormalization<In, Out>& obj) {
 inline std::string get_type_name(const MLCouplingBehavior* obj) {
     if (!obj) return "nullptr";
     if (typeid(*obj) == typeid(MLCouplingBehaviorDefault)) return "MLCouplingBehaviorDefault";
-    if (typeid(*obj) == typeid(MLCouplingBehaviorFlowExtrapolator)) return "MLCouplingBehaviorFlowExtrapolator";
     if (typeid(*obj) == typeid(MLCouplingBehaviorPeriodic)) return "MLCouplingBehaviorPeriodic";
+    if (typeid(*obj) == typeid(MLCouplingBehaviorFlowExtrapolator)) return "MLCouplingBehaviorFlowExtrapolator";
     if (typeid(*obj) == typeid(MLCouplingBehavior)) return "MLCouplingBehavior";
     return "unknown";
 }
@@ -561,47 +561,15 @@ MLCouplingLibrary<LibraryInput, LibraryOutput>* create_instance_mlcouplinglibrar
     // Resolve name or alias to actual class name
     std::string resolved_class_name = resolve_library_class_name(class_name);
 
-    if (resolved_class_name == "MLCouplingLibraryAixelerator") {
+    if (resolved_class_name == "MLCouplingLibraryPhydll") {
         // Constructor with 7 parameter(s)
-        // Parameters: std::string model_file, int batchsize = 1, MPI_Comm app_comm = MPI_COMM_WORLD, bool enable_hybrid = false, std::optional<float> host_fraction = std::nullopt, MLCouplingData<In>* input_after_preprocessing = nullptr, MLCouplingData<Out>* output_before_postprocessing = nullptr
-        if ((get_config_parameter_match_mode() == ConfigParameterMatchMode::Lenient || ((parameter.size() >= 1 && parameter.size() <= 7) && config_parameter_names_match(parameter, {"model_file", "batchsize", "app_comm", "enable_hybrid", "host_fraction", "input_after_preprocessing", "output_before_postprocessing"}))) && parameter.find("model_file") != parameter.end()) {
-            try {
-                std::ostringstream create_log_stream;
-                create_log_stream << "Creating instance of MLCouplingLibraryAixelerator with parameters: " << "model_file=" << config_param_cast<std::string>(parameter.at("model_file")) << ", ""batchsize=" << (parameter.find("batchsize") != parameter.end() ? config_param_cast<int>(parameter.at("batchsize")) : (int)1) << ", ""app_comm=<" << (parameter.find("app_comm") != parameter.end() ? "provided" : "default") << ">" << ", ""enable_hybrid=" << (parameter.find("enable_hybrid") != parameter.end() ? config_param_cast<bool>(parameter.at("enable_hybrid")) : (bool)false) << ", ""host_fraction=<" << (parameter.find("host_fraction") != parameter.end() ? "provided" : "default") << ">" << ", ""input_after_preprocessing=<" << (parameter.find("input_after_preprocessing") != parameter.end() ? "provided" : "default") << ">" << ", ""output_before_postprocessing=<" << (parameter.find("output_before_postprocessing") != parameter.end() ? "provided" : "default") << ">";
-                logging::debug(create_log_stream.str());
-                return new MLCouplingLibraryAixelerator<LibraryInput, LibraryOutput>(config_param_cast<std::string>(parameter.at("model_file")), parameter.find("batchsize") != parameter.end() ? config_param_cast<int>(parameter.at("batchsize")) : (int)1, parameter.find("app_comm") != parameter.end() ? reinterpret_cast<MPI_Comm>(parameter.at("app_comm").second) : (MPI_Comm)MPI_COMM_WORLD, parameter.find("enable_hybrid") != parameter.end() ? config_param_cast<bool>(parameter.at("enable_hybrid")) : (bool)false, parameter.find("host_fraction") != parameter.end() ? *reinterpret_cast<std::optional<float>*>(parameter.at("host_fraction").second) : (std::optional<float>)std::nullopt, parameter.find("input_after_preprocessing") != parameter.end() ? reinterpret_cast<MLCouplingData<LibraryInput>*>(parameter.at("input_after_preprocessing").second) : (MLCouplingData<LibraryInput>*)nullptr, parameter.find("output_before_postprocessing") != parameter.end() ? reinterpret_cast<MLCouplingData<LibraryOutput>*>(parameter.at("output_before_postprocessing").second) : (MLCouplingData<LibraryOutput>*)nullptr);
-            } catch (const std::exception& e) {
-                logging::error(std::string("Exception in factory for class MLCouplingLibraryAixelerator: ") + e.what());
-            } catch (...) {
-                // Handle exceptions if necessary
-            }
-        }
-        return nullptr;
-    } else if (resolved_class_name == "MLCouplingLibraryDummy") {
-        // Constructor with 2 parameter(s)
-        // Parameters: MLCouplingData<In>* input_after_preprocessing = nullptr, MLCouplingData<Out>* output_before_postprocessing = nullptr
-        if ((get_config_parameter_match_mode() == ConfigParameterMatchMode::Lenient || ((parameter.size() >= 0 && parameter.size() <= 2) && config_parameter_names_match(parameter, {"input_after_preprocessing", "output_before_postprocessing"})))) {
-            try {
-                std::ostringstream create_log_stream;
-                create_log_stream << "Creating instance of MLCouplingLibraryDummy with parameters: " << "input_after_preprocessing=<" << (parameter.find("input_after_preprocessing") != parameter.end() ? "provided" : "default") << ">" << ", ""output_before_postprocessing=<" << (parameter.find("output_before_postprocessing") != parameter.end() ? "provided" : "default") << ">";
-                logging::debug(create_log_stream.str());
-                return new MLCouplingLibraryDummy<LibraryInput, LibraryOutput>(parameter.find("input_after_preprocessing") != parameter.end() ? reinterpret_cast<MLCouplingData<LibraryInput>*>(parameter.at("input_after_preprocessing").second) : (MLCouplingData<LibraryInput>*)nullptr, parameter.find("output_before_postprocessing") != parameter.end() ? reinterpret_cast<MLCouplingData<LibraryOutput>*>(parameter.at("output_before_postprocessing").second) : (MLCouplingData<LibraryOutput>*)nullptr);
-            } catch (const std::exception& e) {
-                logging::error(std::string("Exception in factory for class MLCouplingLibraryDummy: ") + e.what());
-            } catch (...) {
-                // Handle exceptions if necessary
-            }
-        }
-        return nullptr;
-    } else if (resolved_class_name == "MLCouplingLibraryPhydll") {
-        // Constructor with 7 parameter(s)
-        // Parameters: std::string model_file, std::string backend = "TORCH", std::string device = "GPU", int batch_size = 0, std::string transport_layout = "packed", MLCouplingData<In>* input_after_preprocessing = nullptr, MLCouplingData<Out>* output_before_postprocessing = nullptr
+        // Parameters: std::string model_file, std::string backend = "TORCH", std::string device = "GPU", int batch_size = 0, std::string transport_layout = "auto", MLCouplingData<In>* input_after_preprocessing = nullptr, MLCouplingData<Out>* output_before_postprocessing = nullptr
         if ((get_config_parameter_match_mode() == ConfigParameterMatchMode::Lenient || ((parameter.size() >= 1 && parameter.size() <= 7) && config_parameter_names_match(parameter, {"model_file", "backend", "device", "batch_size", "transport_layout", "input_after_preprocessing", "output_before_postprocessing"}))) && parameter.find("model_file") != parameter.end()) {
             try {
                 std::ostringstream create_log_stream;
-                create_log_stream << "Creating instance of MLCouplingLibraryPhydll with parameters: " << "model_file=" << config_param_cast<std::string>(parameter.at("model_file")) << ", ""backend=" << (parameter.find("backend") != parameter.end() ? config_param_cast<std::string>(parameter.at("backend")) : (std::string)"TORCH") << ", ""device=" << (parameter.find("device") != parameter.end() ? config_param_cast<std::string>(parameter.at("device")) : (std::string)"GPU") << ", ""batch_size=" << (parameter.find("batch_size") != parameter.end() ? config_param_cast<int>(parameter.at("batch_size")) : (int)0) << ", ""transport_layout=" << (parameter.find("transport_layout") != parameter.end() ? config_param_cast<std::string>(parameter.at("transport_layout")) : (std::string)"packed") << ", ""input_after_preprocessing=<" << (parameter.find("input_after_preprocessing") != parameter.end() ? "provided" : "default") << ">" << ", ""output_before_postprocessing=<" << (parameter.find("output_before_postprocessing") != parameter.end() ? "provided" : "default") << ">";
+                create_log_stream << "Creating instance of MLCouplingLibraryPhydll with parameters: " << "model_file=" << config_param_cast<std::string>(parameter.at("model_file")) << ", ""backend=" << (parameter.find("backend") != parameter.end() ? config_param_cast<std::string>(parameter.at("backend")) : (std::string)"TORCH") << ", ""device=" << (parameter.find("device") != parameter.end() ? config_param_cast<std::string>(parameter.at("device")) : (std::string)"GPU") << ", ""batch_size=" << (parameter.find("batch_size") != parameter.end() ? config_param_cast<int>(parameter.at("batch_size")) : (int)0) << ", ""transport_layout=" << (parameter.find("transport_layout") != parameter.end() ? config_param_cast<std::string>(parameter.at("transport_layout")) : (std::string)"auto") << ", ""input_after_preprocessing=<" << (parameter.find("input_after_preprocessing") != parameter.end() ? "provided" : "default") << ">" << ", ""output_before_postprocessing=<" << (parameter.find("output_before_postprocessing") != parameter.end() ? "provided" : "default") << ">";
                 logging::debug(create_log_stream.str());
-                return new MLCouplingLibraryPhydll<LibraryInput, LibraryOutput>(config_param_cast<std::string>(parameter.at("model_file")), parameter.find("backend") != parameter.end() ? config_param_cast<std::string>(parameter.at("backend")) : (std::string)"TORCH", parameter.find("device") != parameter.end() ? config_param_cast<std::string>(parameter.at("device")) : (std::string)"GPU", parameter.find("batch_size") != parameter.end() ? config_param_cast<int>(parameter.at("batch_size")) : (int)0, parameter.find("transport_layout") != parameter.end() ? config_param_cast<std::string>(parameter.at("transport_layout")) : (std::string)"packed", parameter.find("input_after_preprocessing") != parameter.end() ? reinterpret_cast<MLCouplingData<LibraryInput>*>(parameter.at("input_after_preprocessing").second) : (MLCouplingData<LibraryInput>*)nullptr, parameter.find("output_before_postprocessing") != parameter.end() ? reinterpret_cast<MLCouplingData<LibraryOutput>*>(parameter.at("output_before_postprocessing").second) : (MLCouplingData<LibraryOutput>*)nullptr);
+                return new MLCouplingLibraryPhydll<LibraryInput, LibraryOutput>(config_param_cast<std::string>(parameter.at("model_file")), parameter.find("backend") != parameter.end() ? config_param_cast<std::string>(parameter.at("backend")) : (std::string)"TORCH", parameter.find("device") != parameter.end() ? config_param_cast<std::string>(parameter.at("device")) : (std::string)"GPU", parameter.find("batch_size") != parameter.end() ? config_param_cast<int>(parameter.at("batch_size")) : (int)0, parameter.find("transport_layout") != parameter.end() ? config_param_cast<std::string>(parameter.at("transport_layout")) : (std::string)"auto", parameter.find("input_after_preprocessing") != parameter.end() ? reinterpret_cast<MLCouplingData<LibraryInput>*>(parameter.at("input_after_preprocessing").second) : (MLCouplingData<LibraryInput>*)nullptr, parameter.find("output_before_postprocessing") != parameter.end() ? reinterpret_cast<MLCouplingData<LibraryOutput>*>(parameter.at("output_before_postprocessing").second) : (MLCouplingData<LibraryOutput>*)nullptr);
             } catch (const std::exception& e) {
                 logging::error(std::string("Exception in factory for class MLCouplingLibraryPhydll: ") + e.what());
             } catch (...) {
@@ -634,6 +602,38 @@ MLCouplingLibrary<LibraryInput, LibraryOutput>* create_instance_mlcouplinglibrar
                 return new MLCouplingLibrarySmartsim<LibraryInput, LibraryOutput>(config_param_cast<std::string>(parameter.at("device")), config_param_cast<std::string>(parameter.at("model_backend")), *reinterpret_cast<std::string_view*>(parameter.at("model").second), parameter.find("model_name") != parameter.end() ? config_param_cast<std::string>(parameter.at("model_name")) : (std::string)"model", parameter.find("host") != parameter.end() ? config_param_cast<std::string>(parameter.at("host")) : (std::string)"", parameter.find("port") != parameter.end() ? config_param_cast<int>(parameter.at("port")) : (int)- 1, parameter.find("nodes") != parameter.end() ? config_param_cast<int>(parameter.at("nodes")) : (int)- 1, parameter.find("num_gpus") != parameter.end() ? config_param_cast<int>(parameter.at("num_gpus")) : (int)- 1, parameter.find("first_gpu") != parameter.end() ? config_param_cast<int>(parameter.at("first_gpu")) : (int)0, parameter.find("batch_size") != parameter.end() ? config_param_cast<int>(parameter.at("batch_size")) : (int)0, parameter.find("min_batch_size") != parameter.end() ? config_param_cast<int>(parameter.at("min_batch_size")) : (int)0, parameter.find("min_batch_timeout") != parameter.end() ? config_param_cast<int>(parameter.at("min_batch_timeout")) : (int)0, parameter.find("command_timeout") != parameter.end() ? config_param_cast<int>(parameter.at("command_timeout")) : (int)- 1, parameter.find("socket_timeout") != parameter.end() ? config_param_cast<int>(parameter.at("socket_timeout")) : (int)- 1, parameter.find("model_timeout") != parameter.end() ? config_param_cast<int>(parameter.at("model_timeout")) : (int)- 1, parameter.find("tf_input_labels") != parameter.end() ? *reinterpret_cast<std::vector<std::string>*>(parameter.at("tf_input_labels").second) : (std::vector<std::string>){ }, parameter.find("tf_output_labels") != parameter.end() ? *reinterpret_cast<std::vector<std::string>*>(parameter.at("tf_output_labels").second) : (std::vector<std::string>){ }, parameter.find("tf_input_keys") != parameter.end() ? *reinterpret_cast<std::vector<std::string>*>(parameter.at("tf_input_keys").second) : (std::vector<std::string>){ }, parameter.find("input_after_preprocessing") != parameter.end() ? reinterpret_cast<MLCouplingData<LibraryInput>*>(parameter.at("input_after_preprocessing").second) : (MLCouplingData<LibraryInput>*)nullptr, parameter.find("output_before_postprocessing") != parameter.end() ? reinterpret_cast<MLCouplingData<LibraryOutput>*>(parameter.at("output_before_postprocessing").second) : (MLCouplingData<LibraryOutput>*)nullptr);
             } catch (const std::exception& e) {
                 logging::error(std::string("Exception in factory for class MLCouplingLibrarySmartsim: ") + e.what());
+            } catch (...) {
+                // Handle exceptions if necessary
+            }
+        }
+        return nullptr;
+    } else if (resolved_class_name == "MLCouplingLibraryDummy") {
+        // Constructor with 2 parameter(s)
+        // Parameters: MLCouplingData<In>* input_after_preprocessing = nullptr, MLCouplingData<Out>* output_before_postprocessing = nullptr
+        if ((get_config_parameter_match_mode() == ConfigParameterMatchMode::Lenient || ((parameter.size() >= 0 && parameter.size() <= 2) && config_parameter_names_match(parameter, {"input_after_preprocessing", "output_before_postprocessing"})))) {
+            try {
+                std::ostringstream create_log_stream;
+                create_log_stream << "Creating instance of MLCouplingLibraryDummy with parameters: " << "input_after_preprocessing=<" << (parameter.find("input_after_preprocessing") != parameter.end() ? "provided" : "default") << ">" << ", ""output_before_postprocessing=<" << (parameter.find("output_before_postprocessing") != parameter.end() ? "provided" : "default") << ">";
+                logging::debug(create_log_stream.str());
+                return new MLCouplingLibraryDummy<LibraryInput, LibraryOutput>(parameter.find("input_after_preprocessing") != parameter.end() ? reinterpret_cast<MLCouplingData<LibraryInput>*>(parameter.at("input_after_preprocessing").second) : (MLCouplingData<LibraryInput>*)nullptr, parameter.find("output_before_postprocessing") != parameter.end() ? reinterpret_cast<MLCouplingData<LibraryOutput>*>(parameter.at("output_before_postprocessing").second) : (MLCouplingData<LibraryOutput>*)nullptr);
+            } catch (const std::exception& e) {
+                logging::error(std::string("Exception in factory for class MLCouplingLibraryDummy: ") + e.what());
+            } catch (...) {
+                // Handle exceptions if necessary
+            }
+        }
+        return nullptr;
+    } else if (resolved_class_name == "MLCouplingLibraryAixelerator") {
+        // Constructor with 8 parameter(s)
+        // Parameters: std::string model_file, int batchsize = 1, MPI_Comm app_comm = MPI_COMM_WORLD, bool enable_hybrid = false, std::optional<float> host_fraction = std::nullopt, MLCouplingData<In>* input_after_preprocessing = nullptr, MLCouplingData<Out>* output_before_postprocessing = nullptr, std::string communication_mode = "collective"
+        if ((get_config_parameter_match_mode() == ConfigParameterMatchMode::Lenient || ((parameter.size() >= 1 && parameter.size() <= 8) && config_parameter_names_match(parameter, {"model_file", "batchsize", "app_comm", "enable_hybrid", "host_fraction", "input_after_preprocessing", "output_before_postprocessing", "communication_mode"}))) && parameter.find("model_file") != parameter.end()) {
+            try {
+                std::ostringstream create_log_stream;
+                create_log_stream << "Creating instance of MLCouplingLibraryAixelerator with parameters: " << "model_file=" << config_param_cast<std::string>(parameter.at("model_file")) << ", ""batchsize=" << (parameter.find("batchsize") != parameter.end() ? config_param_cast<int>(parameter.at("batchsize")) : (int)1) << ", ""app_comm=<" << (parameter.find("app_comm") != parameter.end() ? "provided" : "default") << ">" << ", ""enable_hybrid=" << (parameter.find("enable_hybrid") != parameter.end() ? config_param_cast<bool>(parameter.at("enable_hybrid")) : (bool)false) << ", ""host_fraction=<" << (parameter.find("host_fraction") != parameter.end() ? "provided" : "default") << ">" << ", ""input_after_preprocessing=<" << (parameter.find("input_after_preprocessing") != parameter.end() ? "provided" : "default") << ">" << ", ""output_before_postprocessing=<" << (parameter.find("output_before_postprocessing") != parameter.end() ? "provided" : "default") << ">" << ", ""communication_mode=" << (parameter.find("communication_mode") != parameter.end() ? config_param_cast<std::string>(parameter.at("communication_mode")) : (std::string)"collective");
+                logging::debug(create_log_stream.str());
+                return new MLCouplingLibraryAixelerator<LibraryInput, LibraryOutput>(config_param_cast<std::string>(parameter.at("model_file")), parameter.find("batchsize") != parameter.end() ? config_param_cast<int>(parameter.at("batchsize")) : (int)1, parameter.find("app_comm") != parameter.end() ? reinterpret_cast<MPI_Comm>(parameter.at("app_comm").second) : (MPI_Comm)MPI_COMM_WORLD, parameter.find("enable_hybrid") != parameter.end() ? config_param_cast<bool>(parameter.at("enable_hybrid")) : (bool)false, parameter.find("host_fraction") != parameter.end() ? *reinterpret_cast<std::optional<float>*>(parameter.at("host_fraction").second) : (std::optional<float>)std::nullopt, parameter.find("input_after_preprocessing") != parameter.end() ? reinterpret_cast<MLCouplingData<LibraryInput>*>(parameter.at("input_after_preprocessing").second) : (MLCouplingData<LibraryInput>*)nullptr, parameter.find("output_before_postprocessing") != parameter.end() ? reinterpret_cast<MLCouplingData<LibraryOutput>*>(parameter.at("output_before_postprocessing").second) : (MLCouplingData<LibraryOutput>*)nullptr, parameter.find("communication_mode") != parameter.end() ? config_param_cast<std::string>(parameter.at("communication_mode")) : (std::string)"collective");
+            } catch (const std::exception& e) {
+                logging::error(std::string("Exception in factory for class MLCouplingLibraryAixelerator: ") + e.what());
             } catch (...) {
                 // Handle exceptions if necessary
             }
@@ -716,22 +716,6 @@ inline MLCouplingBehavior* create_instance_mlcouplingbehavior(const std::string 
             }
         }
         return nullptr;
-    } else if (resolved_class_name == "MLCouplingBehaviorFlowExtrapolator") {
-        // Constructor with 10 parameter(s)
-        // Parameters: int inference_interval, int coupled_steps_before_inference, int step_increment_after_inference, int hdf_output_interval, int total_timesteps, double scaling_factor = 1.0, int forecast_window = 1, int input_step_distance = 1, int inference_start_step = 0, int global_step_offset = 0
-        if ((get_config_parameter_match_mode() == ConfigParameterMatchMode::Lenient || ((parameter.size() >= 5 && parameter.size() <= 10) && config_parameter_names_match(parameter, {"inference_interval", "coupled_steps_before_inference", "step_increment_after_inference", "hdf_output_interval", "total_timesteps", "scaling_factor", "forecast_window", "input_step_distance", "inference_start_step", "global_step_offset"}))) && parameter.find("inference_interval") != parameter.end() && parameter.find("coupled_steps_before_inference") != parameter.end() && parameter.find("step_increment_after_inference") != parameter.end() && parameter.find("hdf_output_interval") != parameter.end() && parameter.find("total_timesteps") != parameter.end()) {
-            try {
-                std::ostringstream create_log_stream;
-                create_log_stream << "Creating instance of MLCouplingBehaviorFlowExtrapolator with parameters: " << "inference_interval=" << config_param_cast<int>(parameter.at("inference_interval")) << ", ""coupled_steps_before_inference=" << config_param_cast<int>(parameter.at("coupled_steps_before_inference")) << ", ""step_increment_after_inference=" << config_param_cast<int>(parameter.at("step_increment_after_inference")) << ", ""hdf_output_interval=" << config_param_cast<int>(parameter.at("hdf_output_interval")) << ", ""total_timesteps=" << config_param_cast<int>(parameter.at("total_timesteps")) << ", ""scaling_factor=" << (parameter.find("scaling_factor") != parameter.end() ? config_param_cast<double>(parameter.at("scaling_factor")) : (double)1.0) << ", ""forecast_window=" << (parameter.find("forecast_window") != parameter.end() ? config_param_cast<int>(parameter.at("forecast_window")) : (int)1) << ", ""input_step_distance=" << (parameter.find("input_step_distance") != parameter.end() ? config_param_cast<int>(parameter.at("input_step_distance")) : (int)1) << ", ""inference_start_step=" << (parameter.find("inference_start_step") != parameter.end() ? config_param_cast<int>(parameter.at("inference_start_step")) : (int)0) << ", ""global_step_offset=" << (parameter.find("global_step_offset") != parameter.end() ? config_param_cast<int>(parameter.at("global_step_offset")) : (int)0);
-                logging::debug(create_log_stream.str());
-                return new MLCouplingBehaviorFlowExtrapolator(config_param_cast<int>(parameter.at("inference_interval")), config_param_cast<int>(parameter.at("coupled_steps_before_inference")), config_param_cast<int>(parameter.at("step_increment_after_inference")), config_param_cast<int>(parameter.at("hdf_output_interval")), config_param_cast<int>(parameter.at("total_timesteps")), parameter.find("scaling_factor") != parameter.end() ? config_param_cast<double>(parameter.at("scaling_factor")) : (double)1.0, parameter.find("forecast_window") != parameter.end() ? config_param_cast<int>(parameter.at("forecast_window")) : (int)1, parameter.find("input_step_distance") != parameter.end() ? config_param_cast<int>(parameter.at("input_step_distance")) : (int)1, parameter.find("inference_start_step") != parameter.end() ? config_param_cast<int>(parameter.at("inference_start_step")) : (int)0, parameter.find("global_step_offset") != parameter.end() ? config_param_cast<int>(parameter.at("global_step_offset")) : (int)0);
-            } catch (const std::exception& e) {
-                logging::error(std::string("Exception in factory for class MLCouplingBehaviorFlowExtrapolator: ") + e.what());
-            } catch (...) {
-                // Handle exceptions if necessary
-            }
-        }
-        return nullptr;
     } else if (resolved_class_name == "MLCouplingBehaviorPeriodic") {
         // Constructor with 5 parameter(s)
         // Parameters: int inference_interval, int coupled_steps_before_inference, int coupled_steps_stride, int step_increment_after_inference, std::function<bool ( int )> prohibit_inference = allow_inference_at_all_steps
@@ -743,6 +727,22 @@ inline MLCouplingBehavior* create_instance_mlcouplingbehavior(const std::string 
                 return new MLCouplingBehaviorPeriodic(config_param_cast<int>(parameter.at("inference_interval")), config_param_cast<int>(parameter.at("coupled_steps_before_inference")), config_param_cast<int>(parameter.at("coupled_steps_stride")), config_param_cast<int>(parameter.at("step_increment_after_inference")), parameter.find("prohibit_inference") != parameter.end() ? *reinterpret_cast<std::function<bool ( int )>*>(parameter.at("prohibit_inference").second) : (std::function<bool ( int )>)allow_inference_at_all_steps);
             } catch (const std::exception& e) {
                 logging::error(std::string("Exception in factory for class MLCouplingBehaviorPeriodic: ") + e.what());
+            } catch (...) {
+                // Handle exceptions if necessary
+            }
+        }
+        return nullptr;
+    } else if (resolved_class_name == "MLCouplingBehaviorFlowExtrapolator") {
+        // Constructor with 10 parameter(s)
+        // Parameters: int inference_interval, int coupled_steps_before_inference, int step_increment_after_inference, int hdf_output_interval, int total_timesteps, double scaling_factor = 1.0, int forecast_window = 1, int input_step_distance = 1, int inference_start_step = 0, int global_step_offset = 0
+        if ((get_config_parameter_match_mode() == ConfigParameterMatchMode::Lenient || ((parameter.size() >= 5 && parameter.size() <= 10) && config_parameter_names_match(parameter, {"inference_interval", "coupled_steps_before_inference", "step_increment_after_inference", "hdf_output_interval", "total_timesteps", "scaling_factor", "forecast_window", "input_step_distance", "inference_start_step", "global_step_offset"}))) && parameter.find("inference_interval") != parameter.end() && parameter.find("coupled_steps_before_inference") != parameter.end() && parameter.find("step_increment_after_inference") != parameter.end() && parameter.find("hdf_output_interval") != parameter.end() && parameter.find("total_timesteps") != parameter.end()) {
+            try {
+                std::ostringstream create_log_stream;
+                create_log_stream << "Creating instance of MLCouplingBehaviorFlowExtrapolator with parameters: " << "inference_interval=" << config_param_cast<int>(parameter.at("inference_interval")) << ", ""coupled_steps_before_inference=" << config_param_cast<int>(parameter.at("coupled_steps_before_inference")) << ", ""step_increment_after_inference=" << config_param_cast<int>(parameter.at("step_increment_after_inference")) << ", ""hdf_output_interval=" << config_param_cast<int>(parameter.at("hdf_output_interval")) << ", ""total_timesteps=" << config_param_cast<int>(parameter.at("total_timesteps")) << ", ""scaling_factor=" << (parameter.find("scaling_factor") != parameter.end() ? config_param_cast<double>(parameter.at("scaling_factor")) : (double)1.0) << ", ""forecast_window=" << (parameter.find("forecast_window") != parameter.end() ? config_param_cast<int>(parameter.at("forecast_window")) : (int)1) << ", ""input_step_distance=" << (parameter.find("input_step_distance") != parameter.end() ? config_param_cast<int>(parameter.at("input_step_distance")) : (int)1) << ", ""inference_start_step=" << (parameter.find("inference_start_step") != parameter.end() ? config_param_cast<int>(parameter.at("inference_start_step")) : (int)0) << ", ""global_step_offset=" << (parameter.find("global_step_offset") != parameter.end() ? config_param_cast<int>(parameter.at("global_step_offset")) : (int)0);
+                logging::debug(create_log_stream.str());
+                return new MLCouplingBehaviorFlowExtrapolator(config_param_cast<int>(parameter.at("inference_interval")), config_param_cast<int>(parameter.at("coupled_steps_before_inference")), config_param_cast<int>(parameter.at("step_increment_after_inference")), config_param_cast<int>(parameter.at("hdf_output_interval")), config_param_cast<int>(parameter.at("total_timesteps")), parameter.find("scaling_factor") != parameter.end() ? config_param_cast<double>(parameter.at("scaling_factor")) : (double)1.0, parameter.find("forecast_window") != parameter.end() ? config_param_cast<int>(parameter.at("forecast_window")) : (int)1, parameter.find("input_step_distance") != parameter.end() ? config_param_cast<int>(parameter.at("input_step_distance")) : (int)1, parameter.find("inference_start_step") != parameter.end() ? config_param_cast<int>(parameter.at("inference_start_step")) : (int)0, parameter.find("global_step_offset") != parameter.end() ? config_param_cast<int>(parameter.at("global_step_offset")) : (int)0);
+            } catch (const std::exception& e) {
+                logging::error(std::string("Exception in factory for class MLCouplingBehaviorFlowExtrapolator: ") + e.what());
             } catch (...) {
                 // Handle exceptions if necessary
             }

@@ -116,10 +116,11 @@ static std::vector<float> read_output(const MLCouplingData<float>& data) {
 
 #ifdef WITH_AIX
 /** AIXelerator provider: full inference + numerical correctness check. */
-static void test_aixelerator(const std::string& model_path) {
-    std::cout << "\n=== MLCouplingProviderAixelerator ===\n";
+static void test_aixelerator(const std::string& model_path, const std::string& mode = "collective") {
+    std::cout << "\n=== MLCouplingProviderAixelerator (mode=" << mode << ") ===\n";
     try {
-        MLCouplingLibraryAixelerator<float, float> library(model_path, B);
+        MLCouplingLibraryAixelerator<float, float> library(
+            model_path, B, MPI_COMM_WORLD, false, std::nullopt, nullptr, nullptr, mode);
 
         auto in = make_input();
         std::vector<float> buf;
@@ -135,13 +136,13 @@ static void test_aixelerator(const std::string& model_path) {
         }
 
         report(result.size() == static_cast<size_t>(B),
-               "AIXelerator output has correct number of elements");
+               ("AIXelerator (" + mode + ") output has correct number of elements").c_str());
         report(values_match(result, EXPECTED),
-               "AIXelerator output values match expected (a+b)");
+               ("AIXelerator (" + mode + ") output values match expected (a+b)").c_str());
 
     } catch (const std::exception& e) {
         // GPU not available or driver error on login node — treat as skip
-        std::cout << "[SKIP] AIXelerator: " << e.what() << "\n";
+        std::cout << "[SKIP] AIXelerator (" << mode << "): " << e.what() << "\n";
     }
 }
 #endif
@@ -170,7 +171,8 @@ int main(int argc, char** argv) {
 
     // Run each available provider
 #ifdef WITH_AIX
-    test_aixelerator(model_path);
+    test_aixelerator(model_path, "collective");
+    test_aixelerator(model_path, "pipelined");
 #endif
 
     std::cout << "\n";
