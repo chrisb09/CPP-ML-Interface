@@ -1,6 +1,10 @@
 #include "phydll_dl_runtime.hpp"
 #ifdef USE_SCOREP
+#if __has_include(<scorep/SCOREP_User.h>)
 #include <scorep/SCOREP_User.h>
+#elif __has_include(<SCOREP_User.h>)
+#include <SCOREP_User.h>
+#endif
 SCOREP_USER_REGION_DEFINE(handle_dl_recv);
 SCOREP_USER_REGION_DEFINE(handle_dl_send);
 SCOREP_USER_REGION_DEFINE(handle_dl_frame_copy);
@@ -197,10 +201,15 @@ void DlRuntime::receive_fields() {
         std::memset(label, 0, sizeof(label));
         phydll_get_field(&buffer_ptr, label);
 
-        if (std::string(label) == "PHY-DATA") {
+        // Accept the packed-mode label ("PHY-DATA") and the uniform_chunks
+        // labels ("PHY-IN-###"). Metadata travels out-of-band, so every
+        // received field is data.
+        const bool is_data_field = std::string(label) == "PHY-DATA" ||
+                                   std::strncmp(label, "PHY-IN-", 7) == 0;
+        if (buffer_ptr && is_data_field) {
             combined_data_.insert(combined_data_.end(), buffer_ptr, buffer_ptr + field_size_);
         }
-        
+
         if (buffer_ptr) {
             free(buffer_ptr);
         }

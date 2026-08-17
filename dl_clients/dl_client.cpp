@@ -13,7 +13,11 @@
 #endif
 
 #ifdef USE_SCOREP
+#if __has_include(<scorep/SCOREP_User.h>)
 #include <scorep/SCOREP_User.h>
+#elif __has_include(<SCOREP_User.h>)
+#include <SCOREP_User.h>
+#endif
 SCOREP_USER_REGION_DEFINE(handle_dl_input_unpack);
 SCOREP_USER_REGION_DEFINE(handle_dl_output_allocate);
 SCOREP_USER_REGION_DEFINE(handle_dl_input_allocate);
@@ -49,7 +53,10 @@ struct BcastMetaHeader
     int32_t layout = 0;
     int32_t num_input_dims = 0;
     int32_t num_output_dims = 0;
-    int64_t field_size = 0;
+    int32_t layout_kind = 0;   // 0 = packed, 1 = uniform_chunks
+    int32_t phy_count = 0;     // fields sent by the source PHY rank
+    int32_t dl_count = 0;      // fields the source PHY rank expects back
+    int64_t field_size = 0;    // per-field per-source size in doubles
 };
 
 struct BcastMeta
@@ -64,12 +71,15 @@ struct BcastMeta
     int64_t total_input = 0;
     int64_t total_output = 0;
     int64_t field_size = 0;
+    int layout_kind = 0;
+    int phy_count = 0;
+    int dl_count = 0;
 };
 
 BcastMeta receive_p2p_metadata(int source_rank)
 {
     constexpr int kBcastMetaMagic = 0x4D4C434D; // "MLCM"
-    constexpr int kBcastMetaVersion = 2;
+    constexpr int kBcastMetaVersion = 3;
 
     BcastMetaHeader header;
     MPI_Status status;
@@ -99,6 +109,9 @@ BcastMeta receive_p2p_metadata(int source_rank)
     meta.total_output = header.total_output;
     meta.batch_size = header.batch_size;
     meta.field_size = header.field_size;
+    meta.layout_kind = header.layout_kind;
+    meta.phy_count = header.phy_count;
+    meta.dl_count = header.dl_count;
 
     size_t offset = 0;
     if (header.model_len > 0)
@@ -217,6 +230,10 @@ int main(int argc, char **argv) {
     std::fprintf(stderr, "[PHYDLL:DL] ndest=%d, dests=%p\n", ndest, (void*)dests); std::fflush(stderr);
     std::vector<long long> rank_batch_sizes(ndest, 1);
     std::vector<long long> rank_field_sizes(ndest, 0);
+    std::vector<long long> rank_total_input(ndest, 0);
+    std::vector<long long> rank_total_output(ndest, 0);
+    std::vector<int> rank_layout_kind(ndest, 0);
+    std::vector<int> rank_phy_count(ndest, 0);
     for (int i = 0; i < ndest; ++i)
     {
         int source_rank = dests[i];
@@ -237,9 +254,47 @@ int main(int argc, char **argv) {
                 rank_batch_sizes[i] = p2p_meta.input_shapes.front().front();
             }
             rank_field_sizes[i] = p2p_meta.field_size;
+            rank_total_input[i] = p2p_meta.total_input;
+            rank_total_output[i] = p2p_meta.total_output;
+            rank_layout_kind[i] = p2p_meta.layout_kind;
+            rank_phy_count[i] = p2p_meta.phy_count;
         }
     }
     std::fprintf(stderr, "[PHYDLL:DL] Finished receiving metadata from all %d sources\n", ndest); std::fflush(stderr);
+
+    const bool uniform_chunks = rank_layout_kind[0] == 1;
+    for (int i = 0; i < ndest; ++i)
+    {
+        if (rank_layout_kind[i] != rank_layout_kind[0])
+        {
+            std::fprintf(stderr, "[PHYDLL:DL] ERROR: mixed transport layouts across coupled ranks (rank %d: %d, rank 0: %d).\n",
+                         i, rank_layout_kind[i], rank_layout_kind[0]);
+            MPI_Abort(MPI_COMM_WORLD, 1);
+        }
+        if (uniform_chunks && rank_phy_count[i] != rank_phy_count[0])
+        {
+            std::fprintf(stderr, "[PHYDLL:DL] ERROR: uniform_chunks requires identical PHY field counts across ranks (rank %d: %d, rank 0: %d).\n",
+                         i, rank_phy_count[i], rank_phy_count[0]);
+            MPI_Abort(MPI_COMM_WORLD, 1);
+        }
+    }
+    if (uniform_chunks)
+    {
+        if (runtime.dl_count() != final_meta.dl_count)
+        {
+            std::fprintf(stderr,
+                         "[PHYDLL:DL] ERROR: uniform_chunks provider expects dl_count=%d but the client was launched with PHYDLL_DL_FIELD_COUNT=%d.\n",
+                         final_meta.dl_count, runtime.dl_count());
+            MPI_Abort(MPI_COMM_WORLD, 1);
+        }
+        if (runtime.phy_count() != rank_phy_count[0])
+        {
+            std::fprintf(stderr,
+                         "[PHYDLL:DL] ERROR: uniform_chunks PHY field count mismatch: PhyDLL reports %d, provider sent %d.\n",
+                         runtime.phy_count(), rank_phy_count[0]);
+            MPI_Abort(MPI_COMM_WORLD, 1);
+        }
+    }
     std::uint64_t frame_id = 0;
     while (runtime.is_running()) {
         std::fprintf(stderr, "[PHYDLL:DL] Waiting for frame %llu\n", (unsigned long long)frame_id); std::fflush(stderr);
@@ -330,7 +385,7 @@ int main(int argc, char **argv) {
 #ifdef USE_SCOREP
         if (profile_details) SCOREP_USER_REGION_BEGIN(handle_dl_output_allocate, "dl_output_allocate", SCOREP_USER_REGION_TYPE_COMMON);
 #endif
-        std::vector<double> output(static_cast<size_t>(runtime.field_size()), 0.0);
+        std::vector<double> output(static_cast<size_t>(runtime.field_size()) * static_cast<size_t>(runtime.dl_count()), 0.0);
 #ifdef USE_SCOREP
         if (profile_details) SCOREP_USER_REGION_END(handle_dl_output_allocate);
 #endif
@@ -362,17 +417,43 @@ int main(int argc, char **argv) {
             #ifdef USE_SCOREP
             if (profile_details) SCOREP_USER_REGION_BEGIN(handle_dl_input_unpack, "dl_input_unpack", SCOREP_USER_REGION_TYPE_COMMON);
             #endif
-            for (int i = 0; i < ndest; ++i) {
-                long long rank_batch = rank_batch_sizes[i];
-                for (long long s = 0; s < rank_batch; ++s) {
-                    long long src_start = src_rank_start + s * input_per_rank_used;
-                    long long dest_start = (offset_so_far + s) * input_per_rank_used;
-                    for (long long j = 0; j < input_per_rank_used; ++j) {
-                        input[dest_start + j] = static_cast<float>(frame.data[src_start + j]);
+            if (uniform_chunks) {
+                // combined frame is field-major:
+                //   field f = [rank0 chunk f][rank1 chunk f]...
+                // with per-rank chunk sizes rank_field_sizes[i] and aggregated
+                // field size runtime.field_size() = sum_i rank_field_sizes[i].
+                const long long phy_count = rank_phy_count[0];
+                const long long agg = runtime.field_size();
+                std::vector<long long> agg_offsets(ndest + 1, 0);
+                std::vector<long long> in_offsets(ndest + 1, 0);
+                for (int i = 0; i < ndest; ++i) {
+                    agg_offsets[i + 1] = agg_offsets[i] + rank_field_sizes[i];
+                    in_offsets[i + 1] = in_offsets[i] + rank_total_input[i];
+                }
+                for (int i = 0; i < ndest; ++i) {
+                    const long long g_r = rank_field_sizes[i];
+                    for (long long f = 0; f < phy_count; ++f) {
+                        const long long src_base = f * agg + agg_offsets[i];
+                        const long long dst_base = in_offsets[i] + f * g_r;
+                        for (long long b = 0; b < g_r; ++b) {
+                            input[static_cast<size_t>(dst_base + b)] =
+                                static_cast<float>(frame.data[static_cast<size_t>(src_base + b)]);
+                        }
                     }
                 }
-                offset_so_far += rank_batch;
-                src_rank_start += rank_field_sizes[i];
+            } else {
+                for (int i = 0; i < ndest; ++i) {
+                    long long rank_batch = rank_batch_sizes[i];
+                    for (long long s = 0; s < rank_batch; ++s) {
+                        long long src_start = src_rank_start + s * input_per_rank_used;
+                        long long dest_start = (offset_so_far + s) * input_per_rank_used;
+                        for (long long j = 0; j < input_per_rank_used; ++j) {
+                            input[dest_start + j] = static_cast<float>(frame.data[src_start + j]);
+                        }
+                    }
+                    offset_so_far += rank_batch;
+                    src_rank_start += rank_field_sizes[i];
+                }
             }
             #ifdef USE_SCOREP
             if (profile_details) SCOREP_USER_REGION_END(handle_dl_input_unpack);
@@ -433,22 +514,52 @@ int main(int argc, char **argv) {
                 auto output_ptr = output_tensor.data_ptr<float>();
                 const long long outputs_per_rank_used = static_cast<long long>(total_output_size) / batch_size;
 
+                const int64_t produced = static_cast<int64_t>(output_tensor.numel());
+                if (produced != total_output_size) {
+                    std::fprintf(stderr,
+                                 "[PHYDLL:DL] ERROR: Torch model produced %lld elements but metadata declared %lld. Refusing to send mismatched output.\n",
+                                 (long long)produced, (long long)total_output_size);
+                    MPI_Abort(MPI_COMM_WORLD, 1);
+                }
+
                 offset_so_far = 0;
                 long long dest_rank_start = 0;
                 #ifdef USE_SCOREP
                 if (profile_details) SCOREP_USER_REGION_BEGIN(handle_dl_output_reorder, "dl_output_reorder", SCOREP_USER_REGION_TYPE_COMMON);
                 #endif
-                for (int i = 0; i < ndest; ++i) {
-                    long long rank_batch = rank_batch_sizes[i];
-                    for (long long s = 0; s < rank_batch; ++s) {
-                        long long dest_start = dest_rank_start + s * outputs_per_rank_used;
-                        long long src_start = (offset_so_far + s) * outputs_per_rank_used;
-                        for (long long j = 0; j < outputs_per_rank_used; ++j) {
-                            output[dest_start + j] = static_cast<double>(output_ptr[src_start + j]);
+                if (uniform_chunks) {
+                    const long long dl_count = runtime.dl_count();
+                    const long long agg = runtime.field_size();
+                    std::vector<long long> agg_offsets(ndest + 1, 0);
+                    std::vector<long long> out_offsets(ndest + 1, 0);
+                    for (int i = 0; i < ndest; ++i) {
+                        agg_offsets[i + 1] = agg_offsets[i] + rank_field_sizes[i];
+                        out_offsets[i + 1] = out_offsets[i] + rank_total_output[i];
+                    }
+                    for (int i = 0; i < ndest; ++i) {
+                        const long long g_r = rank_field_sizes[i];
+                        for (long long f = 0; f < dl_count; ++f) {
+                            const long long src_base = out_offsets[i] + f * g_r;
+                            const long long dst_base = f * agg + agg_offsets[i];
+                            for (long long b = 0; b < g_r; ++b) {
+                                output[static_cast<size_t>(dst_base + b)] =
+                                    static_cast<double>(output_ptr[static_cast<size_t>(src_base + b)]);
+                            }
                         }
                     }
-                    offset_so_far += rank_batch;
-                    dest_rank_start += rank_field_sizes[i];
+                } else {
+                    for (int i = 0; i < ndest; ++i) {
+                        long long rank_batch = rank_batch_sizes[i];
+                        for (long long s = 0; s < rank_batch; ++s) {
+                            long long dest_start = dest_rank_start + s * outputs_per_rank_used;
+                            long long src_start = (offset_so_far + s) * outputs_per_rank_used;
+                            for (long long j = 0; j < outputs_per_rank_used; ++j) {
+                                output[dest_start + j] = static_cast<double>(output_ptr[src_start + j]);
+                            }
+                        }
+                        offset_so_far += rank_batch;
+                        dest_rank_start += rank_field_sizes[i];
+                    }
                 }
                 #ifdef USE_SCOREP
                 if (profile_details) SCOREP_USER_REGION_END(handle_dl_output_reorder);
@@ -478,9 +589,11 @@ int main(int argc, char **argv) {
         #ifdef USE_SCOREP
         if (frame_id > 0) SCOREP_USER_REGION_END(handle_dl_send_output);
         #endif
+        std::fprintf(stderr, "[PHYDLL:DL] sent output for frame %llu\n", (unsigned long long)frame_id); std::fflush(stderr);
 
         ++frame_id;
     }
+    std::fprintf(stderr, "[PHYDLL:DL] exited main loop after %llu frames\n", (unsigned long long)frame_id); std::fflush(stderr);
 
     phydll_finalize();
     if (const char* barrier_env = std::getenv("PHYDLL_MPMD_SHUTDOWN_BARRIER");
