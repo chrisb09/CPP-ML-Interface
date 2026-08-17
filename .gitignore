@@ -28,3 +28,19 @@ phydll-*.log
 build_diag_noscorep/
 build_diag_scorep/
 build_diag_*/
+
+# Score-P profiling measurements
+scorep-*/
+scorep-failed-*/
+scorep-measurement-*/
+
+# PhyDLL MPMD generated artifacts
+phydll_mpmd.conf
+/test/phydll_mpmd/models/*.pt
+/test/phydll_mpmd/core.*
+/test/phydll_mpmd/phydll_mpmd_test_*.err
+/test/phydll_mpmd/phydll_mpmd_test_*.log
+/test/phydll_mpmd/scorep-*/
+
+# Local dependency symlinks
+extern/AIxeleratorService-pipelined
