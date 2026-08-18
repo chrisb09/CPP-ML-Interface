@@ -59,7 +59,7 @@ else
 fi
 PHY_ARGS="${MODE} ${MODEL} ${LAYOUT} ${BATCH_CHUNK}"
 
-CONF="${SCRIPT_DIR}/phydll_mpmd.conf"
+CONF="${SCRIPT_DIR}/phydll_mpmd_${SLURM_JOB_ID:-$$}.conf"
 {
     for ((i = 0; i < NP_PHY; i++)); do
         printf '%d\t%s %s\n' "$i" "${PHY_BIN}" "${PHY_ARGS}"
@@ -75,3 +75,4 @@ if [[ -n "${PHYDLL_TEST_PARTITION:-}" ]]; then
 fi
 
 srun "${PARTITION_FLAGS[@]}" --ntasks="${NTASKS}" --kill-on-bad-exit --multi-prog "${CONF}"
+rm -f "${CONF}"
