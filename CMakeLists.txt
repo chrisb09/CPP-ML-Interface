@@ -169,20 +169,39 @@ if(WITH_AIX)
     endif()
 
     if(AIX_USE_PREBUILT)
+        set(_aix_submodule_commit "")
+        execute_process(
+            COMMAND git -C "${AIXELERATOR_DIR}" rev-parse HEAD
+            OUTPUT_VARIABLE _aix_submodule_commit
+            OUTPUT_STRIP_TRAILING_WHITESPACE
+            ERROR_QUIET
+        )
+        set(_aix_stamp_file "${AIXELERATOR_PREBUILT_INSTALL_PREFIX}/.git_commit")
+        set(_aix_installed_commit "")
+        if(EXISTS "${_aix_stamp_file}")
+            file(READ "${_aix_stamp_file}" _aix_installed_commit)
+            string(STRIP "${_aix_installed_commit}" _aix_installed_commit)
+        endif()
+
         find_library(AIXELERATOR_PREBUILT_LIB
             NAMES AIxeleratorService aixelerator
             PATHS ${AIXELERATOR_PREBUILT_LIB_DIR}
             NO_DEFAULT_PATH
         )
 
-        if(NOT AIXELERATOR_PREBUILT_LIB OR FORCE_AIX_REBUILD)
-            if (NOT AIXELERATOR_PREBUILT_LIB)
-                message(STATUS "Prebuilt AIxelerator library not found in ${AIXELERATOR_PREBUILT_LIB_DIR}.")
-            endif()
-            if (FORCE_AIX_REBUILD)
-                message(STATUS "FORCE_AIX_REBUILD is ON, forcing rebuild of AIxelerator from source.")
-            endif()
+        set(_aix_needs_rebuild FALSE)
+        if(FORCE_AIX_REBUILD)
+            set(_aix_needs_rebuild TRUE)
+            message(STATUS "FORCE_AIX_REBUILD is ON, forcing rebuild of AIxelerator from source.")
+        elseif(NOT AIXELERATOR_PREBUILT_LIB)
+            set(_aix_needs_rebuild TRUE)
+            message(STATUS "Prebuilt AIxelerator library not found in ${AIXELERATOR_PREBUILT_LIB_DIR}.")
+        elseif(_aix_submodule_commit AND NOT "${_aix_submodule_commit}" STREQUAL "${_aix_installed_commit}")
+            set(_aix_needs_rebuild TRUE)
+            message(STATUS "AIxeleratorService submodule commit (${_aix_submodule_commit}) differs from prebuilt stamp (${_aix_installed_commit}); rebuilding from source...")
+        endif()
 
+        if(_aix_needs_rebuild)
             set(AIXELERATOR_PREBUILT_BUILD_DIR "${CMAKE_BINARY_DIR}/aixelerator-prebuilt-build")
             file(MAKE_DIRECTORY "${AIXELERATOR_PREBUILT_BUILD_DIR}")
 
@@ -201,6 +220,7 @@ if(WITH_AIX)
                     -DCMAKE_BUILD_TYPE=${CMAKE_BUILD_TYPE}
                     -DCMAKE_INSTALL_PREFIX=${AIXELERATOR_PREBUILT_INSTALL_PREFIX}
                     -DBUILD_TESTS=OFF
+                    -DAIX_SKIP_VENV_CREATION=ON
                     -DUSE_PYTHON_TORCH_CMAKE_PREFIX=${USE_PYTHON_TORCH_CMAKE_PREFIX}
                     -DTORCH_VERSION=${TORCH_VERSION}
                     ${_aixelerator_scorep_arg}
@@ -225,6 +245,10 @@ if(WITH_AIX)
             )
             if(NOT AIXELERATOR_INSTALL_RESULT EQUAL 0)
                 message(FATAL_ERROR "Failed to install AIxelerator prebuilt bootstrap build.")
+            endif()
+
+            if(_aix_submodule_commit)
+                file(WRITE "${_aix_stamp_file}" "${_aix_submodule_commit}\n")
             endif()
 
             find_library(AIXELERATOR_PREBUILT_LIB
