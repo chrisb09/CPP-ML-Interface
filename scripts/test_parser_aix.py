@@ -32,7 +32,7 @@ def test_parse(header_path):
             if res: return res
         return None
 
-    cls = find_class(tu.cursor, "MLCouplingProviderAixelerator")
+    cls = find_class(tu.cursor, "MLCouplingLibraryAixelerator")
     if not cls:
         print("Class not found")
         return

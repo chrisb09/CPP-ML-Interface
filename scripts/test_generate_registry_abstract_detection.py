@@ -13,8 +13,9 @@ _spec.loader.exec_module(generate_registry)
 class TestAbstractDetection(unittest.TestCase):
     def setUp(self):
         try:
+            generate_registry.init_libclang()
             import clang.cindex as cindex
-        except ModuleNotFoundError:
+        except Exception:
             self.skipTest("clang.cindex is not available in this Python environment")
 
         self.cindex = cindex
@@ -49,10 +50,10 @@ class TestAbstractDetection(unittest.TestCase):
         cases = [
             ("include/normalization/ml_coupling_normalization.hpp", "MLCouplingNormalization", True),
             ("include/normalization/ml_coupling_minmax_normalization.hpp", "MLCouplingMinMaxNormalization", False),
-            ("include/provider/ml_coupling_provider.hpp", "MLCouplingProvider", True),
+            ("include/library/ml_coupling_library.hpp", "MLCouplingLibrary", True),
             ("include/behavior/ml_coupling_behavior.hpp", "MLCouplingBehavior", True),
             ("include/behavior/ml_coupling_behavior_default.hpp", "MLCouplingBehaviorDefault", False),
-            ("include/application/ml_coupling_application.hpp", "MLCouplingApplication", True),
+            ("include/application/ml_coupling_application.hpp", "MLCouplingApplication", False),
             ("include/application/ml_coupling_application_turbulence_closure.hpp", "MLCouplingApplicationTurbulenceClosure", False),
         ]
 

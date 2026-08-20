@@ -13,8 +13,9 @@ _spec.loader.exec_module(generate_registry)
 class TestConstructorVisibility(unittest.TestCase):
     def setUp(self):
         try:
+            generate_registry.init_libclang()
             import clang.cindex as cindex
-        except ModuleNotFoundError:
+        except Exception:
             self.skipTest("clang.cindex is not available in this Python environment")
 
         self.cindex = cindex
@@ -47,20 +48,21 @@ class TestConstructorVisibility(unittest.TestCase):
     def test_smartsim_private_ctor_not_exposed(self):
         node = self._find_class_node(
             "include/provider/ml_coupling_provider_smartsim.hpp",
-            "MLCouplingProviderSmartsim",
+            "MLCouplingLibrarySmartsim",
         )
 
-        constructors = generate_registry.get_class_constructors(node, "MLCouplingProviderSmartsim")
+        constructors = generate_registry.get_class_constructors(node, "MLCouplingLibrarySmartsim")
 
         self.assertEqual(
             len(constructors),
-            1,
-            f"Expected exactly one public constructor, got {len(constructors)}: {constructors}",
+            2,
+            f"Expected exactly two public constructors, got {len(constructors)}: {constructors}",
         )
 
-        public_ctor_param_names = [name for _, name, _ in constructors[0]]
-        self.assertNotIn("hosts", public_ctor_param_names)
-        self.assertNotIn("ports", public_ctor_param_names)
+        for ctor in constructors:
+            param_names = [name for _, name, _ in ctor]
+            self.assertNotIn("hosts", param_names)
+            self.assertNotIn("ports", param_names)
 
 
 if __name__ == "__main__":

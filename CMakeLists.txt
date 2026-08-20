@@ -89,7 +89,7 @@ if(NOT CPPML_DISABLE_REGISTRY_GEN)
     # Python regression tests for registry parser (optional)
     if(CPPML_RUN_REGISTRY_TESTS)
         add_custom_target(registry_parser_tests
-            COMMAND python3 -m unittest scripts.test_generate_registry_defaults scripts.test_generate_registry_abstract_detection scripts.test_generate_registry_constructor_visibility
+            COMMAND "${PYTHON_EXECUTABLE}" -m unittest scripts.test_generate_registry_defaults scripts.test_generate_registry_abstract_detection scripts.test_generate_registry_constructor_visibility
             WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
             DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/scripts/generate_registry.py"
                     "${CMAKE_CURRENT_SOURCE_DIR}/scripts/test_generate_registry_defaults.py"

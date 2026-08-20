@@ -6,7 +6,7 @@ coupling_type = "STATIC"
 level = "debug"
 error_separate = false
 
-[provider]
+[library]
 #class = "Smartsim"
 #device = "CPU"
 #model_backend = "TORCH"

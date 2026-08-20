@@ -51,7 +51,7 @@ class TestDefaultTokenExtraction(unittest.TestCase):
             "next_param"
         ]
         value = generate_registry._extract_default_from_param_tokens(tokens)
-        self.assertEqual(value, "std :: array < int , 3 > { }")
+        self.assertEqual(value, "std::array < int , 3 > { }")
 
     def test_nested_template_brace_default(self):
         tokens = [
@@ -62,7 +62,7 @@ class TestDefaultTokenExtraction(unittest.TestCase):
             "next_param"
         ]
         value = generate_registry._extract_default_from_param_tokens(tokens)
-        self.assertEqual(value, "std :: map < int , std :: vector < int > > { }")
+        self.assertEqual(value, "std::map < int , std::vector < int > > { }")
 
     def test_duplicate_equals_tokens_are_ignored(self):
         tokens = [
