@@ -329,6 +329,11 @@ class MLCoupling
         return 0;
     }
 
+    MLCouplingApplication<CouplingInput, CouplingOutput, LibraryInput, LibraryOutput>* get_application() const
+    {
+        return application.get();
+    }
+
     void set_scorep_detailed_regions_enabled(bool enabled)
     {
         ml_coupling_scorep::set_detailed_regions_enabled(enabled);
