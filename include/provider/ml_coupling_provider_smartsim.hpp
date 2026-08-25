@@ -49,7 +49,53 @@ class MLCouplingLibrarySmartsim : public MLCouplingLibrary<In, Out>
     const std::vector<std::string> tf_input_labels;
     const std::vector<std::string> tf_output_labels;
     const std::vector<std::string> tf_input_keys; // Added new member
+    const std::string db_layout;
+    int db_index = 0;
+    int local_rank = 0;
+    int block_start = 0;
+    int block_end = 1;
+    int block_size = 1;
+    bool is_db_leader = true;
+    bool is_per_ml_node = false;
     mlcoupling::smartsim_key_balancing::RedisKeyBalancer key_balancer;
+
+    static std::string normalize_db_layout(std::string layout)
+    {
+        if (layout.empty())
+        {
+            const char *env_val = std::getenv("MLCOUPLING_SMARTSIM_DB_LAYOUT");
+            if (env_val != nullptr && *env_val != '\0')
+            {
+                layout = env_val;
+            }
+            else
+            {
+                layout = "shared";
+            }
+        }
+        std::string norm;
+        norm.reserve(layout.size());
+        for (char c : layout)
+        {
+            if (c == '_' || c == '-')
+            {
+                norm.push_back('-');
+            }
+            else
+            {
+                norm.push_back(static_cast<char>(std::tolower(static_cast<unsigned char>(c))));
+            }
+        }
+        if (norm == "per-ml-node" || norm == "permlnode" || norm == "db-per-node" || norm == "dbpernode" || norm == "sharded" || norm == "sharded-standalone")
+        {
+            return "per-ml-node";
+        }
+        if (norm == "shared" || norm == "single-db" || norm == "singledb" || norm == "cluster" || norm == "clustered")
+        {
+            return "shared";
+        }
+        return layout;
+    }
 
     static int env_int(const char *name, int fallback)
     {
@@ -121,7 +167,8 @@ private:
                                const std::vector<std::string> &tf_output_labels = {},
                                const std::vector<std::string> &tf_input_keys = {}, // New parameter
                                MLCouplingData<In>* input_after_preprocessing = nullptr,
-                               MLCouplingData<Out> *output_before_postprocessing = nullptr)
+                               MLCouplingData<Out> *output_before_postprocessing = nullptr,
+                               std::string db_layout = "shared")
         : device(std::move(device)),
           model_backend(std::move(model_backend)),
           model_name(std::move(model_name)),
@@ -136,6 +183,7 @@ private:
           tf_input_labels(std::move(tf_input_labels)),
           tf_output_labels(std::move(tf_output_labels)),
           tf_input_keys(std::move(tf_input_keys)), // Initialize new parameter
+          db_layout(normalize_db_layout(std::move(db_layout))),
           input_after_preprocessing(input_after_preprocessing),
           output_before_postprocessing(output_before_postprocessing)
     {
@@ -143,6 +191,8 @@ private:
 #if !defined(WITH_SMARTSIM)
         guarantee(false, "SmartSim provider is not enabled. Please make sure WITH_SMARTSIM is defined and the necessary dependencies are installed.");
 #endif
+
+        this->is_per_ml_node = (this->db_layout == "per-ml-node");
 
         const int resolved_nodes = resolve_nodes(nodes);
 
@@ -175,58 +225,140 @@ private:
                            this->model_timeout,
                            tf_input_labels,
                            tf_output_labels,
-                           tf_input_keys);
+                           tf_input_keys,
+                           this->db_layout);
+
+        int world_size = 1;
+#if defined(MLCOUPLING_PROVIDER_HAS_MPI)
+        int mpi_init = 0;
+        MPI_Initialized(&mpi_init);
+        if (mpi_init)
+        {
+            MPI_Comm_size(MPI_COMM_WORLD, &world_size);
+        }
+#endif
+
+        if (this->is_per_ml_node)
+        {
+            const int num_dbs = resolved_nodes > 0 ? resolved_nodes : 1;
+            if (world_size < num_dbs)
+            {
+                logging::warning("SmartSim per-ml-node: world_size (" + std::to_string(world_size) +
+                                 ") < resolved_nodes (" + std::to_string(num_dbs) + "). Some DBs will have no ranks assigned.");
+            }
+            this->db_index = std::min(num_dbs - 1, std::max(0, (this->rank * num_dbs) / std::max(1, world_size)));
+            this->block_start = (this->db_index * world_size) / num_dbs;
+            this->block_end = ((this->db_index + 1) * world_size) / num_dbs;
+            this->block_size = std::max(1, this->block_end - this->block_start);
+            this->local_rank = this->rank - this->block_start;
+            this->is_db_leader = (this->rank == this->block_start);
+        }
+        else
+        {
+            this->db_index = 0;
+            this->block_start = 0;
+            this->block_end = world_size;
+            this->block_size = world_size;
+            this->local_rank = this->rank;
+            this->is_db_leader = (this->rank == 0);
+        }
 
         const int key_balance_streams = this->num_gpus > 0 ? this->num_gpus : 0;
-        key_balancer = mlcoupling::smartsim_key_balancing::RedisKeyBalancer::from_environment(
-            this->rank, key_balance_streams, resolved_nodes);
-        if (key_balancer.enabled()) {
-            if (this->rank == 0) {
-                for (std::size_t shard = 0; shard < key_balancer.tags().size(); ++shard) {
-                    const std::string& tag = key_balancer.tags()[shard];
-                    logging::info("SMARTSIM_KEY_BALANCE shard=" + std::to_string(shard) +
-                                  " tag=" + tag +
-                                  " slot=" + std::to_string(
-                                      mlcoupling::smartsim_key_balancing::redis_hash_slot(tag)) +
-                                  " expected_slot_range=[" + std::to_string(
-                                      mlcoupling::smartsim_key_balancing::RedisKeyBalancer::slot_first(
-                                          static_cast<int>(shard), resolved_nodes)) +
-                                  "," + std::to_string(
-                                      mlcoupling::smartsim_key_balancing::RedisKeyBalancer::slot_last(
-                                          static_cast<int>(shard), resolved_nodes)) + "]");
+        if (this->is_per_ml_node)
+        {
+            key_balancer = mlcoupling::smartsim_key_balancing::RedisKeyBalancer();
+        }
+        else
+        {
+            key_balancer = mlcoupling::smartsim_key_balancing::RedisKeyBalancer::from_environment(
+                this->rank, key_balance_streams, resolved_nodes);
+            if (key_balancer.enabled())
+            {
+                if (this->rank == 0)
+                {
+                    for (std::size_t shard = 0; shard < key_balancer.tags().size(); ++shard)
+                    {
+                        const std::string &tag = key_balancer.tags()[shard];
+                        logging::info("SMARTSIM_KEY_BALANCE shard=" + std::to_string(shard) +
+                                      " tag=" + tag +
+                                      " slot=" + std::to_string(
+                                          mlcoupling::smartsim_key_balancing::redis_hash_slot(tag)) +
+                                      " expected_slot_range=[" + std::to_string(
+                                          mlcoupling::smartsim_key_balancing::RedisKeyBalancer::slot_first(
+                                              static_cast<int>(shard), resolved_nodes)) +
+                                      "," + std::to_string(
+                                          mlcoupling::smartsim_key_balancing::RedisKeyBalancer::slot_last(
+                                              static_cast<int>(shard), resolved_nodes)) + "]");
+                    }
                 }
+                logging::info("SMARTSIM_KEY_BALANCE_ASSIGNMENT rank=" + std::to_string(this->rank) +
+                              " target_shard=" + std::to_string(key_balancer.target_shard()) +
+                              " gpu=" + std::to_string(
+                                  this->rank % (key_balance_streams > 0 ? key_balance_streams : 1)));
             }
-            logging::info("SMARTSIM_KEY_BALANCE_ASSIGNMENT rank=" + std::to_string(this->rank) +
-                          " target_shard=" + std::to_string(key_balancer.target_shard()) +
-                          " gpu=" + std::to_string(
-                              this->rank % (key_balance_streams > 0 ? key_balance_streams : 1)));
         }
 
         // Before creating a smartsim client (SmartRedis to be exact), we need to set the appropriate env vars
-
-        // Most importantly, SSDB has to be set if it isn't already, either via host and port, or hosts and ports
-        std::string ssdb;
-        if (host != "" && port != -1)
+        std::vector<std::string> addresses;
+        if (!host.empty() && port != -1)
         {
-            ssdb = host + ":" + std::to_string(port);
-            setenv("SSDB", ssdb.c_str(), 1);
+            addresses.push_back(host + ":" + std::to_string(port));
         }
         else if (!hosts.empty() && !ports.empty() && hosts.size() == ports.size())
         {
-            ssdb = "";
-            for (int i = 0; i < (int)hosts.size(); i++)
+            for (size_t i = 0; i < hosts.size(); ++i)
             {
-                ssdb += hosts[i] + ":" + std::to_string(ports[i]);
-                if (i < (int)hosts.size() - 1)
-                {
-                    ssdb += ",";
-                }
+                addresses.push_back(hosts[i] + ":" + std::to_string(ports[i]));
             }
-            setenv("SSDB", ssdb.c_str(), 1);
+        }
+        else if (const char *env_ssdb = std::getenv("SSDB"))
+        {
+            std::string raw(env_ssdb);
+            size_t start = 0;
+            while (start < raw.size())
+            {
+                size_t end = raw.find(',', start);
+                if (end == std::string::npos)
+                {
+                    end = raw.size();
+                }
+                std::string addr = raw.substr(start, end - start);
+                if (!addr.empty())
+                {
+                    addresses.push_back(addr);
+                }
+                start = end + 1;
+            }
         }
 
-        // Setting the database type based on the number of nodes
-        setenv("SR_DB_TYPE", resolved_nodes > 1 ? "Clustered" : "Standalone", 1);
+        std::string ssdb;
+        if (this->is_per_ml_node)
+        {
+            guarantee(!addresses.empty(), "per-ml-node db_layout requires at least one address from SSDB or host/port config.");
+            if (resolved_nodes > 0 && static_cast<int>(addresses.size()) != resolved_nodes)
+            {
+                logging::warning("per-ml-node: resolved_nodes=" + std::to_string(resolved_nodes) +
+                                 " but found " + std::to_string(addresses.size()) + " address(es) in SSDB list.");
+            }
+            size_t target_idx = static_cast<size_t>(this->db_index) % addresses.size();
+            ssdb = addresses[target_idx];
+            setenv("SSDB", ssdb.c_str(), 1);
+            setenv("SR_DB_TYPE", "Standalone", 1);
+        }
+        else
+        {
+            if (!addresses.empty())
+            {
+                ssdb = "";
+                for (size_t i = 0; i < addresses.size(); ++i)
+                {
+                    if (i > 0) ssdb += ",";
+                    ssdb += addresses[i];
+                }
+                setenv("SSDB", ssdb.c_str(), 1);
+            }
+            setenv("SR_DB_TYPE", resolved_nodes > 1 ? "Clustered" : "Standalone", 1);
+        }
 
         // Setting the SmartRedis timeouts if provided and not already set in the environment
         set_timeout_env_if_not_set("SR_CMD_TIMEOUT", this->command_timeout);
@@ -240,11 +372,17 @@ private:
         client = new SmartRedis::Client("solver_" + std::to_string(world_rank));
 
         bool is_multi = (std::getenv("MLCOUPLING_MULTI_MODEL") != nullptr);
-        if (this->rank == 0 || is_multi)
+        bool should_load_model = this->is_per_ml_node ? (this->is_db_leader || is_multi) : (this->rank == 0 || is_multi);
+        if (should_load_model)
         {
-            if (this->rank == 0)
+            if (this->is_db_leader || this->rank == 0)
             {
-                logging::debug("SmartSim Coupling Provider initialized with the following parameters:");
+                logging::info("SmartSim Coupling Provider initialized on rank " + std::to_string(this->rank) +
+                              " [db_layout=" + this->db_layout + ", db_index=" + std::to_string(this->db_index) +
+                              ", local_rank=" + std::to_string(this->local_rank) +
+                              ", block=[" + std::to_string(this->block_start) + ".." + std::to_string(this->block_end) +
+                              "), is_leader=" + (this->is_db_leader ? "true" : "false") +
+                              ", SSDB=" + ssdb + "]");
                 logging::debug("Device: " + this->device);
                 logging::debug("Model Backend: " + this->model_backend);
                 logging::debug("SmartSim DB Nodes: " + std::to_string(resolved_nodes));
@@ -290,7 +428,7 @@ private:
         }
         else
         {
-            // Non-rank-0 clients poll until rank 0 has finished loading the model into RedisAI
+            // Non-loader clients poll until leader has finished loading the model into RedisAI
             const int poll_freq_ms = 200;
             int num_tries = (this->model_timeout > 0)
                 ? (this->model_timeout / poll_freq_ms)
@@ -340,8 +478,9 @@ public:
                                const std::vector<std::string> &tf_output_labels = {},
                                const std::vector<std::string>& tf_input_keys = {},
                                MLCouplingData<In>* input_after_preprocessing = nullptr,
-                               MLCouplingData<Out> *output_before_postprocessing = nullptr)
-        : MLCouplingLibrarySmartsim(std::move(device), std::move(model_backend), std::move(model_path), std::string_view(), std::move(model_name), std::move(host), port, std::vector<std::string>(), std::vector<int>(), nodes, num_gpus, first_gpu, batch_size, min_batch_size, min_batch_timeout, command_timeout, socket_timeout, model_timeout, tf_input_labels, tf_output_labels, tf_input_keys, input_after_preprocessing, output_before_postprocessing) {};
+                               MLCouplingData<Out> *output_before_postprocessing = nullptr,
+                               std::string db_layout = "shared")
+        : MLCouplingLibrarySmartsim(std::move(device), std::move(model_backend), std::move(model_path), std::string_view(), std::move(model_name), std::move(host), port, std::vector<std::string>(), std::vector<int>(), nodes, num_gpus, first_gpu, batch_size, min_batch_size, min_batch_timeout, command_timeout, socket_timeout, model_timeout, tf_input_labels, tf_output_labels, tf_input_keys, input_after_preprocessing, output_before_postprocessing, std::move(db_layout)) {};
 
     MLCouplingLibrarySmartsim(std::string device,
                                std::string model_backend,
@@ -362,8 +501,9 @@ public:
                                const std::vector<std::string> &tf_output_labels = {},
                                const std::vector<std::string>& tf_input_keys = {},
                                MLCouplingData<In>* input_after_preprocessing = nullptr,
-                               MLCouplingData<Out> *output_before_postprocessing = nullptr)
-        : MLCouplingLibrarySmartsim(std::move(device), std::move(model_backend), std::string(), std::move(model), std::move(model_name), std::move(host), port, std::vector<std::string>(), std::vector<int>(), nodes, num_gpus, first_gpu, batch_size, min_batch_size, min_batch_timeout, command_timeout, socket_timeout, model_timeout, tf_input_labels, tf_output_labels, tf_input_keys, input_after_preprocessing, output_before_postprocessing) {};
+                               MLCouplingData<Out> *output_before_postprocessing = nullptr,
+                               std::string db_layout = "shared")
+        : MLCouplingLibrarySmartsim(std::move(device), std::move(model_backend), std::string(), std::move(model), std::move(model_name), std::move(host), port, std::vector<std::string>(), std::vector<int>(), nodes, num_gpus, first_gpu, batch_size, min_batch_size, min_batch_timeout, command_timeout, socket_timeout, model_timeout, tf_input_labels, tf_output_labels, tf_input_keys, input_after_preprocessing, output_before_postprocessing, std::move(db_layout)) {};
 
     void validate_parameter(const std::string &device,
                             const std::string &model_backend,
@@ -385,7 +525,8 @@ public:
                             int model_timeout,
                             const std::vector<std::string> &tf_input_labels,
                             const std::vector<std::string>& tf_output_labels,
-                            const std::vector<std::string>& tf_input_keys)
+                            const std::vector<std::string>& tf_input_keys,
+                            const std::string &db_layout = "shared")
     {
         guarantee(!model_name.empty(), "model_name must be specified");
         guarantee(!(model_path.empty() && model.empty()), "Either model_path or model must be specified");
@@ -399,8 +540,12 @@ public:
         guarantee(first_gpu >= 0, "first_gpu cannot be negative");
         guarantee(num_gpus == 0 || first_gpu < num_gpus, "first_gpu must be less than num_gpus");
 
+        guarantee(db_layout == "shared" || db_layout == "per-ml-node", "db_layout must be either 'shared' or 'per-ml-node'");
         guarantee(nodes > 0, "nodes must be greater than 0");
-        guarantee(nodes != 2, "nodes cannot be 2 for smartsim provider, as smartsim (actually redis to be exact) does not support 2-node clusters (2 nodes could have issues with deciding which is down in case of failure, while 3 or more nodes can have a majority vote)");
+        if (db_layout == "shared")
+        {
+            guarantee(nodes != 2, "nodes cannot be 2 for smartsim provider in shared mode, as smartsim (actually redis to be exact) does not support 2-node clusters (2 nodes could have issues with deciding which is down in case of failure, while 3 or more nodes can have a majority vote)");
+        }
 
         bool is_ssdb_set = getenv("SSDB") != nullptr;
 
@@ -560,9 +705,17 @@ public:
             MPI_Initialized(&mpi_initialized);
             if (mpi_initialized) {
                 MPI_Comm_size(MPI_COMM_WORLD, &world_size);
-                if (world_size > 1 && this->rank >= num_chains) {
-                    int token = 0;
-                    MPI_Recv((void*)&token, 1, MPI_INT, this->rank - num_chains, 9993, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+                if (this->is_per_ml_node) {
+                    if (this->block_size > 1 && this->local_rank >= num_chains) {
+                        int token = 0;
+                        int src_rank = this->block_start + (this->local_rank - num_chains);
+                        MPI_Recv((void*)&token, 1, MPI_INT, src_rank, 9993, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+                    }
+                } else {
+                    if (world_size > 1 && this->rank >= num_chains) {
+                        int token = 0;
+                        MPI_Recv((void*)&token, 1, MPI_INT, this->rank - num_chains, 9993, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+                    }
                 }
             }
         }
@@ -627,9 +780,19 @@ public:
             for (const auto &name : input_tensor_names) { logging::debug("  " + name); }
 
 #if defined(MLCOUPLING_PROVIDER_HAS_MPI)
-            if (num_chains > 0 && mpi_initialized && world_size > 1 && (this->rank + num_chains) < world_size) {
-                int token = 1;
-                MPI_Send((const void*)&token, 1, MPI_INT, this->rank + num_chains, 9993, MPI_COMM_WORLD);
+            if (num_chains > 0 && mpi_initialized) {
+                if (this->is_per_ml_node) {
+                    if (this->block_size > 1 && (this->local_rank + num_chains) < this->block_size) {
+                        int token = 1;
+                        int dst_rank = this->block_start + (this->local_rank + num_chains);
+                        MPI_Send((const void*)&token, 1, MPI_INT, dst_rank, 9993, MPI_COMM_WORLD);
+                    }
+                } else {
+                    if (world_size > 1 && (this->rank + num_chains) < world_size) {
+                        int token = 1;
+                        MPI_Send((const void*)&token, 1, MPI_INT, this->rank + num_chains, 9993, MPI_COMM_WORLD);
+                    }
+                }
             }
 #endif
 
@@ -650,7 +813,7 @@ public:
                 }
 #endif
                 if (this->device == "GPU") {
-                    const int offset = this->rank >= 0 ? this->rank : 0;
+                    const int offset = this->is_per_ml_node ? this->local_rank : (this->rank >= 0 ? this->rank : 0);
                     client->run_model_multigpu(this->model_name, input_tensor_names, output_tensor_names, offset, this->first_gpu, this->num_gpus);
                 } else {
                     client->run_model(this->model_name, input_tensor_names, output_tensor_names);
