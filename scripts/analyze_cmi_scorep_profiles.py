@@ -7,10 +7,11 @@ Score-P CUBE profiles and AIx P2P timeline CSVs.
 
 Features:
 - Extracts hierarchical calltree profiles from .cubex files via `cube_dump`.
-- Computes true call-path inclusive, exclusive, and per-step normalized metrics.
-- Aggregates metrics across MPI ranks (mean, min, max, std, sum).
-- Renders true hierarchical Icicle plots (where children fit within parent width).
-- Renders phase breakdown bar charts (steady step decomposition).
+- Computes exact call-path inclusive, exclusive, and per-step normalized metrics.
+- Separates one-off lifecycle phases (setup, warmup, teardown) from steady-state ML steps.
+- Supports communicator-wide rank averaging (consistent tree algebra) and critical-rank metrics.
+- Renders true hierarchical Icicle plots (where children strictly fit within parent width).
+- Renders non-overlapping leaf decomposition breakdown bar charts.
 - Generates AIx P2P timeline Gantt charts and makespan/overlap analyses.
 - Exports comprehensive Markdown summaries and CSV reports.
 
@@ -28,7 +29,7 @@ import argparse
 import subprocess
 from shutil import which as shutil_which
 from pathlib import Path
-from typing import Dict, List, Tuple, Optional, Any
+from typing import Dict, List, Tuple, Optional, Any, Set
 import numpy as np
 import pandas as pd
 
@@ -37,7 +38,6 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import matplotlib.patches as patches
-import matplotlib.colors as mcolors
 
 # Plotting style
 plt.rcParams.update({
@@ -102,6 +102,7 @@ COLOR_MAP = {
     "phydll_unpack": "#8073AC",
     
     # PhyDLL DL Side (C++ & Python)
+    "phydll_dl_client": "#2B5C8F",
     "dl_recv": "#FDAE61",
     "py_recv": "#FDAE61",
     "dl_frame_copy": "#FEE090",
@@ -110,8 +111,8 @@ COLOR_MAP = {
     "py_input_unpack": "#E08214",
     "dl_h2d": "#FEE090",
     "py_h2d": "#FEE090",
-    "dl_torch_forward": "#D73027",
-    "py_torch_forward": "#D73027",
+    "dl_torch_forward": "#A50026",
+    "py_torch_forward": "#A50026",
     "dl_d2h": "#8073AC",
     "py_d2h": "#8073AC",
     "dl_output_allocate": "#E0E0E0",
@@ -122,7 +123,7 @@ COLOR_MAP = {
     "py_send": "#2D004B",
     "py_inference": "#D73027",
     
-    # Residual
+    # Residual / Overhead
     "Self / Overhead": "#BDBDBD",
 }
 
@@ -162,26 +163,27 @@ class CallTreeNode:
         self.parent_id = parent_id
         self.children_ids: List[int] = []
         
-        # Raw metrics for this callpath
+        # Raw metrics for this callpath (in seconds and counts)
         self.incl_time: float = 0.0
         self.excl_time: float = 0.0
         self.visits: int = 0
         
-        # Per-step normalized values
+        # Normalized per-step metrics
         self.step_incl_time: float = 0.0
         self.step_excl_time: float = 0.0
         self.step_self_time: float = 0.0
+        self.is_lifecycle: bool = False
 
-def parse_single_cubex_tree(cubex_path: Path) -> Dict[int, CallTreeNode]:
+def parse_single_cubex_tree(cubex_path: Path, explicit_steady_steps: Optional[int] = None) -> Dict[int, CallTreeNode]:
     """
     Parses full call-tree structure and extracts inclusive/exclusive time and visits.
+    Properly handles lifecycle vs steady-state normalization.
     """
     if not cubex_path.exists():
         raise FileNotFoundError(f"CUBE profile not found: {cubex_path}")
     
     dump_bin = find_cube_dump()
     
-    # 1. Calltree structure
     try:
         tree_out = subprocess.check_output([dump_bin, "-w", "calltree", str(cubex_path)], text=True, stderr=subprocess.DEVNULL)
         incl_out = subprocess.check_output([dump_bin, "-m", "time", "-z", "incl", "-s", "human", "-c", "all", str(cubex_path)], text=True, stderr=subprocess.DEVNULL)
@@ -238,20 +240,46 @@ def parse_single_cubex_tree(cubex_path: Path) -> Dict[int, CallTreeNode]:
                 nodes[parent_id].children_ids.append(cid)
 
     # Determine normalization base (visits of steady ML step)
-    norm_visits = 1
-    for n in nodes.values():
-        if n.name in ("solver_step_ml_steady", "solver_ml_provider_call") and n.visits > 0:
-            norm_visits = n.visits
-            break
+    steady_visits = explicit_steady_steps or 0
+    if steady_visits <= 0:
+        for n in nodes.values():
+            if n.name in ("solver_step_ml_steady", "solver_ml_provider_call") and n.visits > 0:
+                steady_visits = n.visits
+                break
+    if steady_visits <= 0:
+        # DL-side client profile detection
+        for n in nodes.values():
+            if n.name in ("dl_torch_forward", "py_torch_forward", "py_inference", "dl_recv", "py_recv") and n.visits > 0:
+                steady_visits = n.visits
+                break
+    if steady_visits <= 0:
+        steady_visits = 1
+
+    def get_ancestor_names(cid: int) -> Set[str]:
+        names = set()
+        curr: Optional[int] = cid
+        while curr is not None and curr in nodes:
+            names.add(nodes[curr].name)
+            curr = nodes[curr].parent_id
+        return names
 
     # Compute per-step metrics
     for n in nodes.values():
-        n.step_incl_time = n.incl_time / norm_visits
-        n.step_excl_time = n.excl_time / norm_visits
+        ancestors = get_ancestor_names(n.id)
         
-        # Self-time is exclusive time
-        child_incl_sum = sum(nodes[c].step_incl_time for c in n.children_ids if c in nodes)
-        n.step_self_time = max(0.0, n.step_incl_time - child_incl_sum)
+        # Lifecycle classification
+        if "solver_setup" in ancestors or "solver_teardown" in ancestors or "solver_step_ml_warmup" in ancestors or n.name in ("solver_setup", "solver_teardown", "solver_step_ml_warmup", "terrain_solver", "solver_main_loop"):
+            n.is_lifecycle = True
+            # Lifecycle phases retain total execution time
+            n.step_incl_time = n.incl_time
+            n.step_excl_time = n.excl_time
+            n.step_self_time = n.excl_time
+        else:
+            n.is_lifecycle = False
+            # Steady-state regions are normalized by steady visits
+            n.step_incl_time = n.incl_time / steady_visits
+            n.step_excl_time = n.excl_time / steady_visits
+            n.step_self_time = n.excl_time / steady_visits
 
     return nodes
 
@@ -264,10 +292,14 @@ class AggregatedCallTree:
     def __init__(self):
         # Callpath key: tuple of region names from root to node
         self.paths: Dict[Tuple[str, ...], Dict[str, Any]] = {}
+        self.total_ranks: int = 0
+        self.rank_trees: List[Dict[int, CallTreeNode]] = []
 
     def add_tree(self, nodes: Dict[int, CallTreeNode]):
         if not nodes:
             return
+        self.total_ranks += 1
+        self.rank_trees.append(nodes)
 
         def get_path(cid: int) -> Tuple[str, ...]:
             p = []
@@ -277,6 +309,7 @@ class AggregatedCallTree:
                 curr = nodes[curr].parent_id
             return tuple(reversed(p))
 
+        rank_idx = self.total_ranks - 1
         for cid, n in nodes.items():
             path = get_path(cid)
             if path not in self.paths:
@@ -284,15 +317,16 @@ class AggregatedCallTree:
                     "name": n.name,
                     "parent_path": path[:-1] if len(path) > 1 else None,
                     "children_paths": set(),
-                    "step_incl_list": [],
-                    "step_excl_list": [],
-                    "step_self_list": [],
-                    "visits_list": []
+                    "is_lifecycle": n.is_lifecycle,
+                    "per_rank_step_incl": {},
+                    "per_rank_step_excl": {},
+                    "per_rank_step_self": {},
+                    "per_rank_visits": {},
                 }
-            self.paths[path]["step_incl_list"].append(n.step_incl_time)
-            self.paths[path]["step_excl_list"].append(n.step_excl_time)
-            self.paths[path]["step_self_list"].append(n.step_self_time)
-            self.paths[path]["visits_list"].append(n.visits)
+            self.paths[path]["per_rank_step_incl"][rank_idx] = n.step_incl_time
+            self.paths[path]["per_rank_step_excl"][rank_idx] = n.step_excl_time
+            self.paths[path]["per_rank_step_self"][rank_idx] = n.step_self_time
+            self.paths[path]["per_rank_visits"][rank_idx] = n.visits
 
             if len(path) > 1:
                 parent_path = path[:-1]
@@ -301,35 +335,50 @@ class AggregatedCallTree:
 
     def compute_summary(self, rank_agg: str = "mean") -> Dict[Tuple[str, ...], Dict[str, Any]]:
         summary: Dict[Tuple[str, ...], Dict[str, Any]] = {}
-        for path, d in self.paths.items():
-            incls = np.array(d["step_incl_list"])
-            excls = np.array(d["step_excl_list"])
-            selfs = np.array(d["step_self_list"])
-            vis = np.array(d["visits_list"])
+        num_ranks = max(1, self.total_ranks)
 
-            def agg_val(arr: np.ndarray) -> float:
-                if len(arr) == 0: return 0.0
-                if rank_agg == "mean": return float(np.mean(arr))
-                elif rank_agg == "max": return float(np.max(arr))
-                elif rank_agg == "min": return float(np.min(arr))
-                elif rank_agg == "sum": return float(np.sum(arr))
-                return float(np.mean(arr))
+        for path, d in self.paths.items():
+            # Pad missing ranks with 0.0 for consistent tree algebra across MPI communicator
+            incls_all = [d["per_rank_step_incl"].get(r, 0.0) for r in range(num_ranks)]
+            excls_all = [d["per_rank_step_excl"].get(r, 0.0) for r in range(num_ranks)]
+            selfs_all = [d["per_rank_step_self"].get(r, 0.0) for r in range(num_ranks)]
+            vis_all = [d["per_rank_visits"].get(r, 0) for r in range(num_ranks)]
+
+            active_incls = list(d["per_rank_step_incl"].values())
+            active_ranks = len(active_incls)
+
+            rank0_incl = d["per_rank_step_incl"].get(0, 0.0)
+            rank0_self = d["per_rank_step_self"].get(0, 0.0)
+
+            # Communicator-wide mean (sum across ranks / total_ranks)
+            comm_mean_incl = float(np.mean(incls_all))
+            comm_mean_excl = float(np.mean(excls_all))
+            comm_mean_self = float(np.mean(selfs_all))
+
+            # Active-only mean
+            active_mean_incl = float(np.mean(active_incls)) if active_incls else 0.0
+
+            max_incl = float(np.max(incls_all))
+            min_incl = float(np.min(incls_all)) if active_ranks == num_ranks else 0.0
+            std_incl = float(np.std(incls_all)) if num_ranks > 1 else 0.0
 
             summary[path] = {
                 "name": d["name"],
                 "parent_path": d["parent_path"],
                 "children_paths": sorted(list(d["children_paths"])),
-                "incl_mean": float(np.mean(incls)),
-                "incl_max": float(np.max(incls)),
-                "incl_min": float(np.min(incls)),
-                "incl_std": float(np.std(incls)) if len(incls)>1 else 0.0,
-                "incl_agg": agg_val(incls),
-                "excl_mean": float(np.mean(excls)),
-                "excl_agg": agg_val(excls),
-                "self_mean": float(np.mean(selfs)),
-                "self_agg": agg_val(selfs),
-                "visits_mean": float(np.mean(vis)),
-                "num_ranks": len(incls)
+                "is_lifecycle": d["is_lifecycle"],
+                "incl_mean": comm_mean_incl,
+                "incl_active_mean": active_mean_incl,
+                "incl_max": max_incl,
+                "incl_min": min_incl,
+                "incl_std": std_incl,
+                "incl_rank0": rank0_incl,
+                "self_mean": comm_mean_self,
+                "self_rank0": rank0_self,
+                "excl_mean": comm_mean_excl,
+                "visits_mean": float(np.mean(vis_all)),
+                "active_ranks": active_ranks,
+                "total_ranks": num_ranks,
             }
         return summary
 
@@ -341,30 +390,32 @@ class AggregatedCallTree:
 def render_icicle_plot(tree_summary: Dict[Tuple[str, ...], Dict[str, Any]],
                        root_path: Tuple[str, ...],
                        output_path: Path,
-                       title: str = "CMI Coupling Phase Breakdown"):
+                       title: str = "CMI Coupling Phase Breakdown",
+                       use_rank0: bool = False):
     """
     Renders a true Icicle plot where every child fits strictly within its parent rectangle.
     """
     if root_path not in tree_summary:
-        # Search for closest match (e.g. solver_ml_provider_call or app_provider_inference or root)
         candidates = [p for p in tree_summary if p[-1] in ("solver_ml_provider_call", "app_provider_inference", "phydll_dl_client", "py_inference")]
         if candidates:
             root_path = candidates[0]
         else:
             root_path = list(tree_summary.keys())[0]
 
+    val_key = "incl_rank0" if use_rank0 else "incl_mean"
+    self_key = "self_rank0" if use_rank0 else "self_mean"
+
     root_info = tree_summary[root_path]
-    root_val = root_info["incl_agg"]
+    root_val = root_info[val_key]
     if root_val <= 0:
         root_val = 1e-6
 
-    fig, ax = plt.subplots(figsize=(12, 6))
+    fig, ax = plt.subplots(figsize=(13, 6.5))
 
     row_height = 0.85
-    y_gap = 0.15
-    max_depth = 4
+    y_gap = 0.18
+    max_depth = 5
 
-    # Recursive render
     def draw_node(path: Tuple[str, ...], x_start: float, width: float, depth: int):
         if width <= 0 or depth > max_depth or path not in tree_summary:
             return
@@ -377,13 +428,12 @@ def render_icicle_plot(tree_summary: Dict[Tuple[str, ...], Dict[str, Any]],
         # Draw rectangle
         rect = patches.Rectangle(
             (x_start, y_pos), width, row_height,
-            linewidth=1.0, edgecolor="#222222", facecolor=color, alpha=0.92
+            linewidth=1.0, edgecolor="#111111", facecolor=color, alpha=0.92
         )
         ax.add_patch(rect)
 
-        # Label
-        val_ms = node_info["incl_agg"] * 1000.0
-        pct = (node_info["incl_agg"] / root_val) * 100.0
+        val_ms = node_info[val_key] * 1000.0
+        pct = (node_info[val_key] / root_val) * 100.0
         
         clean_name = name.replace("smartsim_", "").replace("phydll_", "").replace("aix_", "").replace("solver_", "").replace("app_", "").replace("torchInference::", "")
         if width > 0.12 * root_val:
@@ -394,28 +444,27 @@ def render_icicle_plot(tree_summary: Dict[Tuple[str, ...], Dict[str, Any]],
             ax.text(x_start + width / 2.0, y_pos + row_height / 2.0, f"{clean_name}\n{val_ms:.1f}ms",
                     ha="center", va="center", fontsize=7.5, color="#111111")
 
-        # Children
         children = node_info["children_paths"]
         if children and depth < max_depth:
-            child_sum = sum(tree_summary[c]["incl_agg"] for c in children if c in tree_summary)
+            child_sum = sum(tree_summary[c][val_key] for c in children if c in tree_summary)
             curr_x = x_start
             for c in children:
-                c_val = tree_summary[c]["incl_agg"]
-                # Scale proportionally if child_sum > width
+                c_val = tree_summary[c][val_key]
+                if c_val <= 0:
+                    continue
                 c_width = (c_val / max(width, child_sum, 1e-9)) * width
                 draw_node(c, curr_x, c_width, depth + 1)
                 curr_x += c_width
 
-            # If parent has notable self-time / residual
             residual = max(0.0, width - child_sum)
-            if residual > 0.02 * root_val:
+            if residual > 0.015 * root_val:
                 res_y = (max_depth - (depth + 1)) * (row_height + y_gap)
                 rect_res = patches.Rectangle(
                     (curr_x, res_y), residual, row_height,
-                    linewidth=1.0, edgecolor="#555555", facecolor=COLOR_MAP["Self / Overhead"], alpha=0.7, linestyle=":"
+                    linewidth=1.0, edgecolor="#555555", facecolor=COLOR_MAP["Self / Overhead"], alpha=0.75, linestyle=":"
                 )
                 ax.add_patch(rect_res)
-                if residual > 0.06 * root_val:
+                if residual > 0.05 * root_val:
                     ax.text(curr_x + residual / 2.0, res_y + row_height / 2.0,
                             f"Overhead\n{residual*1000:.2f} ms", ha="center", va="center", fontsize=7.5, color="#333333")
 
@@ -423,7 +472,7 @@ def render_icicle_plot(tree_summary: Dict[Tuple[str, ...], Dict[str, Any]],
 
     ax.set_xlim(-0.01 * root_val, 1.01 * root_val)
     ax.set_ylim(-0.2, (max_depth + 1) * (row_height + y_gap))
-    ax.set_xlabel("Aggregated Duration (seconds per steady step)", weight="bold")
+    ax.set_xlabel("Duration (seconds per steady ML step)", weight="bold")
     ax.set_yticks([])
     ax.set_title(title, fontsize=12, weight="bold", pad=12)
 
@@ -438,82 +487,76 @@ def render_icicle_plot(tree_summary: Dict[Tuple[str, ...], Dict[str, Any]],
 
 
 # =============================================================================
-# Breakdown Bar Plot Renderer
+# Exact Leaf Decomposition Bar Chart
 # =============================================================================
 
+def collect_leaf_decomposition(tree_summary: Dict[Tuple[str, ...], Dict[str, Any]],
+                                root_path: Tuple[str, ...],
+                                val_key: str = "incl_mean") -> List[Tuple[str, float]]:
+    """
+    Collects a strictly non-overlapping partition of leaf stages under root_path.
+    """
+    leaves: List[Tuple[str, float]] = []
+
+    def traverse(path: Tuple[str, ...]):
+        if path not in tree_summary:
+            return
+        node = tree_summary[path]
+        node_val = node[val_key]
+        if node_val <= 0:
+            return
+
+        children = [c for c in node["children_paths"] if c in tree_summary and tree_summary[c][val_key] > 0]
+        if not children:
+            leaves.append((node["name"], node_val * 1000.0))
+        else:
+            child_sum = sum(tree_summary[c][val_key] for c in children)
+            for c in children:
+                traverse(c)
+            residual = max(0.0, node_val - child_sum)
+            if residual * 1000.0 > 0.005:
+                leaves.append((f"{node['name']} [Overhead]", residual * 1000.0))
+
+    traverse(root_path)
+    return leaves
+
 def render_breakdown_bars(tree_summary: Dict[Tuple[str, ...], Dict[str, Any]],
+                          root_path: Tuple[str, ...],
                           output_path: Path,
-                          title: str = "CMI Phase Breakdown"):
+                          title: str = "CMI Steady Step Leaf Breakdown",
+                          use_rank0: bool = False):
     """
-    Renders horizontal bar charts of key leaf and major phase durations per step.
+    Renders non-overlapping leaf phase breakdown bar charts.
     """
-    phases = []
-    times = []
-    colors = []
-
-    priority = [
-        "app_prepare_input",
-        "smartsim_token_wait",
-        "smartsim_chunk_plan",
-        "smartsim_put_tensor",
-        "smartsim_run_model",
-        "smartsim_unpack_tensor",
-        "gatherInputData",
-        "aix_collective_gather_mpi",
-        "h2d_copy",
-        "torchInference::forward",
-        "d2h_copy",
-        "scatterOutputData",
-        "aix_collective_scatter_mpi",
-        "phydll_prepack",
-        "phydll_send",
-        "phydll_recv",
-        "phydll_unpack",
-        "dl_recv",
-        "py_recv",
-        "dl_input_unpack",
-        "py_input_unpack",
-        "dl_h2d",
-        "py_h2d",
-        "dl_torch_forward",
-        "py_torch_forward",
-        "dl_d2h",
-        "py_d2h",
-        "dl_output_reorder",
-        "py_output_reorder",
-        "dl_send",
-        "py_send",
-        "app_finalize_output"
-    ]
-
-    for p_name in priority:
-        for path, info in tree_summary.items():
-            if info["name"] == p_name:
-                val = info["incl_agg"] * 1000.0
-                if val > 0.001 and p_name not in phases:
-                    phases.append(p_name)
-                    times.append(val)
-                    colors.append(get_color(p_name))
-
-    if not phases:
+    val_key = "incl_rank0" if use_rank0 else "incl_mean"
+    leaves = collect_leaf_decomposition(tree_summary, root_path, val_key=val_key)
+    if not leaves:
         return
 
-    fig, ax = plt.subplots(figsize=(10, max(4, len(phases) * 0.45)))
-    y_pos = np.arange(len(phases))
+    # Sort leaves descending by duration
+    leaves = sorted(leaves, key=lambda x: x[1], reverse=True)
+    names = [x[0] for x in leaves]
+    times = [x[1] for x in leaves]
+    colors = [get_color(n.split()[0]) for n in names]
 
-    bars = ax.barh(y_pos, times, color=colors, edgecolor="#222222", height=0.65, alpha=0.9)
+    fig, ax = plt.subplots(figsize=(11, max(4.0, len(leaves) * 0.45)))
+    y_pos = np.arange(len(names))
+
+    bars = ax.barh(y_pos, times, color=colors, edgecolor="#222222", height=0.65, alpha=0.92)
     ax.set_yticks(y_pos)
-    clean_labels = [p.replace("smartsim_", "").replace("phydll_", "").replace("aix_", "").replace("app_", "").replace("torchInference::", "") for p in phases]
-    ax.set_yticklabels(clean_labels, fontsize=9, weight="bold")
+    clean_labels = [p.replace("smartsim_", "").replace("phydll_", "").replace("aix_", "").replace("app_", "").replace("torchInference::", "") for p in names]
+    ax.set_yticklabels(clean_labels, fontsize=9.5, weight="bold")
     ax.invert_yaxis()
-    ax.set_xlabel("Mean Duration per Steady Step (ms)", weight="bold")
+    ax.set_xlabel("Duration per Steady ML Step (ms)", weight="bold")
     ax.set_title(title, fontsize=12, weight="bold", pad=12)
 
+    total_time = sum(times)
     for bar, t in zip(bars, times):
+        pct = (t / total_time) * 100.0 if total_time > 0 else 0.0
         ax.text(
             bar.get_width() + (max(times) * 0.015),
             bar.get_y() + bar.get_height() / 2.0,
-            f"{t:.2f} ms",
+            f"{t:.3f} ms ({pct:.1f}%)",
             va="center", ha="left", fontsize=8.5, weight="bold"
         )
 
@@ -618,13 +661,16 @@ def export_summary_tables(tree_summary: Dict[Tuple[str, ...], Dict[str, Any]], o
         rows.append({
             "Callpath": " -> ".join(path),
             "Region": d["name"],
-            "Mean (ms)": d["incl_mean"] * 1000.0,
-            "Max (ms)": d["incl_max"] * 1000.0,
-            "Min (ms)": d["incl_min"] * 1000.0,
-            "Std (ms)": d["incl_std"] * 1000.0,
+            "Is_Lifecycle": d["is_lifecycle"],
+            "Rank_Mean (ms)": d["incl_mean"] * 1000.0,
+            "Controller_Rank0 (ms)": d["incl_rank0"] * 1000.0,
+            "Max_Rank (ms)": d["incl_max"] * 1000.0,
+            "Min_Rank (ms)": d["incl_min"] * 1000.0,
+            "Std_Rank (ms)": d["incl_std"] * 1000.0,
             "Self (ms)": d["self_mean"] * 1000.0,
             "Visits/Step": d["visits_mean"],
-            "Ranks": d["num_ranks"]
+            "Active_Ranks": d["active_ranks"],
+            "Total_Ranks": d["total_ranks"]
         })
 
     df = pd.DataFrame(rows)
@@ -632,13 +678,25 @@ def export_summary_tables(tree_summary: Dict[Tuple[str, ...], Dict[str, Any]], o
     df.to_csv(csv_path, index=False)
     print(f"[+] Saved phase summary CSV to: {csv_path}")
 
+    steady_df = df[~df["Is_Lifecycle"]].copy()
+    lifecycle_df = df[df["Is_Lifecycle"]].copy()
+
     md_path = out_dir / "cmi_profile_summary.md"
     with open(md_path, "w") as f:
         f.write(f"# {title}\n\n")
-        f.write("| Region | Per-Step Mean (ms) | Max (ms) | Min (ms) | Self (ms) | Visits/Step | Ranks |\n")
+        f.write("## Steady-State Coupling Metrics (Normalized Per ML Step)\n\n")
+        f.write("| Region | Comm Mean (ms) | Controller/Rank0 (ms) | Max Rank (ms) | Self (ms) | Visits/Step | Ranks |\n")
         f.write("|:---|---:|---:|---:|---:|---:|---:|\n")
-        for _, r in df.iterrows():
-            f.write(f"| `{r['Region']}` | {r['Mean (ms)']:.3f} | {r['Max (ms)']:.3f} | {r['Min (ms)']:.3f} | {r['Self (ms)']:.3f} | {r['Visits/Step']:.1f} | {int(r['Ranks'])} |\n")
+        for _, r in steady_df.iterrows():
+            f.write(f"| `{r['Region']}` | {r['Rank_Mean (ms)']:.3f} | {r['Controller_Rank0 (ms)']:.3f} | {r['Max_Rank (ms)']:.3f} | {r['Self (ms)']:.3f} | {r['Visits/Step']:.1f} | {int(r['Active_Ranks'])}/{int(r['Total_Ranks'])} |\n")
+        
+        f.write("\n## Lifecycle Phase Totals (One-Off Cumulative)\n\n")
+        f.write("| Phase | Duration (ms) | Ranks |\n")
+        f.write("|:---|---:|---:|\n")
+        for _, r in lifecycle_df.iterrows():
+            if r["Region"] in ("terrain_solver", "solver_setup", "solver_step_ml_warmup", "solver_teardown"):
+                f.write(f"| `{r['Region']}` | {r['Rank_Mean (ms)']:.3f} | {int(r['Active_Ranks'])}/{int(r['Total_Ranks'])} |\n")
+
     print(f"[+] Saved summary Markdown to: {md_path}")
 
 
@@ -651,6 +709,7 @@ def main():
     parser.add_argument("--cubex", type=str, default=None, help="Path or glob pattern for profile.cubex")
     parser.add_argument("--dl-cubex", type=str, default=None, help="Optional DL-side profile.cubex for MPMD PhyDLL")
     parser.add_argument("--p2p-timeline-dir", type=Path, default=None, help="Path to directory containing aix_p2p_timeline_rank_*.csv")
+    parser.add_argument("--steady-steps", type=int, default=None, help="Explicit number of steady ML steps for normalization")
     parser.add_argument("--rank-agg", type=str, choices=["mean", "max", "min", "sum"], default="mean", help="Rank aggregation method (default: mean)")
     parser.add_argument("--output-dir", type=Path, default=Path("./cmi_profile_analysis"), help="Output directory for plots and reports")
     parser.add_argument("--title", type=str, default=None, help="Plot title override")
@@ -685,7 +744,7 @@ def main():
         print(f"[*] Analyzing {len(cubex_files)} solver CUBE profile(s)...")
         agg = AggregatedCallTree()
         for f in cubex_files:
-            nodes = parse_single_cubex_tree(f)
+            nodes = parse_single_cubex_tree(f, explicit_steady_steps=args.steady_steps)
             agg.add_tree(nodes)
 
         tree_summary = agg.compute_summary(rank_agg=args.rank_agg)
@@ -695,10 +754,10 @@ def main():
 
             if not args.no_plots:
                 # Find steady ML root
-                steady_candidates = [p for p in tree_summary if p[-1] in ("solver_ml_provider_call", "app_provider_inference")]
+                steady_candidates = [p for p in tree_summary if p[-1] in ("solver_ml_provider_call", "app_provider_inference") and not tree_summary[p]["is_lifecycle"]]
                 root_path = steady_candidates[0] if steady_candidates else list(tree_summary.keys())[0]
                 render_icicle_plot(tree_summary, root_path, args.output_dir / "cmi_icicle_plot.png", title=f"{title} - Hierarchical Breakdown")
-                render_breakdown_bars(tree_summary, args.output_dir / "cmi_stage_breakdown.png", title=f"{title} - Phase Durations")
+                render_breakdown_bars(tree_summary, root_path, args.output_dir / "cmi_stage_breakdown.png", title=f"{title} - Leaf Breakdown")
 
     # 2. Process DL-side CUBE Profile if supplied
     dl_files: List[Path] = []
@@ -718,14 +777,14 @@ def main():
         print(f"[*] Analyzing DL-side CUBE profile: {dl_files[0]}")
         dl_agg = AggregatedCallTree()
         for f in dl_files:
-            dl_nodes = parse_single_cubex_tree(f)
+            dl_nodes = parse_single_cubex_tree(f, explicit_steady_steps=args.steady_steps)
             dl_agg.add_tree(dl_nodes)
         dl_summary = dl_agg.compute_summary(rank_agg=args.rank_agg)
         if dl_summary and not args.no_plots:
             dl_roots = [p for p in dl_summary if p[-1] in ("phydll_dl_client", "py_inference", "user:py_inference")]
             dl_root = dl_roots[0] if dl_roots else list(dl_summary.keys())[0]
             render_icicle_plot(dl_summary, dl_root, args.output_dir / "phydll_dl_icicle_plot.png", title="PhyDLL DL-Side Breakdown")
-            render_breakdown_bars(dl_summary, args.output_dir / "phydll_dl_stage_breakdown.png", title="PhyDLL DL-Side Phase Durations")
+            render_breakdown_bars(dl_summary, dl_root, args.output_dir / "phydll_dl_stage_breakdown.png", title="PhyDLL DL-Side Leaf Breakdown")
 
     # 3. Process AIx P2P Timeline CSVs
     if args.p2p_timeline_dir and args.p2p_timeline_dir.exists():

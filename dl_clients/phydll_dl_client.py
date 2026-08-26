@@ -494,6 +494,8 @@ def main():
 
                     with scorep_region("py_h2d", enabled=(frame_id > 0)):
                         input_tensor = input_tensor.to(torch_device)
+                        if torch_device.type == "cuda":
+                            torch.cuda.synchronize(torch_device)
                     
                     try:
                         with torch.no_grad():
@@ -507,6 +509,8 @@ def main():
                                     chunk_tensor = input_tensor[chunk_idx:end_idx]
                                     outputs.append(model(chunk_tensor))
                                 output_tensor = torch.cat(outputs, dim=0)
+                                if torch_device.type == "cuda":
+                                    torch.cuda.synchronize(torch_device)
                             
                             with scorep_region("py_d2h", enabled=(frame_id > 0)):
                                 output_np = output_tensor.cpu().contiguous().numpy().flatten()
