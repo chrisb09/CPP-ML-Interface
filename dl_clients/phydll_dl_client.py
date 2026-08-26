@@ -15,6 +15,26 @@ print("[DL] mpi4py imported successfully. MPI world size =", MPI.COMM_WORLD.Get_
 print("[DL] Importing torch...", flush=True)
 import torch
 print("[DL] torch imported successfully.", flush=True)
+
+# Configure Torch thread parallelism to avoid CPU oversubscription
+intra_threads = os.environ.get("MLCOUPLING_INTRA_OP_THREADS")
+if not intra_threads and "SLURM_CPUS_PER_TASK" in os.environ:
+    intra_threads = os.environ["SLURM_CPUS_PER_TASK"]
+if intra_threads:
+    try:
+        torch.set_num_threads(int(intra_threads))
+        print(f"[DL] Set Torch intra-op threads to: {intra_threads}", flush=True)
+    except Exception as e:
+        print(f"[DL] Warning setting intra-op threads: {e}", flush=True)
+
+inter_threads = os.environ.get("MLCOUPLING_INTER_OP_THREADS")
+if inter_threads:
+    try:
+        torch.set_num_interop_threads(int(inter_threads))
+        print(f"[DL] Set Torch inter-op threads to: {inter_threads}", flush=True)
+    except Exception as e:
+        print(f"[DL] Warning setting inter-op threads: {e}", flush=True)
+
 import contextlib
 ENABLE_SCOREP_USER = os.environ.get("ENABLE_SCOREP_USER", "0") == "1"
 HAS_SCOREP = False
@@ -35,8 +55,8 @@ except Exception as e:
     print(f"[DL] Error importing/enabling scorep: {e}", flush=True)
 
 @contextlib.contextmanager
-def scorep_region(name):
-    if HAS_SCOREP:
+def scorep_region(name, enabled=True):
+    if HAS_SCOREP and enabled:
         with scorep.user.region(name):
             yield
     else:
@@ -341,26 +361,26 @@ def main():
                 # Labels are distinct (PHY-IN-###) so they cannot be stored in a dict
                 # without losing order; we use them for validation only.
                 print(f"[DL {world_comm.rank}] Calling dll.recv(only=True) (uniform_chunks)...", flush=True)
-                with scorep_region("py_recv"):
+                with scorep_region("py_recv", enabled=(frame_id > 0)):
                     dll.recv(only=True)
-                received = []
-                for i in range(dll.phy_count):
-                    field, label = dll.get_field()
-                    expected_label = f"PHY-IN-{i:03d}"
-                    if label != expected_label:
-                        print(f"[DL] ERROR: unexpected field label '{label}' at index {i} "
-                              f"(expected '{expected_label}').", file=sys.stderr, flush=True)
-                        world_comm.Abort(1)
-                    if field.shape[0] != dll.size:
-                        print(f"[DL] ERROR: field {i} has length {field.shape[0]}, "
-                              f"expected aggregated size {dll.size}.", file=sys.stderr, flush=True)
-                        world_comm.Abort(1)
-                    received.append(field)
+                    received = []
+                    for i in range(dll.phy_count):
+                        field, label = dll.get_field()
+                        expected_label = f"PHY-IN-{i:03d}"
+                        if label != expected_label:
+                            print(f"[DL] ERROR: unexpected field label '{label}' at index {i} "
+                                  f"(expected '{expected_label}').", file=sys.stderr, flush=True)
+                            world_comm.Abort(1)
+                        if field.shape[0] != dll.size:
+                            print(f"[DL] ERROR: field {i} has length {field.shape[0]}, "
+                                  f"expected aggregated size {dll.size}.", file=sys.stderr, flush=True)
+                            world_comm.Abort(1)
+                        received.append(field)
                 combined_data = None
             else:
                 # With dl_count=1, pyphydll.recv() returns a dict with one entry
                 print(f"[DL {world_comm.rank}] Calling dll.recv()...", flush=True)
-                with scorep_region("py_recv"):
+                with scorep_region("py_recv", enabled=(frame_id > 0)):
                     fields = dll.recv()
                 print(f"[DL {world_comm.rank}] Returned from dll.recv().", flush=True)
                 combined_data = fields.get("PHY-DATA", None)
@@ -416,7 +436,7 @@ def main():
             used_model = False
             
             if model_loaded and model is not None:
-                with scorep_region("py_inference"):
+                with scorep_region("py_inference", enabled=(frame_id > 0)):
                     # Replicate the C++ client's robust dynamic shape and batch extraction logic
                     ndest = len(dests)
                     batch_size = 0
@@ -438,7 +458,7 @@ def main():
                         actual_shape.append(input_per_rank_used)
                     
                     # Extract input features per sample (accounting for any rank padding)
-                    with scorep_region("py_input_unpack"):
+                    with scorep_region("py_input_unpack", enabled=(frame_id > 0)):
                         input_flat = np.zeros(total_input_size, dtype=np.float32)
                         if uniform_chunks:
                             # received[f] holds all rank segments for field f, in rank order.
@@ -472,7 +492,7 @@ def main():
                         input_tensor = torch.from_numpy(input_flat).reshape(batch_size, input_per_rank_used)
                         input_tensor = input_tensor.view(*actual_shape)
 
-                    with scorep_region("py_h2d"):
+                    with scorep_region("py_h2d", enabled=(frame_id > 0)):
                         input_tensor = input_tensor.to(torch_device)
                     
                     try:
@@ -481,14 +501,14 @@ def main():
                             if max_chunk_size <= 0:
                                 max_chunk_size = batch_size
                             outputs = []
-                            with scorep_region("py_torch_forward"):
+                            with scorep_region("py_torch_forward", enabled=(frame_id > 0)):
                                 for chunk_idx in range(0, batch_size, max_chunk_size):
                                     end_idx = min(chunk_idx + max_chunk_size, batch_size)
                                     chunk_tensor = input_tensor[chunk_idx:end_idx]
                                     outputs.append(model(chunk_tensor))
                                 output_tensor = torch.cat(outputs, dim=0)
                             
-                            with scorep_region("py_d2h"):
+                            with scorep_region("py_d2h", enabled=(frame_id > 0)):
                                 output_np = output_tensor.cpu().contiguous().numpy().flatten()
                             
                         # Scatter back to output buffer dynamically (matching C++ logic)
@@ -497,7 +517,7 @@ def main():
                                   f"but metadata declared {total_output_size}. Refusing to send.", file=sys.stderr, flush=True)
                             world_comm.Abort(1)
                         
-                        with scorep_region("py_output_reorder"):
+                        with scorep_region("py_output_reorder", enabled=(frame_id > 0)):
                             if uniform_chunks:
                                 # Build field-major wire layout:
                                 #   wire[f][agg_off[r] + b] = out_np[out_off[r] + f*g_r + b]
@@ -543,7 +563,7 @@ def main():
                     output[:size] = -combined_data[:size]
                 
             # Send results back
-            with scorep_region("py_send"):
+            with scorep_region("py_send", enabled=(frame_id > 0)):
                 if uniform_chunks:
                     # Register every DL output field (labels repeat; a dict would
                     # overwrite them, so use set_field directly).
@@ -572,7 +592,6 @@ def main():
             print(f"{prefix} waiting for solver teardown (PHYDLL_MPMD_SHUTDOWN_BARRIER=1)", flush=True)
             world_comm.Barrier()
             print(f"{prefix} solver teardown barrier complete", flush=True)
-            time.sleep(5)
         prefix = f"[DL {world_comm.rank}]" if world_comm is not None else "[DL]"
         print(f"{prefix} main() returning", flush=True)
 

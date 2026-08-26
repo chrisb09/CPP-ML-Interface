@@ -7,15 +7,17 @@ Score-P CUBE profiles and AIx P2P timeline CSVs.
 
 Features:
 - Extracts hierarchical calltree profiles from .cubex files via `cube_dump`.
-- Computes inclusive/exclusive metrics and per-rank statistics (mean, max, sum, controller).
-- Generates publication-ready Icicle plots (hierarchical calltree breakdown).
-- Generates component/phase breakdown bar charts.
-- Parses AIx P2P timeline CSVs to compute pipeline makespans, stage overlap, and Gantt charts.
-- Exports structured CSV summaries and Markdown reports.
+- Computes true call-path inclusive, exclusive, and per-step normalized metrics.
+- Aggregates metrics across MPI ranks (mean, min, max, std, sum).
+- Renders true hierarchical Icicle plots (where children fit within parent width).
+- Renders phase breakdown bar charts (steady step decomposition).
+- Generates AIx P2P timeline Gantt charts and makespan/overlap analyses.
+- Exports comprehensive Markdown summaries and CSV reports.
 
 Usage:
-  python3 analyze_cmi_scorep_profiles.py --cubex path/to/profile.cubex [options]
-  python3 analyze_cmi_scorep_profiles.py --p2p-timeline-dir path/to/aix_timeline_dir [options]
+  python3 analyze_cmi_scorep_profiles.py --cubex "scorep_runs/*_rank_*" --output-dir ./analysis
+  python3 analyze_cmi_scorep_profiles.py --cubex path/to/profile.cubex --dl-cubex path/to/dl/profile.cubex
+  python3 analyze_cmi_scorep_profiles.py --p2p-timeline-dir path/to/timeline_dir
 """
 
 import os
@@ -36,7 +38,6 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import matplotlib.patches as patches
 import matplotlib.colors as mcolors
-import matplotlib.cm as cm
 
 # Plotting style
 plt.rcParams.update({
@@ -54,21 +55,29 @@ plt.rcParams.update({
     "grid.linestyle": "--",
 })
 
-# Canonical phase groupings and color palette
+# Canonical color palette for coupling operations
 COLOR_MAP = {
-    "Preprocess": "#4393C3",        # Light Blue
+    # Application level
+    "solver_ml_provider_call": "#2B5C8F",
     "app_prepare_input": "#4393C3",
     "flowex_extract_cubes": "#92C5DE",
-    "Provider Step": "#F46D43",     # Coral / Red-Orange
-    "app_provider_inference": "#F46D43",
+    "app_provider_inference": "#D6604D",
+    "app_finalize_output": "#74ADD1",
+    "flowex_reconstruct_output": "#ABD9E9",
+    
+    # SmartSim
     "smartsim_library_static_step": "#F46D43",
-    "aix_library_static_step": "#F46D43",
-    "phydll_library_static_step": "#F46D43",
     "smartsim_token_wait": "#FDAE61",
     "smartsim_chunk_plan": "#FEE090",
     "smartsim_put_tensor": "#E08214",
     "smartsim_run_model": "#D73027",
     "smartsim_unpack_tensor": "#8073AC",
+    
+    # AIx Collective
+    "aix_library_static_step": "#F46D43",
+    "aix_provider_setup": "#FEE090",
+    "aix_inference": "#D73027",
+    "aix_collective_setup": "#FEE090",
     "gatherInputData": "#E08214",
     "aix_collective_gather_mpi": "#E08214",
     "inferenceDevice": "#D73027",
@@ -79,32 +88,49 @@ COLOR_MAP = {
     "scatterOutputData": "#542788",
     "aix_collective_scatter_mpi": "#542788",
     "aix_collective_worker_wait_for_controller": "#B2ABD2",
+    "aix_collective_post_scatter": "#D9D9D9",
+    
+    # AIx Pipelined
+    "p2p_pipelined_exchange": "#E08214",
+    "aix_controller_pipelined_inference": "#D73027",
+    
+    # PhyDLL Solver Side
+    "phydll_library_static_step": "#F46D43",
     "phydll_prepack": "#FEE090",
     "phydll_send": "#E08214",
     "phydll_recv": "#D73027",
     "phydll_unpack": "#8073AC",
+    
+    # PhyDLL DL Side (C++ & Python)
     "dl_recv": "#FDAE61",
-    "dl_input_unpack": "#FEE090",
-    "dl_h2d": "#E08214",
-    "dl_torch_forward": "#D73027",
-    "dl_d2h": "#8073AC",
-    "dl_output_reorder": "#542788",
-    "dl_send": "#2D004B",
     "py_recv": "#FDAE61",
-    "py_input_unpack": "#FEE090",
-    "py_h2d": "#E08214",
+    "dl_frame_copy": "#FEE090",
+    "dl_input_allocate": "#E0E0E0",
+    "dl_input_unpack": "#E08214",
+    "py_input_unpack": "#E08214",
+    "dl_h2d": "#FEE090",
+    "py_h2d": "#FEE090",
+    "dl_torch_forward": "#D73027",
     "py_torch_forward": "#D73027",
+    "dl_d2h": "#8073AC",
     "py_d2h": "#8073AC",
+    "dl_output_allocate": "#E0E0E0",
+    "dl_output_reorder": "#542788",
     "py_output_reorder": "#542788",
+    "dl_send": "#2D004B",
+    "dl_send_output": "#2D004B",
     "py_send": "#2D004B",
-    "Postprocess": "#74ADD1",       # Muted Blue
-    "app_finalize_output": "#74ADD1",
-    "flowex_reconstruct_output": "#ABD9E9",
-    "Other": "#D9D9D9",
+    "py_inference": "#D73027",
+    
+    # Residual
+    "Self / Overhead": "#BDBDBD",
 }
 
 def get_color(name: str) -> str:
     clean = name.removeprefix("user:")
+    for key, col in COLOR_MAP.items():
+        if key == clean or clean.endswith("::" + key) or key.endswith("::" + clean):
+            return col
     for key, col in COLOR_MAP.items():
         if key in clean or clean in key:
             return col
@@ -112,16 +138,13 @@ def get_color(name: str) -> str:
 
 
 # =============================================================================
-# CUBE4 Profile Parsing via cube_dump
+# CUBE4 Profile Call Tree Parsing via cube_dump
 # =============================================================================
 
 def find_cube_dump() -> str:
-    # Check PATH first
     cmd = shutil_which("cube_dump")
     if cmd:
         return cmd
-    
-    # Check well-known local paths in this repo / environment
     known_paths = [
         "/rwthfs/rz/cluster/hpcwork/ro092286/smartsim/CPP-ML-Interface/tmp/opencode/scorep-8.4-papi72-install/bin/cube_dump",
         "/hpcwork/ro092286/smartsim/CPP-ML-Interface/tmp/opencode/scorep-8.4-papi72-install/bin/cube_dump",
@@ -131,323 +154,307 @@ def find_cube_dump() -> str:
             return p
     return "cube_dump"
 
-def check_cube_dump_available() -> bool:
-    cmd = find_cube_dump()
-    try:
-        subprocess.run([cmd, "--help"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        return True
-    except Exception:
-        return False
+class CallTreeNode:
+    def __init__(self, cid: int, name: str, parent_id: Optional[int] = None):
+        self.id = cid
+        self.name = name.removeprefix("user:")
+        self.raw_name = name
+        self.parent_id = parent_id
+        self.children_ids: List[int] = []
+        
+        # Raw metrics for this callpath
+        self.incl_time: float = 0.0
+        self.excl_time: float = 0.0
+        self.visits: int = 0
+        
+        # Per-step normalized values
+        self.step_incl_time: float = 0.0
+        self.step_excl_time: float = 0.0
+        self.step_self_time: float = 0.0
 
-def parse_cubex_metric(cubex_path: Path, metric: str = "time") -> Dict[str, Dict[str, Any]]:
+def parse_single_cubex_tree(cubex_path: Path) -> Dict[int, CallTreeNode]:
     """
-    Parses region values from a CUBE4 profile via `cube_dump -m <metric> -s human <cubex>`.
-    Returns dict mapping region_name -> { 'per_rank': [...], 'mean': ..., 'max': ..., 'sum': ... }
+    Parses full call-tree structure and extracts inclusive/exclusive time and visits.
     """
     if not cubex_path.exists():
         raise FileNotFoundError(f"CUBE profile not found: {cubex_path}")
     
     dump_bin = find_cube_dump()
-    cmd = [dump_bin, "-m", metric, "-s", "human", str(cubex_path)]
-    try:
-        res = subprocess.run(cmd, capture_output=True, text=True, check=True)
-    except subprocess.CalledProcessError as e:
-        sys.stderr.write(f"[WARN] cube_dump failed on {cubex_path}: {e.stderr}\n")
-        return {}
-    except FileNotFoundError:
-        sys.stderr.write("[ERROR] `cube_dump` command not found in PATH. Ensure Score-P/CubeLib modules are loaded.\n")
-        return {}
-
-    regions: Dict[str, Dict[str, Any]] = {}
-    for line in res.stdout.splitlines():
-        m = re.match(r'^\s*([a-zA-Z0-9_:<>*&-]+)\s*\(id=\d+\)\s+(.*)$', line)
-        if m:
-            reg = m.group(1).strip()
-            raw_vals = m.group(2).split()
-            try:
-                vals = [float(v) for v in raw_vals]
-            except ValueError:
-                continue
-            if vals:
-                arr = np.array(vals)
-                regions[reg] = {
-                    "per_rank": vals,
-                    "mean": float(np.mean(arr)),
-                    "max": float(np.max(arr)),
-                    "min": float(np.min(arr)),
-                    "sum": float(np.sum(arr)),
-                    "num_ranks": len(vals)
-                }
-    return regions
-
-def parse_multiple_cubex_metrics(cubex_paths: List[Path], metric: str = "time") -> Dict[str, Dict[str, Any]]:
-    """
-    Parses and aggregates multiple per-rank .cubex profiles into a unified multi-rank dataset.
-    """
-    all_regions: Dict[str, List[float]] = {}
-    for p in cubex_paths:
-        r_data = parse_cubex_metric(p, metric)
-        for reg, d in r_data.items():
-            if reg not in all_regions:
-                all_regions[reg] = []
-            all_regions[reg].extend(d.get("per_rank", []))
-
-    combined: Dict[str, Dict[str, Any]] = {}
-    for reg, vals in all_regions.items():
-        if vals:
-            arr = np.array(vals)
-            combined[reg] = {
-                "per_rank": vals,
-                "mean": float(np.mean(arr)),
-                "max": float(np.max(arr)),
-                "min": float(np.min(arr)),
-                "sum": float(np.sum(arr)),
-                "num_ranks": len(vals)
-            }
-    return combined
-
-def parse_cubex_calltree(cubex_path: Path) -> List[Dict[str, Any]]:
-    """
-    Parses call tree structure from `cube_dump -c <cubex>`.
-    """
-    if not cubex_path.exists():
-        return []
     
-    cmd = ["cube_dump", "-c", str(cubex_path)]
+    # 1. Calltree structure
     try:
-        res = subprocess.run(cmd, capture_output=True, text=True, check=True)
-    except Exception:
-        return []
+        tree_out = subprocess.check_output([dump_bin, "-w", "calltree", str(cubex_path)], text=True, stderr=subprocess.DEVNULL)
+        incl_out = subprocess.check_output([dump_bin, "-m", "time", "-z", "incl", "-s", "human", "-c", "all", str(cubex_path)], text=True, stderr=subprocess.DEVNULL)
+        excl_out = subprocess.check_output([dump_bin, "-m", "time", "-z", "excl", "-s", "human", "-c", "all", str(cubex_path)], text=True, stderr=subprocess.DEVNULL)
+        vis_out = subprocess.check_output([dump_bin, "-m", "visits", "-z", "excl", "-s", "human", "-c", "all", str(cubex_path)], text=True, stderr=subprocess.DEVNULL)
+    except Exception as e:
+        sys.stderr.write(f"[ERROR] Failed to run cube_dump on {cubex_path}: {e}\n")
+        return {}
 
-    calltree: List[Dict[str, Any]] = []
-    # Lines look like:
-    # 0 root
-    #   1 subregion
-    #     2 child
-    for line in res.stdout.splitlines():
-        if not line.strip():
+    def parse_data_map(raw: str) -> Dict[int, float]:
+        res: Dict[int, float] = {}
+        for line in raw.splitlines():
+            m = re.match(r"^\s*([a-zA-Z0-9_:<>*&-]+)\(id=(\d+)\)\s+([\d\.eE+-]+)", line)
+            if m:
+                cid = int(m.group(2))
+                val = float(m.group(3))
+                res[cid] = val
+        return res
+
+    incl_map = parse_data_map(incl_out)
+    excl_map = parse_data_map(excl_out)
+    vis_map = parse_data_map(vis_out)
+
+    nodes: Dict[int, CallTreeNode] = {}
+    parent_stack: List[Tuple[int, int]] = [] # (depth, cid)
+
+    calltree_section = False
+    for line in tree_out.splitlines():
+        if "--- CALL TREE ---" in line:
+            calltree_section = True
             continue
-        indent = len(line) - len(line.lstrip())
-        parts = line.strip().split(maxsplit=1)
-        if len(parts) == 2:
-            cnode_id = parts[0]
-            region_name = parts[1].strip()
-            depth = indent // 2
-            calltree.append({
-                "cnode_id": cnode_id,
-                "region": region_name,
-                "depth": depth
-            })
-    return calltree
-
-
-# =============================================================================
-# Structured Profile Model & Hierarchy
-# =============================================================================
-
-class CouplingHierarchyNode:
-    def __init__(self, name: str, value: float, children: Optional[List['CouplingHierarchyNode']] = None, label: Optional[str] = None):
-        self.name = name
-        self.value = value
-        self.children = children or []
-        self.label = label or name
-
-def build_normalized_hierarchy(region_data: Dict[str, Dict[str, Any]], rank_agg: str = "mean") -> CouplingHierarchyNode:
-    """
-    Constructs a normalized 3-phase coupling hierarchy:
-      Total Coupling
-        -> Preprocess (app_prepare_input)
-        -> Provider Step (app_provider_inference / *library_static_step)
-             -> sub-operations (put, wait, run, unpack, gather, forward, etc.)
-        -> Postprocess (app_finalize_output)
-    """
-    def val(reg_name: str) -> float:
-        if reg_name in region_data:
-            return region_data[reg_name].get(rank_agg, 0.0)
-        user_reg = "user:" + reg_name
-        if user_reg in region_data:
-            return region_data[user_reg].get(rank_agg, 0.0)
-        # Search partial matches
-        for k, d in region_data.items():
-            k_clean = k.removeprefix("user:")
-            if reg_name == k_clean or k_clean.endswith("::" + reg_name):
-                return d.get(rank_agg, 0.0)
-        return 0.0
-
-    prep_val = val("app_prepare_input") or val("flowex_extract_cubes") or val("solver_ml_prepare_input")
-    prep_node = CouplingHierarchyNode("Preprocess", prep_val, label=f"Preprocess\n({prep_val*1000:.2f} ms)" if prep_val > 0 else "Preprocess")
-
-    post_val = val("app_finalize_output") or val("flowex_reconstruct_output") or val("solver_ml_output_copy") or val("solver_ml_apply_output")
-    post_node = CouplingHierarchyNode("Postprocess", post_val, label=f"Postprocess\n({post_val*1000:.2f} ms)" if post_val > 0 else "Postprocess")
-
-    # Detect Provider Sub-operations
-    provider_children: List[CouplingHierarchyNode] = []
-    
-    # 1. SmartSim
-    smartsim_step = val("smartsim_library_static_step") or val("app_provider_inference")
-    if "smartsim_put_tensor" in region_data or "smartsim_run_model" in region_data:
-        wait_val = val("smartsim_token_wait")
-        if wait_val > 0:
-            provider_children.append(CouplingHierarchyNode("smartsim_token_wait", wait_val, label=f"Token Wait\n({wait_val*1000:.2f} ms)"))
+        if not calltree_section or not line.strip():
+            continue
         
-        plan_val = val("smartsim_chunk_plan")
-        if plan_val > 0:
-            provider_children.append(CouplingHierarchyNode("smartsim_chunk_plan", plan_val, label=f"Chunk Plan\n({plan_val*1000:.2f} ms)"))
+        m = re.match(r"^(\s*\|*-*\s*)*([a-zA-Z0-9_:<>*&-]+)\s*\[\s*\(\s*id=(\d+)", line)
+        if m:
+            reg_name = m.group(2)
+            cid = int(m.group(3))
+            prefix = line[:line.find(reg_name)]
+            depth = len(prefix.replace("-", " ").replace("|", " "))
             
-        put_val = val("smartsim_put_tensor")
-        if put_val > 0:
-            provider_children.append(CouplingHierarchyNode("smartsim_put_tensor", put_val, label=f"Put Tensor\n({put_val*1000:.2f} ms)"))
+            while parent_stack and parent_stack[-1][0] >= depth:
+                parent_stack.pop()
+            parent_id = parent_stack[-1][1] if parent_stack else None
+            parent_stack.append((depth, cid))
             
-        run_val = val("smartsim_run_model")
-        if run_val > 0:
-            provider_children.append(CouplingHierarchyNode("smartsim_run_model", run_val, label=f"Run Model\n({run_val*1000:.2f} ms)"))
+            node = CallTreeNode(cid, reg_name, parent_id)
+            node.incl_time = incl_map.get(cid, 0.0)
+            node.excl_time = excl_map.get(cid, 0.0)
+            node.visits = int(vis_map.get(cid, 0))
             
-        unpack_val = val("smartsim_unpack_tensor")
-        if unpack_val > 0:
-            provider_children.append(CouplingHierarchyNode("smartsim_unpack_tensor", unpack_val, label=f"Unpack Tensor\n({unpack_val*1000:.2f} ms)"))
+            nodes[cid] = node
+            if parent_id is not None and parent_id in nodes:
+                nodes[parent_id].children_ids.append(cid)
 
-    # 2. AIx Collective
-    elif "gatherInputData" in region_data or "aix_collective_gather_mpi" in region_data or "aix_controller_inference" in region_data:
-        gather_val = val("aix_collective_gather_mpi") or val("gatherInputData")
-        if gather_val > 0:
-            provider_children.append(CouplingHierarchyNode("gatherInputData", gather_val, label=f"MPI Gather\n({gather_val*1000:.2f} ms)"))
-            
-        # Inference internals
-        infer_children: List[CouplingHierarchyNode] = []
-        h2d_val = val("h2d_copy")
-        if h2d_val > 0:
-            infer_children.append(CouplingHierarchyNode("h2d_copy", h2d_val, label=f"H2D\n({h2d_val*1000:.2f} ms)"))
-        fwd_val = val("torchInference::forward")
-        if fwd_val > 0:
-            infer_children.append(CouplingHierarchyNode("torchInference::forward", fwd_val, label=f"Forward\n({fwd_val*1000:.2f} ms)"))
-        d2h_val = val("d2h_copy")
-        if d2h_val > 0:
-            infer_children.append(CouplingHierarchyNode("d2h_copy", d2h_val, label=f"D2H\n({d2h_val*1000:.2f} ms)"))
-            
-        inf_val = val("aix_controller_inference") or val("inferenceDevice") or val("torchInference::inference")
-        provider_children.append(CouplingHierarchyNode("inferenceDevice", inf_val if inf_val > 0 else (h2d_val + fwd_val + d2h_val), infer_children, label=f"Device Inf\n({inf_val*1000:.2f} ms)" if inf_val > 0 else "Device Inf"))
+    # Determine normalization base (visits of steady ML step)
+    norm_visits = 1
+    for n in nodes.values():
+        if n.name in ("solver_step_ml_steady", "solver_ml_provider_call") and n.visits > 0:
+            norm_visits = n.visits
+            break
 
-        scatter_val = val("aix_collective_scatter_mpi") or val("scatterOutputData")
-        if scatter_val > 0:
-            provider_children.append(CouplingHierarchyNode("scatterOutputData", scatter_val, label=f"MPI Scatter\n({scatter_val*1000:.2f} ms)"))
-
-    # 3. PhyDLL Solver
-    elif "phydll_send" in region_data or "phydll_recv" in region_data:
-        prepack_val = val("phydll_prepack")
-        if prepack_val > 0:
-            provider_children.append(CouplingHierarchyNode("phydll_prepack", prepack_val, label=f"Prepack\n({prepack_val*1000:.2f} ms)"))
-        send_val = val("phydll_send")
-        if send_val > 0:
-            provider_children.append(CouplingHierarchyNode("phydll_send", send_val, label=f"PhyDLL Send\n({send_val*1000:.2f} ms)"))
-        recv_val = val("phydll_recv")
-        if recv_val > 0:
-            provider_children.append(CouplingHierarchyNode("phydll_recv", recv_val, label=f"PhyDLL Recv\n({recv_val*1000:.2f} ms)"))
-        unp_val = val("phydll_unpack")
-        if unp_val > 0:
-            provider_children.append(CouplingHierarchyNode("phydll_unpack", unp_val, label=f"Unpack\n({unp_val*1000:.2f} ms)"))
-
-    # Fallback provider value
-    step_val = val("app_provider_inference") or val("smartsim_library_static_step") or val("aix_library_static_step") or val("phydll_library_static_step") or val("solver_ml_provider_call")
-    if step_val == 0.0 and provider_children:
-        step_val = sum(c.value for c in provider_children)
+    # Compute per-step metrics
+    for n in nodes.values():
+        n.step_incl_time = n.incl_time / norm_visits
+        n.step_excl_time = n.excl_time / norm_visits
         
-    prov_node = CouplingHierarchyNode("Provider Step", step_val, provider_children, label=f"Provider Step\n({step_val*1000:.2f} ms)" if step_val > 0 else "Provider Step")
+        # Self-time is exclusive time
+        child_incl_sum = sum(nodes[c].step_incl_time for c in n.children_ids if c in nodes)
+        n.step_self_time = max(0.0, n.step_incl_time - child_incl_sum)
 
-    total_val = prep_val + step_val + post_val
-    root = CouplingHierarchyNode("Total Coupling Step", total_val, [prep_node, prov_node, post_node], label=f"Total Coupling Step\n({total_val*1000:.2f} ms)")
-    return root
+    return nodes
 
 
 # =============================================================================
-# Icicle Plot Generation
+# Multi-Rank Profile Aggregator
 # =============================================================================
 
-def plot_icicle(root: CouplingHierarchyNode, output_path: Path, title: str = "CMI Coupling Phase Breakdown"):
+class AggregatedCallTree:
+    def __init__(self):
+        # Callpath key: tuple of region names from root to node
+        self.paths: Dict[Tuple[str, ...], Dict[str, Any]] = {}
+
+    def add_tree(self, nodes: Dict[int, CallTreeNode]):
+        if not nodes:
+            return
+
+        def get_path(cid: int) -> Tuple[str, ...]:
+            p = []
+            curr: Optional[int] = cid
+            while curr is not None and curr in nodes:
+                p.append(nodes[curr].name)
+                curr = nodes[curr].parent_id
+            return tuple(reversed(p))
+
+        for cid, n in nodes.items():
+            path = get_path(cid)
+            if path not in self.paths:
+                self.paths[path] = {
+                    "name": n.name,
+                    "parent_path": path[:-1] if len(path) > 1 else None,
+                    "children_paths": set(),
+                    "step_incl_list": [],
+                    "step_excl_list": [],
+                    "step_self_list": [],
+                    "visits_list": []
+                }
+            self.paths[path]["step_incl_list"].append(n.step_incl_time)
+            self.paths[path]["step_excl_list"].append(n.step_excl_time)
+            self.paths[path]["step_self_list"].append(n.step_self_time)
+            self.paths[path]["visits_list"].append(n.visits)
+
+            if len(path) > 1:
+                parent_path = path[:-1]
+                if parent_path in self.paths:
+                    self.paths[parent_path]["children_paths"].add(path)
+
+    def compute_summary(self, rank_agg: str = "mean") -> Dict[Tuple[str, ...], Dict[str, Any]]:
+        summary: Dict[Tuple[str, ...], Dict[str, Any]] = {}
+        for path, d in self.paths.items():
+            incls = np.array(d["step_incl_list"])
+            excls = np.array(d["step_excl_list"])
+            selfs = np.array(d["step_self_list"])
+            vis = np.array(d["visits_list"])
+
+            def agg_val(arr: np.ndarray) -> float:
+                if len(arr) == 0: return 0.0
+                if rank_agg == "mean": return float(np.mean(arr))
+                elif rank_agg == "max": return float(np.max(arr))
+                elif rank_agg == "min": return float(np.min(arr))
+                elif rank_agg == "sum": return float(np.sum(arr))
+                return float(np.mean(arr))
+
+            summary[path] = {
+                "name": d["name"],
+                "parent_path": d["parent_path"],
+                "children_paths": sorted(list(d["children_paths"])),
+                "incl_mean": float(np.mean(incls)),
+                "incl_max": float(np.max(incls)),
+                "incl_min": float(np.min(incls)),
+                "incl_std": float(np.std(incls)) if len(incls)>1 else 0.0,
+                "incl_agg": agg_val(incls),
+                "excl_mean": float(np.mean(excls)),
+                "excl_agg": agg_val(excls),
+                "self_mean": float(np.mean(selfs)),
+                "self_agg": agg_val(selfs),
+                "visits_mean": float(np.mean(vis)),
+                "num_ranks": len(incls)
+            }
+        return summary
+
+
+# =============================================================================
+# True Icicle Plot Renderer
+# =============================================================================
+
+def render_icicle_plot(tree_summary: Dict[Tuple[str, ...], Dict[str, Any]],
+                       root_path: Tuple[str, ...],
+                       output_path: Path,
+                       title: str = "CMI Coupling Phase Breakdown"):
     """
-    Renders a multi-level Icicle plot representing hierarchical time decomposition.
+    Renders a true Icicle plot where every child fits strictly within its parent rectangle.
     """
+    if root_path not in tree_summary:
+        # Search for closest match (e.g. solver_ml_provider_call or app_provider_inference or root)
+        candidates = [p for p in tree_summary if p[-1] in ("solver_ml_provider_call", "app_provider_inference", "phydll_dl_client", "py_inference")]
+        if candidates:
+            root_path = candidates[0]
+        else:
+            root_path = list(tree_summary.keys())[0]
+
+    root_info = tree_summary[root_path]
+    root_val = root_info["incl_agg"]
+    if root_val <= 0:
+        root_val = 1e-6
+
     fig, ax = plt.subplots(figsize=(12, 6))
 
-    # Calculate levels and layouts
-    # We assign y-coordinates based on depth (Root=0, Phase=1, Subphase=2, Sub-subphase=3)
-    max_depth = 3
-    row_height = 0.8
-    y_gap = 0.2
+    row_height = 0.85
+    y_gap = 0.15
+    max_depth = 4
 
-    def render_node(node: CouplingHierarchyNode, x_start: float, width: float, depth: int):
-        if width <= 0 or depth > max_depth:
+    # Recursive render
+    def draw_node(path: Tuple[str, ...], x_start: float, width: float, depth: int):
+        if width <= 0 or depth > max_depth or path not in tree_summary:
             return
-        
+
+        node_info = tree_summary[path]
+        name = node_info["name"]
         y_pos = (max_depth - depth) * (row_height + y_gap)
-        color = get_color(node.name)
-        
-        rect = patches.FancyBboxPatch(
+        color = get_color(name)
+
+        # Draw rectangle
+        rect = patches.Rectangle(
             (x_start, y_pos), width, row_height,
-            boxstyle="round,pad=0.01,rounding_size=0.03",
-            linewidth=1.2, edgecolor="#333333", facecolor=color, alpha=0.92
+            linewidth=1.0, edgecolor="#222222", facecolor=color, alpha=0.92
         )
         ax.add_patch(rect)
 
-        # Label if wide enough
-        if width > 0.05 * root.value and node.value > 0:
-            pct = (node.value / root.value) * 100.0 if root.value > 0 else 0.0
-            lbl = f"{node.name}\n{node.value*1000:.2f} ms\n({pct:.1f}%)"
-            fontsize = 9 if width > 0.15 * root.value else 7.5
-            ax.text(
-                x_start + width / 2.0, y_pos + row_height / 2.0,
-                lbl, ha="center", va="center", fontsize=fontsize, weight="bold", color="#111111"
-            )
-        elif width > 0.02 * root.value and node.value > 0:
-            ax.text(
-                x_start + width / 2.0, y_pos + row_height / 2.0,
-                f"{node.value*1000:.1f}ms", ha="center", va="center", fontsize=7, color="#222222"
-            )
+        # Label
+        val_ms = node_info["incl_agg"] * 1000.0
+        pct = (node_info["incl_agg"] / root_val) * 100.0
+        
+        clean_name = name.replace("smartsim_", "").replace("phydll_", "").replace("aix_", "").replace("solver_", "").replace("app_", "").replace("torchInference::", "")
+        if width > 0.12 * root_val:
+            lbl = f"{clean_name}\n{val_ms:.2f} ms ({pct:.1f}%)"
+            ax.text(x_start + width / 2.0, y_pos + row_height / 2.0, lbl,
+                    ha="center", va="center", fontsize=8.5, weight="bold", color="#111111")
+        elif width > 0.04 * root_val:
+            ax.text(x_start + width / 2.0, y_pos + row_height / 2.0, f"{clean_name}\n{val_ms:.1f}ms",
+                    ha="center", va="center", fontsize=7.5, color="#111111")
 
-        # Render children
-        if node.children:
-            child_sum = sum(c.value for c in node.children)
+        # Children
+        children = node_info["children_paths"]
+        if children and depth < max_depth:
+            child_sum = sum(tree_summary[c]["incl_agg"] for c in children if c in tree_summary)
             curr_x = x_start
-            for child in node.children:
-                # Scale child relative to node width or total
-                child_w = (child.value / max(node.value, child_sum, 1e-9)) * width if node.value > 0 else 0.0
-                render_node(child, curr_x, child_w, depth + 1)
-                curr_x += child_w
+            for c in children:
+                c_val = tree_summary[c]["incl_agg"]
+                # Scale proportionally if child_sum > width
+                c_width = (c_val / max(width, child_sum, 1e-9)) * width
+                draw_node(c, curr_x, c_width, depth + 1)
+                curr_x += c_width
 
-    render_node(root, 0.0, root.value if root.value > 0 else 1.0, 0)
+            # If parent has notable self-time / residual
+            residual = max(0.0, width - child_sum)
+            if residual > 0.02 * root_val:
+                res_y = (max_depth - (depth + 1)) * (row_height + y_gap)
+                rect_res = patches.Rectangle(
+                    (curr_x, res_y), residual, row_height,
+                    linewidth=1.0, edgecolor="#555555", facecolor=COLOR_MAP["Self / Overhead"], alpha=0.7, linestyle=":"
+                )
+                ax.add_patch(rect_res)
+                if residual > 0.06 * root_val:
+                    ax.text(curr_x + residual / 2.0, res_y + row_height / 2.0,
+                            f"Overhead\n{residual*1000:.2f} ms", ha="center", va="center", fontsize=7.5, color="#333333")
 
-    ax.set_xlim(-0.02 * root.value, 1.02 * root.value if root.value > 0 else 1.0)
+    draw_node(root_path, 0.0, root_val, 0)
+
+    ax.set_xlim(-0.01 * root_val, 1.01 * root_val)
     ax.set_ylim(-0.2, (max_depth + 1) * (row_height + y_gap))
-    ax.set_xlabel(f"Aggregated Duration ({'seconds' if root.value > 1.0 else 's'})", weight="bold")
+    ax.set_xlabel("Aggregated Duration (seconds per steady step)", weight="bold")
     ax.set_yticks([])
-    ax.set_title(title, fontsize=13, weight="bold", pad=15)
-    
-    # Clean grid/spines
+    ax.set_title(title, fontsize=12, weight="bold", pad=12)
+
     ax.spines["top"].set_visible(False)
     ax.spines["right"].set_visible(False)
     ax.spines["left"].set_visible(False)
-    
+
     plt.tight_layout()
     fig.savefig(output_path, dpi=300)
     plt.close(fig)
-    print(f"[+] Saved Icicle plot to: {output_path}")
+    print(f"[+] Saved true Icicle plot to: {output_path}")
 
 
 # =============================================================================
-# Stage Breakdown Bar Plot
+# Breakdown Bar Plot Renderer
 # =============================================================================
 
-def plot_stage_breakdown(region_data: Dict[str, Dict[str, Any]], output_path: Path, title: str = "CMI Phase Breakdown"):
+def render_breakdown_bars(tree_summary: Dict[Tuple[str, ...], Dict[str, Any]],
+                          output_path: Path,
+                          title: str = "CMI Phase Breakdown"):
     """
-    Renders horizontal stacked and grouped bar charts of detected CMI phases.
+    Renders horizontal bar charts of key leaf and major phase durations per step.
     """
     phases = []
     times = []
     colors = []
-    
-    # Priority ordered list of interesting regions
-    candidates = [
+
+    priority = [
         "app_prepare_input",
         "smartsim_token_wait",
+        "smartsim_chunk_plan",
         "smartsim_put_tensor",
         "smartsim_run_model",
         "smartsim_unpack_tensor",
@@ -463,42 +470,30 @@ def plot_stage_breakdown(region_data: Dict[str, Dict[str, Any]], output_path: Pa
         "phydll_recv",
         "phydll_unpack",
         "dl_recv",
-        "dl_input_unpack",
-        "dl_h2d",
-        "dl_torch_forward",
-        "dl_d2h",
-        "dl_output_reorder",
-        "dl_send",
         "py_recv",
+        "dl_input_unpack",
         "py_input_unpack",
+        "dl_h2d",
         "py_h2d",
+        "dl_torch_forward",
         "py_torch_forward",
+        "dl_d2h",
         "py_d2h",
+        "dl_output_reorder",
         "py_output_reorder",
+        "dl_send",
         "py_send",
-        "app_finalize_output",
+        "app_finalize_output"
     ]
-    
-    for c in candidates:
-        val = 0.0
-        if c in region_data:
-            val = region_data[c].get("mean", 0.0) * 1000.0
-        elif "user:" + c in region_data:
-            val = region_data["user:" + c].get("mean", 0.0) * 1000.0
-        if val > 0.001:
-            phases.append(c)
-            times.append(val)
-            colors.append(get_color(c))
 
-    if not phases:
-        # Fallback to any region
-        for k, v in region_data.items():
-            if k.startswith(("app_", "smartsim_", "aix_", "phydll_", "dl_", "py_")):
-                val = v.get("mean", 0.0) * 1000.0
-                if val > 0.001:
-                    phases.append(k)
+    for p_name in priority:
+        for path, info in tree_summary.items():
+            if info["name"] == p_name:
+                val = info["incl_agg"] * 1000.0
+                if val > 0.001 and p_name not in phases:
+                    phases.append(p_name)
                     times.append(val)
-                    colors.append(get_color(k))
+                    colors.append(get_color(p_name))
 
     if not phases:
         return
@@ -506,14 +501,14 @@ def plot_stage_breakdown(region_data: Dict[str, Dict[str, Any]], output_path: Pa
     fig, ax = plt.subplots(figsize=(10, max(4, len(phases) * 0.45)))
     y_pos = np.arange(len(phases))
 
-    bars = ax.barh(y_pos, times, color=colors, edgecolor="#333333", height=0.65, alpha=0.9)
+    bars = ax.barh(y_pos, times, color=colors, edgecolor="#222222", height=0.65, alpha=0.9)
     ax.set_yticks(y_pos)
-    ax.set_yticklabels(phases, fontsize=9, weight="bold")
-    ax.invert_yaxis()  # Top-down
-    ax.set_xlabel("Mean Duration (ms)", weight="bold")
+    clean_labels = [p.replace("smartsim_", "").replace("phydll_", "").replace("aix_", "").replace("app_", "").replace("torchInference::", "") for p in phases]
+    ax.set_yticklabels(clean_labels, fontsize=9, weight="bold")
+    ax.invert_yaxis()
+    ax.set_xlabel("Mean Duration per Steady Step (ms)", weight="bold")
     ax.set_title(title, fontsize=12, weight="bold", pad=12)
 
-    # Value annotations
     for bar, t in zip(bars, times):
         ax.text(
             bar.get_width() + (max(times) * 0.015),
@@ -535,9 +530,6 @@ def plot_stage_breakdown(region_data: Dict[str, Dict[str, Any]], output_path: Pa
 # =============================================================================
 
 def parse_aix_p2p_timeline(timeline_dir: Path) -> pd.DataFrame:
-    """
-    Loads all `aix_p2p_timeline_rank_*.csv` files and aligns events.
-    """
     csv_files = sorted(timeline_dir.glob("aix_p2p_timeline_rank_*.csv"))
     if not csv_files:
         return pd.DataFrame()
@@ -559,21 +551,17 @@ def parse_aix_p2p_timeline(timeline_dir: Path) -> pd.DataFrame:
     return full_df
 
 def plot_aix_pipeline_gantt(df: pd.DataFrame, output_path: Path, target_step: Optional[int] = None):
-    """
-    Generates a Gantt/timeline chart of pipelined P2P operations across ranks for a given step.
-    """
     if df.empty:
         return
 
     steps = df["step"].unique()
     if target_step is None or target_step not in steps:
-        target_step = steps[-1]  # Latest / warm step
+        target_step = steps[-1]
 
     step_df = df[df["step"] == target_step].copy()
     if step_df.empty:
         return
 
-    # Normalize time to start of step
     t_min = step_df["time_s"].min()
     step_df["rel_time_ms"] = (step_df["time_s"] - t_min) * 1000.0
 
@@ -582,18 +570,16 @@ def plot_aix_pipeline_gantt(df: pd.DataFrame, output_path: Path, target_step: Op
     ranks = sorted(step_df["world_rank"].unique())
     y_map = {r: i for i, r in enumerate(ranks)}
 
-    # Track intervals per rank
     for rank in ranks:
         r_df = step_df[step_df["world_rank"] == rank].sort_values(by="rel_time_ms")
         y = y_map[rank]
 
-        # Draw worker sends/receives
+        # Worker sends
         sends = r_df[r_df["event"] == "input_send_start"]
         s_ends = r_df[r_df["event"] == "input_send_complete"]
         for _, s in sends.iterrows():
-            # Find matching complete
             end_match = s_ends[s_ends["rel_time_ms"] >= s["rel_time_ms"]]
-            t_end = end_match.iloc[0]["rel_time_ms"] if not end_match.empty else s["rel_time_ms"] + 1.0
+            t_end = end_match.iloc[0]["rel_time_ms"] if not end_match.empty else s["rel_time_ms"] + 0.5
             ax.barh(y, t_end - s["rel_time_ms"], left=s["rel_time_ms"], height=0.5, color="#E08214", edgecolor="black", alpha=0.85, label="P2P Send" if rank == ranks[0] else "")
 
         # Controller range inferences
@@ -601,7 +587,7 @@ def plot_aix_pipeline_gantt(df: pd.DataFrame, output_path: Path, target_step: Op
         inf_ends = r_df[r_df["event"] == "range_inference_end"]
         for _, inf in inf_starts.iterrows():
             end_match = inf_ends[inf_ends["rel_time_ms"] >= inf["rel_time_ms"]]
-            t_end = end_match.iloc[0]["rel_time_ms"] if not end_match.empty else inf["rel_time_ms"] + 2.0
+            t_end = end_match.iloc[0]["rel_time_ms"] if not end_match.empty else inf["rel_time_ms"] + 1.0
             rng = f"[{int(inf.get('range_first_rank', 0))}..{int(inf.get('range_end_rank', 0))})]"
             ax.barh(y, t_end - inf["rel_time_ms"], left=inf["rel_time_ms"], height=0.5, color="#D73027", edgecolor="black", alpha=0.9, label="Range Inference" if rank == ranks[0] else "")
             ax.text((inf["rel_time_ms"] + t_end) / 2.0, y, rng, ha="center", va="center", fontsize=7, color="white", weight="bold")
@@ -609,9 +595,8 @@ def plot_aix_pipeline_gantt(df: pd.DataFrame, output_path: Path, target_step: Op
     ax.set_yticks(list(y_map.values()))
     ax.set_yticklabels([f"Rank {r}" + (" (Ctrl)" if step_df[step_df['world_rank']==r]['is_controller'].any() else "") for r in ranks], weight="bold")
     ax.set_xlabel("Relative Time (ms)", weight="bold")
-    ax.set_title(f"AIx Pipelined P2P Overlap Timeline (Step {target_step})", fontsize=13, weight="bold", pad=15)
-    
-    # Legend deduplication
+    ax.set_title(f"AIx Pipelined P2P Overlap Timeline (Step {target_step})", fontsize=12, weight="bold", pad=12)
+
     handles, labels = ax.get_legend_handles_labels()
     by_label = dict(zip(labels, handles))
     if by_label:
@@ -627,19 +612,19 @@ def plot_aix_pipeline_gantt(df: pd.DataFrame, output_path: Path, target_step: Op
 # Markdown Summary & CSV Export
 # =============================================================================
 
-def export_summary(region_data: Dict[str, Dict[str, Any]], out_dir: Path, title: str = "CMI Profile Summary"):
-    """
-    Exports summary tables to CSV and Markdown.
-    """
+def export_summary_tables(tree_summary: Dict[Tuple[str, ...], Dict[str, Any]], out_dir: Path, title: str = "CMI Profile Summary"):
     rows = []
-    for reg, d in sorted(region_data.items()):
+    for path, d in sorted(tree_summary.items(), key=lambda x: x[1]["incl_mean"], reverse=True):
         rows.append({
-            "Region": reg,
-            "Mean (ms)": d.get("mean", 0.0) * 1000.0,
-            "Max (ms)": d.get("max", 0.0) * 1000.0,
-            "Min (ms)": d.get("min", 0.0) * 1000.0,
-            "Sum (ms)": d.get("sum", 0.0) * 1000.0,
-            "Ranks": d.get("num_ranks", 0),
+            "Callpath": " -> ".join(path),
+            "Region": d["name"],
+            "Mean (ms)": d["incl_mean"] * 1000.0,
+            "Max (ms)": d["incl_max"] * 1000.0,
+            "Min (ms)": d["incl_min"] * 1000.0,
+            "Std (ms)": d["incl_std"] * 1000.0,
+            "Self (ms)": d["self_mean"] * 1000.0,
+            "Visits/Step": d["visits_mean"],
+            "Ranks": d["num_ranks"]
         })
 
     df = pd.DataFrame(rows)
@@ -650,10 +635,10 @@ def export_summary(region_data: Dict[str, Dict[str, Any]], out_dir: Path, title:
     md_path = out_dir / "cmi_profile_summary.md"
     with open(md_path, "w") as f:
         f.write(f"# {title}\n\n")
-        f.write("| Region | Mean (ms) | Max (ms) | Min (ms) | Sum (ms) | Ranks |\n")
-        f.write("|:---|---:|---:|---:|---:|---:|\n")
+        f.write("| Region | Per-Step Mean (ms) | Max (ms) | Min (ms) | Self (ms) | Visits/Step | Ranks |\n")
+        f.write("|:---|---:|---:|---:|---:|---:|---:|\n")
         for _, r in df.iterrows():
-            f.write(f"| `{r['Region']}` | {r['Mean (ms)']:.3f} | {r['Max (ms)']:.3f} | {r['Min (ms)']:.3f} | {r['Sum (ms)']:.3f} | {int(r['Ranks'])} |\n")
+            f.write(f"| `{r['Region']}` | {r['Mean (ms)']:.3f} | {r['Max (ms)']:.3f} | {r['Min (ms)']:.3f} | {r['Self (ms)']:.3f} | {r['Visits/Step']:.1f} | {int(r['Ranks'])} |\n")
     print(f"[+] Saved summary Markdown to: {md_path}")
 
 
@@ -662,13 +647,10 @@ def export_summary(region_data: Dict[str, Dict[str, Any]], out_dir: Path, title:
 # =============================================================================
 
 def main():
-    parser = argparse.ArgumentParser(
-        description="CMI Score-P CUBE and AIx Timeline Analysis Tool"
-    )
-    parser.add_argument("--cubex", type=Path, default=None, help="Path to profile.cubex or directory containing it")
-    parser.add_argument("--dl-cubex", type=Path, default=None, help="Optional DL-side profile.cubex for MPMD PhyDLL")
+    parser = argparse.ArgumentParser(description="CMI Score-P CUBE and AIx Timeline Analysis Tool")
+    parser.add_argument("--cubex", type=str, default=None, help="Path or glob pattern for profile.cubex")
+    parser.add_argument("--dl-cubex", type=str, default=None, help="Optional DL-side profile.cubex for MPMD PhyDLL")
     parser.add_argument("--p2p-timeline-dir", type=Path, default=None, help="Path to directory containing aix_p2p_timeline_rank_*.csv")
-    parser.add_argument("--metric", type=str, default="time", help="Metric to extract from CUBE (default: time)")
     parser.add_argument("--rank-agg", type=str, choices=["mean", "max", "min", "sum"], default="mean", help="Rank aggregation method (default: mean)")
     parser.add_argument("--output-dir", type=Path, default=Path("./cmi_profile_analysis"), help="Output directory for plots and reports")
     parser.add_argument("--title", type=str, default=None, help="Plot title override")
@@ -677,7 +659,7 @@ def main():
     args = parser.parse_args()
     args.output_dir.mkdir(parents=True, exist_ok=True)
 
-    # 1. Process CUBE Profile
+    # 1. Process Solver CUBE Profiles
     cubex_files: List[Path] = []
     if args.cubex:
         p_str = str(args.cubex)
@@ -688,35 +670,64 @@ def main():
                     cubex_files.append(m / "profile.cubex")
                 elif m.is_file() and m.suffix == ".cubex":
                     cubex_files.append(m)
-        elif args.cubex.is_dir():
-            # Check if directory has rank subdirectories
-            rank_dirs = sorted(args.cubex.glob("*_rank_*"))
+        elif Path(p_str).is_dir():
+            rank_dirs = sorted(Path(p_str).glob("*_rank_*"))
             if rank_dirs:
                 for rd in rank_dirs:
                     if (rd / "profile.cubex").exists():
                         cubex_files.append(rd / "profile.cubex")
-            elif (args.cubex / "profile.cubex").exists():
-                cubex_files.append(args.cubex / "profile.cubex")
-        elif args.cubex.is_file():
-            cubex_files.append(args.cubex)
+            elif (Path(p_str) / "profile.cubex").exists():
+                cubex_files.append(Path(p_str) / "profile.cubex")
+        elif Path(p_str).is_file():
+            cubex_files.append(Path(p_str))
 
     if cubex_files:
-        print(f"[*] Analyzing {len(cubex_files)} CUBE profile(s): {[str(f) for f in cubex_files]}")
-        if len(cubex_files) == 1:
-            region_data = parse_cubex_metric(cubex_files[0], args.metric)
-        else:
-            region_data = parse_multiple_cubex_metrics(cubex_files, args.metric)
+        print(f"[*] Analyzing {len(cubex_files)} solver CUBE profile(s)...")
+        agg = AggregatedCallTree()
+        for f in cubex_files:
+            nodes = parse_single_cubex_tree(f)
+            agg.add_tree(nodes)
 
-        if region_data:
+        tree_summary = agg.compute_summary(rank_agg=args.rank_agg)
+        if tree_summary:
             title = args.title or f"CMI Coupling Profile ({cubex_files[0].parent.parent.name if len(cubex_files)>1 else cubex_files[0].parent.name})"
-            export_summary(region_data, args.output_dir, title=title)
-            
-            if not args.no_plots:
-                hierarchy = build_normalized_hierarchy(region_data, rank_agg=args.rank_agg)
-                plot_icicle(hierarchy, args.output_dir / "cmi_icicle_plot.png", title=f"{title} - Hierarchical Calltree")
-                plot_stage_breakdown(region_data, args.output_dir / "cmi_stage_breakdown.png", title=f"{title} - Phase Durations")
+            export_summary_tables(tree_summary, args.output_dir, title=title)
 
-    # 2. Process AIx P2P Timeline CSVs
+            if not args.no_plots:
+                # Find steady ML root
+                steady_candidates = [p for p in tree_summary if p[-1] in ("solver_ml_provider_call", "app_provider_inference")]
+                root_path = steady_candidates[0] if steady_candidates else list(tree_summary.keys())[0]
+                render_icicle_plot(tree_summary, root_path, args.output_dir / "cmi_icicle_plot.png", title=f"{title} - Hierarchical Breakdown")
+                render_breakdown_bars(tree_summary, args.output_dir / "cmi_stage_breakdown.png", title=f"{title} - Phase Durations")
+
+    # 2. Process DL-side CUBE Profile if supplied
+    dl_files: List[Path] = []
+    if args.dl_cubex:
+        p_str = str(args.dl_cubex)
+        if "*" in p_str:
+            matched = [Path(p) for p in glob.glob(p_str)]
+            for m in matched:
+                if m.is_dir() and (m / "profile.cubex").exists(): dl_files.append(m / "profile.cubex")
+                elif m.is_file(): dl_files.append(m)
+        elif Path(p_str).is_dir() and (Path(p_str) / "profile.cubex").exists():
+            dl_files.append(Path(p_str) / "profile.cubex")
+        elif Path(p_str).is_file():
+            dl_files.append(Path(p_str))
+
+    if dl_files:
+        print(f"[*] Analyzing DL-side CUBE profile: {dl_files[0]}")
+        dl_agg = AggregatedCallTree()
+        for f in dl_files:
+            dl_nodes = parse_single_cubex_tree(f)
+            dl_agg.add_tree(dl_nodes)
+        dl_summary = dl_agg.compute_summary(rank_agg=args.rank_agg)
+        if dl_summary and not args.no_plots:
+            dl_roots = [p for p in dl_summary if p[-1] in ("phydll_dl_client", "py_inference", "user:py_inference")]
+            dl_root = dl_roots[0] if dl_roots else list(dl_summary.keys())[0]
+            render_icicle_plot(dl_summary, dl_root, args.output_dir / "phydll_dl_icicle_plot.png", title="PhyDLL DL-Side Breakdown")
+            render_breakdown_bars(dl_summary, args.output_dir / "phydll_dl_stage_breakdown.png", title="PhyDLL DL-Side Phase Durations")
+
+    # 3. Process AIx P2P Timeline CSVs
     if args.p2p_timeline_dir and args.p2p_timeline_dir.exists():
         print(f"[*] Analyzing AIx P2P Timeline in: {args.p2p_timeline_dir}")
         p2p_df = parse_aix_p2p_timeline(args.p2p_timeline_dir)
