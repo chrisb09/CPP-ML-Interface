@@ -438,39 +438,42 @@ def main():
                         actual_shape.append(input_per_rank_used)
                     
                     # Extract input features per sample (accounting for any rank padding)
-                    input_flat = np.zeros(total_input_size, dtype=np.float32)
-                    if uniform_chunks:
-                        # received[f] holds all rank segments for field f, in rank order.
-                        # Reconstruct the rank-major flattened input directly:
-                        #   input_flat[in_off[r] + f*g_r + b] = received[f][agg_off[r] + b]
-                        agg_offsets = [0] * (ndest + 1)
-                        in_offsets = [0] * (ndest + 1)
-                        for i in range(ndest):
-                            agg_offsets[i + 1] = agg_offsets[i] + rank_field_sizes.get(dests[i], 0)
-                            in_offsets[i + 1] = in_offsets[i] + rank_total_input.get(dests[i], 0)
-                        for i in range(ndest):
-                            g_r = rank_field_sizes.get(dests[i], 0)
-                            for f in range(dll.phy_count):
-                                src = agg_offsets[i]
-                                dst = in_offsets[i] + f * g_r
-                                input_flat[dst:dst + g_r] = received[f][src:src + g_r]
-                    else:
-                        offset_so_far = 0
-                        src_rank_start = 0
-                        for i in range(ndest):
-                            source_rank = dests[i]
-                            rank_batch = rank_batch_sizes.get(source_rank, 1)
-                            for s in range(rank_batch):
-                                src_start = src_rank_start + s * input_per_rank_used
-                                dest_start = (offset_so_far + s) * input_per_rank_used
-                                input_flat[dest_start : dest_start + input_per_rank_used] = \
-                                    combined_data[src_start : src_start + input_per_rank_used]
-                            offset_so_far += rank_batch
-                            src_rank_start += rank_field_sizes.get(source_rank, 0)
-                    
-                    input_tensor = torch.from_numpy(input_flat).reshape(batch_size, input_per_rank_used)
-                    input_tensor = input_tensor.view(*actual_shape)
-                    input_tensor = input_tensor.to(torch_device)
+                    with scorep_region("py_input_unpack"):
+                        input_flat = np.zeros(total_input_size, dtype=np.float32)
+                        if uniform_chunks:
+                            # received[f] holds all rank segments for field f, in rank order.
+                            # Reconstruct the rank-major flattened input directly:
+                            #   input_flat[in_off[r] + f*g_r + b] = received[f][agg_off[r] + b]
+                            agg_offsets = [0] * (ndest + 1)
+                            in_offsets = [0] * (ndest + 1)
+                            for i in range(ndest):
+                                agg_offsets[i + 1] = agg_offsets[i] + rank_field_sizes.get(dests[i], 0)
+                                in_offsets[i + 1] = in_offsets[i] + rank_total_input.get(dests[i], 0)
+                            for i in range(ndest):
+                                g_r = rank_field_sizes.get(dests[i], 0)
+                                for f in range(dll.phy_count):
+                                    src = agg_offsets[i]
+                                    dst = in_offsets[i] + f * g_r
+                                    input_flat[dst:dst + g_r] = received[f][src:src + g_r]
+                        else:
+                            offset_so_far = 0
+                            src_rank_start = 0
+                            for i in range(ndest):
+                                source_rank = dests[i]
+                                rank_batch = rank_batch_sizes.get(source_rank, 1)
+                                for s in range(rank_batch):
+                                    src_start = src_rank_start + s * input_per_rank_used
+                                    dest_start = (offset_so_far + s) * input_per_rank_used
+                                    input_flat[dest_start : dest_start + input_per_rank_used] = \
+                                        combined_data[src_start : src_start + input_per_rank_used]
+                                offset_so_far += rank_batch
+                                src_rank_start += rank_field_sizes.get(source_rank, 0)
+                        
+                        input_tensor = torch.from_numpy(input_flat).reshape(batch_size, input_per_rank_used)
+                        input_tensor = input_tensor.view(*actual_shape)
+
+                    with scorep_region("py_h2d"):
+                        input_tensor = input_tensor.to(torch_device)
                     
                     try:
                         with torch.no_grad():
@@ -478,48 +481,53 @@ def main():
                             if max_chunk_size <= 0:
                                 max_chunk_size = batch_size
                             outputs = []
-                            for chunk_idx in range(0, batch_size, max_chunk_size):
-                                end_idx = min(chunk_idx + max_chunk_size, batch_size)
-                                chunk_tensor = input_tensor[chunk_idx:end_idx]
-                                outputs.append(model(chunk_tensor))
-                            output_tensor = torch.cat(outputs, dim=0)
-                            output_np = output_tensor.cpu().contiguous().numpy().flatten()
+                            with scorep_region("py_torch_forward"):
+                                for chunk_idx in range(0, batch_size, max_chunk_size):
+                                    end_idx = min(chunk_idx + max_chunk_size, batch_size)
+                                    chunk_tensor = input_tensor[chunk_idx:end_idx]
+                                    outputs.append(model(chunk_tensor))
+                                output_tensor = torch.cat(outputs, dim=0)
+                            
+                            with scorep_region("py_d2h"):
+                                output_np = output_tensor.cpu().contiguous().numpy().flatten()
                             
                         # Scatter back to output buffer dynamically (matching C++ logic)
                         if output_np.shape[0] != total_output_size:
                             print(f"[PHYDLL:DL:PY] ERROR: model produced {output_np.shape[0]} elements "
                                   f"but metadata declared {total_output_size}. Refusing to send.", file=sys.stderr, flush=True)
                             world_comm.Abort(1)
-                        if uniform_chunks:
-                            # Build field-major wire layout:
-                            #   wire[f][agg_off[r] + b] = out_np[out_off[r] + f*g_r + b]
-                            agg_offsets = [0] * (ndest + 1)
-                            out_offsets = [0] * (ndest + 1)
-                            for i in range(ndest):
-                                agg_offsets[i + 1] = agg_offsets[i] + rank_field_sizes.get(dests[i], 0)
-                                out_offsets[i + 1] = out_offsets[i] + rank_total_output.get(dests[i], 0)
-                            wire = np.zeros((dll.dl_count, dll.size), dtype=np.float64)
-                            for i in range(ndest):
-                                g_r = rank_field_sizes.get(dests[i], 0)
-                                for f in range(dll.dl_count):
-                                    src = out_offsets[i] + f * g_r
-                                    dst = agg_offsets[i]
-                                    wire[f, dst:dst + g_r] = output_np[src:src + g_r]
-                            output = wire
-                        else:
-                            outputs_per_rank_used = total_output_size // batch_size
-                            offset_so_far = 0
-                            dest_rank_start = 0
-                            for i in range(ndest):
-                                source_rank = dests[i]
-                                rank_batch = rank_batch_sizes.get(source_rank, 1)
-                                for s in range(rank_batch):
-                                    dest_start = dest_rank_start + s * outputs_per_rank_used
-                                    src_start = (offset_so_far + s) * outputs_per_rank_used
-                                    output[dest_start : dest_start + outputs_per_rank_used] = \
-                                        output_np[src_start : src_start + outputs_per_rank_used]
-                                offset_so_far += rank_batch
-                                dest_rank_start += rank_field_sizes.get(source_rank, 0)
+                        
+                        with scorep_region("py_output_reorder"):
+                            if uniform_chunks:
+                                # Build field-major wire layout:
+                                #   wire[f][agg_off[r] + b] = out_np[out_off[r] + f*g_r + b]
+                                agg_offsets = [0] * (ndest + 1)
+                                out_offsets = [0] * (ndest + 1)
+                                for i in range(ndest):
+                                    agg_offsets[i + 1] = agg_offsets[i] + rank_field_sizes.get(dests[i], 0)
+                                    out_offsets[i + 1] = out_offsets[i] + rank_total_output.get(dests[i], 0)
+                                wire = np.zeros((dll.dl_count, dll.size), dtype=np.float64)
+                                for i in range(ndest):
+                                    g_r = rank_field_sizes.get(dests[i], 0)
+                                    for f in range(dll.dl_count):
+                                        src = out_offsets[i] + f * g_r
+                                        dst = agg_offsets[i]
+                                        wire[f, dst:dst + g_r] = output_np[src:src + g_r]
+                                output = wire
+                            else:
+                                outputs_per_rank_used = total_output_size // batch_size
+                                offset_so_far = 0
+                                dest_rank_start = 0
+                                for i in range(ndest):
+                                    source_rank = dests[i]
+                                    rank_batch = rank_batch_sizes.get(source_rank, 1)
+                                    for s in range(rank_batch):
+                                        dest_start = dest_rank_start + s * outputs_per_rank_used
+                                        src_start = (offset_so_far + s) * outputs_per_rank_used
+                                        output[dest_start : dest_start + outputs_per_rank_used] = \
+                                            output_np[src_start : src_start + outputs_per_rank_used]
+                                    offset_so_far += rank_batch
+                                    dest_rank_start += rank_field_sizes.get(source_rank, 0)
                         used_model = True
                     except Exception as e:
                         print(f"[PHYDLL:DL:PY] forward failed: {e}", file=sys.stderr)

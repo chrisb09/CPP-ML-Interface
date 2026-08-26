@@ -589,17 +589,20 @@ public:
         const bool profile_details = ml_coupling_scorep::detailed_regions_are_enabled();
         SCOREP_USER_METRIC_LOCAL(smartsim_input_bytes);
         SCOREP_USER_METRIC_LOCAL(smartsim_output_bytes);
+        SCOREP_USER_REGION_DEFINE(handle_smartsim_library_static_step)
         SCOREP_USER_REGION_DEFINE(handle_smartsim_chunk_plan)
+        SCOREP_USER_REGION_DEFINE(handle_smartsim_token_wait)
         SCOREP_USER_REGION_DEFINE(handle_smartsim_put_tensor)
         SCOREP_USER_REGION_DEFINE(handle_smartsim_run_model)
         SCOREP_USER_REGION_DEFINE(handle_smartsim_unpack_tensor)
         if (profile_details) {
-        static bool scorep_smartsim_metrics_initialized = false;
-        if (!scorep_smartsim_metrics_initialized) {
-            SCOREP_USER_METRIC_INIT(smartsim_input_bytes, "smartsim_input_bytes", "bytes", SCOREP_USER_METRIC_TYPE_UINT64, SCOREP_USER_METRIC_CONTEXT_CALLPATH);
-            SCOREP_USER_METRIC_INIT(smartsim_output_bytes, "smartsim_output_bytes", "bytes", SCOREP_USER_METRIC_TYPE_UINT64, SCOREP_USER_METRIC_CONTEXT_CALLPATH);
-            scorep_smartsim_metrics_initialized = true;
-        }
+            SCOREP_USER_REGION_BEGIN(handle_smartsim_library_static_step, "smartsim_library_static_step", SCOREP_USER_REGION_TYPE_COMMON)
+            static bool scorep_smartsim_metrics_initialized = false;
+            if (!scorep_smartsim_metrics_initialized) {
+                SCOREP_USER_METRIC_INIT(smartsim_input_bytes, "smartsim_input_bytes", "bytes", SCOREP_USER_METRIC_TYPE_UINT64, SCOREP_USER_METRIC_CONTEXT_CALLPATH);
+                SCOREP_USER_METRIC_INIT(smartsim_output_bytes, "smartsim_output_bytes", "bytes", SCOREP_USER_METRIC_TYPE_UINT64, SCOREP_USER_METRIC_CONTEXT_CALLPATH);
+                scorep_smartsim_metrics_initialized = true;
+            }
         }
 #endif
 
@@ -709,12 +712,32 @@ public:
                     if (this->block_size > 1 && this->local_rank >= num_chains) {
                         int token = 0;
                         int src_rank = this->block_start + (this->local_rank - num_chains);
+#ifdef USE_SCOREP
+                        if (profile_details) {
+                            SCOREP_USER_REGION_BEGIN(handle_smartsim_token_wait, "smartsim_token_wait", SCOREP_USER_REGION_TYPE_COMMON)
+                        }
+#endif
                         MPI_Recv((void*)&token, 1, MPI_INT, src_rank, 9993, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+#ifdef USE_SCOREP
+                        if (profile_details) {
+                            SCOREP_USER_REGION_END(handle_smartsim_token_wait)
+                        }
+#endif
                     }
                 } else {
                     if (world_size > 1 && this->rank >= num_chains) {
                         int token = 0;
+#ifdef USE_SCOREP
+                        if (profile_details) {
+                            SCOREP_USER_REGION_BEGIN(handle_smartsim_token_wait, "smartsim_token_wait", SCOREP_USER_REGION_TYPE_COMMON)
+                        }
+#endif
                         MPI_Recv((void*)&token, 1, MPI_INT, this->rank - num_chains, 9993, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+#ifdef USE_SCOREP
+                        if (profile_details) {
+                            SCOREP_USER_REGION_END(handle_smartsim_token_wait)
+                        }
+#endif
                     }
                 }
             }
@@ -780,7 +803,7 @@ public:
             for (const auto &name : input_tensor_names) { logging::debug("  " + name); }
 
 #if defined(MLCOUPLING_PROVIDER_HAS_MPI)
-            if (num_chains > 0 && mpi_initialized) {
+            if (num_chains > 0 && mpi_initialized && (chunk_idx + 1 == num_chunks)) {
                 if (this->is_per_ml_node) {
                     if (this->block_size > 1 && (this->local_rank + num_chains) < this->block_size) {
                         int token = 1;
@@ -880,6 +903,11 @@ public:
             }
         }
 
+#ifdef USE_SCOREP
+        if (profile_details) {
+            SCOREP_USER_REGION_END(handle_smartsim_library_static_step)
+        }
+#endif
 #endif
     }
 

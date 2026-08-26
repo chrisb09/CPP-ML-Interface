@@ -143,7 +143,18 @@ protected:
                 debug_dump_vector("assembled_input", debug_assembled_input_);
                 debug_dump_tensor("normalized_input", this->library_input[0]);
             }
+#ifdef USE_SCOREP
+            SCOREP_USER_REGION_DEFINE(handle_app_provider_inference)
+            if (ml_coupling_scorep::detailed_regions_are_enabled()) {
+                SCOREP_USER_REGION_BEGIN(handle_app_provider_inference, "app_provider_inference", SCOREP_USER_REGION_TYPE_COMMON)
+            }
+#endif
             library.static_inference(&this->library_input, &this->library_output);
+#ifdef USE_SCOREP
+            if (ml_coupling_scorep::detailed_regions_are_enabled()) {
+                SCOREP_USER_REGION_END(handle_app_provider_inference)
+            }
+#endif
             if (debug_active_)
             {
                 debug_dump_tensor("raw_provider_output", this->library_output[0]);
