@@ -196,11 +196,18 @@ def parse_single_cubex_tree(cubex_path: Path, explicit_steady_steps: Optional[in
     def parse_data_map(raw: str) -> Dict[int, float]:
         res: Dict[int, float] = {}
         for line in raw.splitlines():
-            m = re.match(r"^\s*([a-zA-Z0-9_:<>*&-]+)\(id=(\d+)\)\s+([\d\.eE+-]+)", line)
-            if m:
-                cid = int(m.group(2))
-                val = float(m.group(3))
-                res[cid] = val
+            idx = line.rfind('(id=')
+            if idx != -1:
+                rest = line[idx+4:]
+                parts = rest.split(')')
+                if len(parts) >= 2:
+                    try:
+                        cid = int(parts[0].strip())
+                        vals = parts[1].split()
+                        if vals:
+                            res[cid] = float(vals[0])
+                    except (ValueError, IndexError):
+                        pass
         return res
 
     incl_map = parse_data_map(incl_out)
@@ -218,19 +225,24 @@ def parse_single_cubex_tree(cubex_path: Path, explicit_steady_steps: Optional[in
         if not calltree_section or not line.strip():
             continue
         
-        m = re.match(r"^(\s*\|*-*\s*)*([a-zA-Z0-9_:<>*&-]+)\s*\[\s*\(\s*id=(\d+)", line)
-        if m:
-            reg_name = m.group(2)
-            cid = int(m.group(3))
-            prefix = line[:line.find(reg_name)]
-            depth = len(prefix.replace("-", " ").replace("|", " "))
+        idx = line.find('[ ( id=')
+        if idx != -1:
+            prefix_and_name = line[:idx].rstrip()
+            rest = line[idx + len('[ ( id='):]
+            try:
+                cid = int(rest.split(',')[0].split(')')[0].strip())
+            except (ValueError, IndexError):
+                continue
+            
+            clean_name = prefix_and_name.lstrip(' |-\t')
+            depth = len(prefix_and_name) - len(clean_name)
             
             while parent_stack and parent_stack[-1][0] >= depth:
                 parent_stack.pop()
             parent_id = parent_stack[-1][1] if parent_stack else None
             parent_stack.append((depth, cid))
             
-            node = CallTreeNode(cid, reg_name, parent_id)
+            node = CallTreeNode(cid, clean_name, parent_id)
             node.incl_time = incl_map.get(cid, 0.0)
             node.excl_time = excl_map.get(cid, 0.0)
             node.visits = int(vis_map.get(cid, 0))
@@ -529,17 +541,30 @@ def render_breakdown_bars(tree_summary: Dict[Tuple[str, ...], Dict[str, Any]],
     Renders non-overlapping leaf phase breakdown bar charts.
     """
     val_key = "incl_rank0" if use_rank0 else "incl_mean"
-    leaves = collect_leaf_decomposition(tree_summary, root_path, val_key=val_key)
-    if not leaves:
+    raw_leaves = collect_leaf_decomposition(tree_summary, root_path, val_key=val_key)
+    if not raw_leaves:
         return
 
-    # Sort leaves descending by duration
-    leaves = sorted(leaves, key=lambda x: x[1], reverse=True)
+    # Filter out tiny leaves and collapse minor entries
+    significant_leaves = [l for l in raw_leaves if l[1] >= 0.005]
+    other_sum = sum(l[1] for l in raw_leaves if l[1] < 0.005)
+
+    if len(significant_leaves) > 20:
+        top_leaves = sorted(significant_leaves, key=lambda x: x[1], reverse=True)[:20]
+        top_set = set(id(l) for l in top_leaves)
+        other_sum += sum(l[1] for l in significant_leaves if id(l) not in top_set)
+        leaves = top_leaves
+    else:
+        leaves = sorted(significant_leaves, key=lambda x: x[1], reverse=True)
+
+    if other_sum > 0.005:
+        leaves.append(("Other / Minor", other_sum))
+
     names = [x[0] for x in leaves]
     times = [x[1] for x in leaves]
     colors = [get_color(n.split()[0]) for n in names]
 
-    fig, ax = plt.subplots(figsize=(11, max(4.0, len(leaves) * 0.45)))
+    fig, ax = plt.subplots(figsize=(11, max(3.5, len(leaves) * 0.45)))
     y_pos = np.arange(len(names))
 
     bars = ax.barh(y_pos, times, color=colors, edgecolor="#222222", height=0.65, alpha=0.92)
@@ -722,8 +747,8 @@ def main():
     cubex_files: List[Path] = []
     if args.cubex:
         p_str = str(args.cubex)
-        if "*" in p_str or "?" in p_str:
-            matched = [Path(p) for p in glob.glob(p_str)]
+        if any(c in p_str for c in "*?[]"):
+            matched = [Path(p) for p in sorted(glob.glob(p_str))]
             for m in matched:
                 if m.is_dir() and (m / "profile.cubex").exists():
                     cubex_files.append(m / "profile.cubex")
@@ -753,11 +778,18 @@ def main():
             export_summary_tables(tree_summary, args.output_dir, title=title)
 
             if not args.no_plots:
-                # Find steady ML root
                 steady_candidates = [p for p in tree_summary if p[-1] in ("solver_ml_provider_call", "app_provider_inference") and not tree_summary[p]["is_lifecycle"]]
                 root_path = steady_candidates[0] if steady_candidates else list(tree_summary.keys())[0]
-                render_icicle_plot(tree_summary, root_path, args.output_dir / "cmi_icicle_plot.png", title=f"{title} - Hierarchical Breakdown")
-                render_breakdown_bars(tree_summary, root_path, args.output_dir / "cmi_stage_breakdown.png", title=f"{title} - Leaf Breakdown")
+                
+                has_controller_diff = any(tree_summary[p]["active_ranks"] < tree_summary[p]["total_ranks"] for p in tree_summary)
+                if has_controller_diff:
+                    # Render Controller/Rank 0 perspective (where forward execution happens)
+                    render_icicle_plot(tree_summary, root_path, args.output_dir / "cmi_icicle_plot_controller_rank0.png", title=f"{title} - Controller/Rank 0 Breakdown", use_rank0=True)
+                    render_breakdown_bars(tree_summary, root_path, args.output_dir / "cmi_stage_breakdown_controller_rank0.png", title=f"{title} - Controller/Rank 0 Leaf Breakdown", use_rank0=True)
+                
+                # Render Communicator Mean
+                render_icicle_plot(tree_summary, root_path, args.output_dir / "cmi_icicle_plot.png", title=f"{title} - Hierarchical Breakdown (Comm Mean)", use_rank0=False)
+                render_breakdown_bars(tree_summary, root_path, args.output_dir / "cmi_stage_breakdown.png", title=f"{title} - Leaf Breakdown (Comm Mean)", use_rank0=False)
 
     # 2. Process DL-side CUBE Profile if supplied
     dl_files: List[Path] = []
