@@ -17,7 +17,7 @@ export SCOREP_ROOT
 export SCOREP_ROOT_DIR="${SCOREP_ROOT}"
 export PAPI_INC="${PAPI_ROOT}/include"
 export PAPI_LIB="${PAPI_ROOT}/lib"
-export SCOREP_WRAPPER_INSTRUMENTER_FLAGS="${SCOREP_WRAPPER_INSTRUMENTER_FLAGS:---nocompiler --user --mpp=none --io=none --memory=malloc --thread=none --nocuda}"
+export SCOREP_WRAPPER_INSTRUMENTER_FLAGS="${SCOREP_WRAPPER_INSTRUMENTER_FLAGS:---nocompiler --user}"
 
 export PATH="${SCOREP_ROOT}/bin:${PAPI_ROOT}/bin:${PATH}"
 export LD_LIBRARY_PATH="${SCOREP_ROOT}/lib:${PAPI_ROOT}/lib:${LD_LIBRARY_PATH:-}"

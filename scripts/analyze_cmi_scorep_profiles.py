@@ -29,6 +29,7 @@ import argparse
 import subprocess
 from shutil import which as shutil_which
 from pathlib import Path
+from collections import defaultdict
 from typing import Dict, List, Tuple, Optional, Any, Set
 import numpy as np
 import pandas as pd
@@ -174,10 +175,12 @@ class CallTreeNode:
         self.step_self_time: float = 0.0
         self.is_lifecycle: bool = False
 
-def parse_single_cubex_tree(cubex_path: Path, explicit_steady_steps: Optional[int] = None) -> Dict[int, CallTreeNode]:
+def parse_cubex_file(cubex_path: Path, explicit_steady_steps: Optional[int] = None) -> List[Dict[int, CallTreeNode]]:
     """
     Parses full call-tree structure and extracts inclusive/exclusive time and visits.
-    Properly handles lifecycle vs steady-state normalization.
+    Properly handles both single-process and multi-process (merged MPI) CUBE archives
+    using cube_dump -s csv2.
+    Returns a list of node-trees, one for each rank/thread found.
     """
     if not cubex_path.exists():
         raise FileNotFoundError(f"CUBE profile not found: {cubex_path}")
@@ -186,37 +189,41 @@ def parse_single_cubex_tree(cubex_path: Path, explicit_steady_steps: Optional[in
     
     try:
         tree_out = subprocess.check_output([dump_bin, "-w", "calltree", str(cubex_path)], text=True, stderr=subprocess.DEVNULL)
-        incl_out = subprocess.check_output([dump_bin, "-m", "time", "-z", "incl", "-s", "human", "-c", "all", str(cubex_path)], text=True, stderr=subprocess.DEVNULL)
-        excl_out = subprocess.check_output([dump_bin, "-m", "time", "-z", "excl", "-s", "human", "-c", "all", str(cubex_path)], text=True, stderr=subprocess.DEVNULL)
-        vis_out = subprocess.check_output([dump_bin, "-m", "visits", "-z", "excl", "-s", "human", "-c", "all", str(cubex_path)], text=True, stderr=subprocess.DEVNULL)
+        incl_out = subprocess.check_output([dump_bin, "-m", "time", "-z", "incl", "-s", "csv2", "-c", "all", str(cubex_path)], text=True, stderr=subprocess.DEVNULL)
+        excl_out = subprocess.check_output([dump_bin, "-m", "time", "-z", "excl", "-s", "csv2", "-c", "all", str(cubex_path)], text=True, stderr=subprocess.DEVNULL)
+        vis_out = subprocess.check_output([dump_bin, "-m", "visits", "-z", "excl", "-s", "csv2", "-c", "all", str(cubex_path)], text=True, stderr=subprocess.DEVNULL)
     except Exception as e:
         sys.stderr.write(f"[ERROR] Failed to run cube_dump on {cubex_path}: {e}\n")
-        return {}
+        return []
 
-    def parse_data_map(raw: str) -> Dict[int, float]:
-        res: Dict[int, float] = {}
+    def parse_csv2_metric(raw: str) -> Dict[int, Dict[int, float]]:
+        # Returns {thread_id/rank_id: {cnode_id: value}}
+        m: Dict[int, Dict[int, float]] = defaultdict(dict)
         for line in raw.splitlines():
-            idx = line.rfind('(id=')
-            if idx != -1:
-                rest = line[idx+4:]
-                parts = rest.split(')')
-                if len(parts) >= 2:
-                    try:
-                        cid = int(parts[0].strip())
-                        vals = parts[1].split()
-                        if vals:
-                            res[cid] = float(vals[0])
-                    except (ValueError, IndexError):
-                        pass
-        return res
+            line = line.strip()
+            if not line or line.startswith("Cnode ID") or line.startswith("#"):
+                continue
+            parts = line.split(',')
+            if len(parts) >= 3:
+                try:
+                    cid = int(parts[0].strip())
+                    tid = int(parts[1].strip())
+                    val = float(parts[2].strip())
+                    m[tid][cid] = val
+                except (ValueError, IndexError):
+                    pass
+        return m
 
-    incl_map = parse_data_map(incl_out)
-    excl_map = parse_data_map(excl_out)
-    vis_map = parse_data_map(vis_out)
+    incl_map = parse_csv2_metric(incl_out)
+    excl_map = parse_csv2_metric(excl_out)
+    vis_map = parse_csv2_metric(vis_out)
 
-    nodes: Dict[int, CallTreeNode] = {}
+    # Determine threads/ranks present
+    thread_ids = sorted(incl_map.keys()) if incl_map else [0]
+
+    # Parse call tree skeleton once
+    skeleton: List[Tuple[int, str, Optional[int]]] = [] # (cid, clean_name, parent_id)
     parent_stack: List[Tuple[int, int]] = [] # (depth, cid)
-
     calltree_section = False
     for line in tree_out.splitlines():
         if "--- CALL TREE ---" in line:
@@ -241,59 +248,68 @@ def parse_single_cubex_tree(cubex_path: Path, explicit_steady_steps: Optional[in
                 parent_stack.pop()
             parent_id = parent_stack[-1][1] if parent_stack else None
             parent_stack.append((depth, cid))
-            
+            skeleton.append((cid, clean_name, parent_id))
+
+    rank_trees: List[Dict[int, CallTreeNode]] = []
+
+    for tid in thread_ids:
+        nodes: Dict[int, CallTreeNode] = {}
+        t_incl = incl_map.get(tid, {})
+        t_excl = excl_map.get(tid, {})
+        t_vis = vis_map.get(tid, {})
+
+        for cid, clean_name, parent_id in skeleton:
             node = CallTreeNode(cid, clean_name, parent_id)
-            node.incl_time = incl_map.get(cid, 0.0)
-            node.excl_time = excl_map.get(cid, 0.0)
-            node.visits = int(vis_map.get(cid, 0))
-            
+            node.incl_time = t_incl.get(cid, 0.0)
+            node.excl_time = t_excl.get(cid, 0.0)
+            node.visits = int(t_vis.get(cid, 0))
             nodes[cid] = node
             if parent_id is not None and parent_id in nodes:
                 nodes[parent_id].children_ids.append(cid)
 
-    # Determine normalization base (visits of steady ML step)
-    steady_visits = explicit_steady_steps or 0
-    if steady_visits <= 0:
+        # Determine normalization base (visits of steady ML step)
+        steady_visits = explicit_steady_steps or 0
+        if steady_visits <= 0:
+            for n in nodes.values():
+                if n.name in ("solver_step_ml_steady", "solver_ml_provider_call") and n.visits > 0:
+                    steady_visits = n.visits
+                    break
+        if steady_visits <= 0:
+            # DL-side client profile detection
+            for n in nodes.values():
+                if n.name in ("dl_torch_forward", "py_torch_forward", "py_inference", "dl_recv", "py_recv") and n.visits > 0:
+                    steady_visits = n.visits
+                    break
+        if steady_visits <= 0:
+            steady_visits = 1
+
+        def get_ancestor_names(cid: int) -> Set[str]:
+            names = set()
+            curr: Optional[int] = cid
+            while curr is not None and curr in nodes:
+                names.add(nodes[curr].name)
+                curr = nodes[curr].parent_id
+            return names
+
+        # Compute per-step metrics
         for n in nodes.values():
-            if n.name in ("solver_step_ml_steady", "solver_ml_provider_call") and n.visits > 0:
-                steady_visits = n.visits
-                break
-    if steady_visits <= 0:
-        # DL-side client profile detection
-        for n in nodes.values():
-            if n.name in ("dl_torch_forward", "py_torch_forward", "py_inference", "dl_recv", "py_recv") and n.visits > 0:
-                steady_visits = n.visits
-                break
-    if steady_visits <= 0:
-        steady_visits = 1
+            ancestors = get_ancestor_names(n.id)
+            
+            # Lifecycle classification
+            if "solver_setup" in ancestors or "solver_teardown" in ancestors or "solver_step_ml_warmup" in ancestors or n.name in ("solver_setup", "solver_teardown", "solver_step_ml_warmup", "terrain_solver", "solver_main_loop"):
+                n.is_lifecycle = True
+                n.step_incl_time = n.incl_time
+                n.step_excl_time = n.excl_time
+                n.step_self_time = n.excl_time
+            else:
+                n.is_lifecycle = False
+                n.step_incl_time = n.incl_time / steady_visits
+                n.step_excl_time = n.excl_time / steady_visits
+                n.step_self_time = n.excl_time / steady_visits
 
-    def get_ancestor_names(cid: int) -> Set[str]:
-        names = set()
-        curr: Optional[int] = cid
-        while curr is not None and curr in nodes:
-            names.add(nodes[curr].name)
-            curr = nodes[curr].parent_id
-        return names
+        rank_trees.append(nodes)
 
-    # Compute per-step metrics
-    for n in nodes.values():
-        ancestors = get_ancestor_names(n.id)
-        
-        # Lifecycle classification
-        if "solver_setup" in ancestors or "solver_teardown" in ancestors or "solver_step_ml_warmup" in ancestors or n.name in ("solver_setup", "solver_teardown", "solver_step_ml_warmup", "terrain_solver", "solver_main_loop"):
-            n.is_lifecycle = True
-            # Lifecycle phases retain total execution time
-            n.step_incl_time = n.incl_time
-            n.step_excl_time = n.excl_time
-            n.step_self_time = n.excl_time
-        else:
-            n.is_lifecycle = False
-            # Steady-state regions are normalized by steady visits
-            n.step_incl_time = n.incl_time / steady_visits
-            n.step_excl_time = n.excl_time / steady_visits
-            n.step_self_time = n.excl_time / steady_visits
-
-    return nodes
+    return rank_trees
 
 
 # =============================================================================
@@ -778,8 +794,9 @@ def main():
         print(f"[*] Analyzing {len(cubex_files)} solver CUBE profile(s)...")
         agg = AggregatedCallTree()
         for f in cubex_files:
-            nodes = parse_single_cubex_tree(f, explicit_steady_steps=args.steady_steps)
-            agg.add_tree(nodes)
+            trees = parse_cubex_file(f, explicit_steady_steps=args.steady_steps)
+            for nodes in trees:
+                agg.add_tree(nodes)
 
         tree_summary = agg.compute_summary(rank_agg=args.rank_agg)
         if tree_summary:
@@ -818,8 +835,9 @@ def main():
         print(f"[*] Analyzing DL-side CUBE profile: {dl_files[0]}")
         dl_agg = AggregatedCallTree()
         for f in dl_files:
-            dl_nodes = parse_single_cubex_tree(f, explicit_steady_steps=args.steady_steps)
-            dl_agg.add_tree(dl_nodes)
+            dl_trees = parse_cubex_file(f, explicit_steady_steps=args.steady_steps)
+            for dl_nodes in dl_trees:
+                dl_agg.add_tree(dl_nodes)
         dl_summary = dl_agg.compute_summary(rank_agg=args.rank_agg)
         if dl_summary and not args.no_plots:
             dl_roots = [p for p in dl_summary if p[-1] in ("phydll_dl_client", "py_inference", "user:py_inference")]

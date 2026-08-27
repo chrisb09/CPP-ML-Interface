@@ -13,11 +13,11 @@ list(APPEND CMAKE_CXX_IMPLICIT_LINK_DIRECTORIES
 # Honor <Package>_ROOT variables like CUDA_ROOT.
 cmake_policy(SET CMP0074 NEW)
 
-if(WITH_SCOREP OR (DEFINED ENV{USE_SCOREP} AND NOT "$ENV{USE_SCOREP}" STREQUAL "" AND NOT "$ENV{USE_SCOREP}" STREQUAL "0"))
-    set(CMAKE_CXX_COMPILER scorep-mpicxx)
-    set(CMAKE_C_COMPILER scorep-mpicc)
-    set(CMAKE_CXX_COMPILER_ARG1 "--nocompiler --user")
-    set(CMAKE_C_COMPILER_ARG1 "--nocompiler --user")
+if(NOT CMAKE_CXX_COMPILER)
+    if(WITH_SCOREP OR (DEFINED ENV{USE_SCOREP} AND NOT "$ENV{USE_SCOREP}" STREQUAL "" AND NOT "$ENV{USE_SCOREP}" STREQUAL "0"))
+        set(CMAKE_CXX_COMPILER scorep-mpicxx)
+        set(CMAKE_C_COMPILER scorep-mpicc)
+    endif()
 endif()
 
 project(PhyDLLDlClient LANGUAGES C CXX)
