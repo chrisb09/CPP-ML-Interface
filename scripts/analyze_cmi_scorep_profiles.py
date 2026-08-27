@@ -680,6 +680,14 @@ def plot_aix_pipeline_gantt(df: pd.DataFrame, output_path: Path, target_step: Op
 # Markdown Summary & CSV Export
 # =============================================================================
 
+def is_interesting_region(name: str) -> bool:
+    bad_prefixes = ("std::", "__gnu_cxx::", "void", "decltype", "unsigned", "int&", "bool", "char", "unsigned long", "_GLOBAL__", "__static_")
+    if any(name.startswith(p) for p in bad_prefixes):
+        return False
+    if "allocator" in name or "_M_realloc" in name or "_M_construct" in name or "deallocate" in name:
+        return False
+    return True
+
 def export_summary_tables(tree_summary: Dict[Tuple[str, ...], Dict[str, Any]], out_dir: Path, title: str = "CMI Profile Summary"):
     rows = []
     for path, d in sorted(tree_summary.items(), key=lambda x: x[1]["incl_mean"], reverse=True):
@@ -713,7 +721,8 @@ def export_summary_tables(tree_summary: Dict[Tuple[str, ...], Dict[str, Any]], o
         f.write("| Region | Comm Mean (ms) | Controller/Rank0 (ms) | Max Rank (ms) | Self (ms) | Visits/Step | Ranks |\n")
         f.write("|:---|---:|---:|---:|---:|---:|---:|\n")
         for _, r in steady_df.iterrows():
-            f.write(f"| `{r['Region']}` | {r['Rank_Mean (ms)']:.3f} | {r['Controller_Rank0 (ms)']:.3f} | {r['Max_Rank (ms)']:.3f} | {r['Self (ms)']:.3f} | {r['Visits/Step']:.1f} | {int(r['Active_Ranks'])}/{int(r['Total_Ranks'])} |\n")
+            if is_interesting_region(r["Region"]):
+                f.write(f"| `{r['Region']}` | {r['Rank_Mean (ms)']:.3f} | {r['Controller_Rank0 (ms)']:.3f} | {r['Max_Rank (ms)']:.3f} | {r['Self (ms)']:.3f} | {r['Visits/Step']:.1f} | {int(r['Active_Ranks'])}/{int(r['Total_Ranks'])} |\n")
         
         f.write("\n## Lifecycle Phase Totals (One-Off Cumulative)\n\n")
         f.write("| Phase | Duration (ms) | Ranks |\n")

@@ -240,15 +240,6 @@ def main():
 
         dl_count = int(os.environ.get("PHYDLL_DL_FIELD_COUNT", os.environ.get("PHYDLL_DL_COUNT", "1")))
         
-        # Match the original Python DL startup: participate in the MPMD split
-        # before entering PhyDLL's own internal MPI split.
-        color = MPI.UNDEFINED
-        print("[DL] Entering world_comm.Split(color=MPI.UNDEFINED)", flush=True)
-        local_comm = world_comm.Split(color, world_comm.Get_rank())
-        print("[DL] Returned from world_comm.Split", flush=True)
-        if local_comm != MPI.COMM_NULL:
-            local_comm.Free()
-        
         print("[DL] constructing PhyDLL...", flush=True)
         dll = PhyDLL()
         print("[DL] calling dll.init(...)", flush=True)

@@ -183,8 +183,8 @@ int main(int argc, char **argv) {
     const int dl_count = get_env_int("PHYDLL_DL_FIELD_COUNT", get_env_int("PHYDLL_DL_COUNT", 1));
 
 #ifdef PHYDLL_DL_USE_TORCH
-    const int intra_threads = get_env_int("MLCOUPLING_INTRA_OP_THREADS", get_env_int("SLURM_CPUS_PER_TASK", -1));
-    const int inter_threads = get_env_int("MLCOUPLING_INTER_OP_THREADS", -1);
+    const int intra_threads = get_env_int("MLCOUPLING_INTRA_OP_THREADS", get_env_int("SLURM_CPUS_PER_TASK", 4));
+    const int inter_threads = get_env_int("MLCOUPLING_INTER_OP_THREADS", 1);
 
     if (intra_threads > 0) {
         torch::set_num_threads(intra_threads);
