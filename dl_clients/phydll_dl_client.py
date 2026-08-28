@@ -9,9 +9,15 @@ PY_SCOREP_WRAPPER = os.environ.get("PHYDLL_PY_SCOREP_WRAPPER", "0") == "1"
 
 print("[DL] Importing mpi4py...", flush=True)
 import mpi4py
-mpi4py.rc.thread_level = "funneled"
 from mpi4py import MPI
 print("[DL] mpi4py imported successfully. MPI world size =", MPI.COMM_WORLD.Get_size(), "rank =", MPI.COMM_WORLD.Get_rank(), flush=True)
+
+# Immediately participate in solver's initial MPMD communicator split
+print("[DL] Participating in initial MPMD split (color=MPI.UNDEFINED)...", flush=True)
+_init_split_comm = MPI.COMM_WORLD.Split(color=MPI.UNDEFINED, key=0)
+if _init_split_comm != MPI.COMM_NULL:
+    _init_split_comm.Free()
+print("[DL] Initial MPMD split complete.", flush=True)
 
 print("[DL] Importing torch...", flush=True)
 import torch
@@ -230,15 +236,6 @@ def main():
     dll = None
     world_comm = MPI.COMM_WORLD
     try:
-        # Match solver MPMD split: participate in the solver communicator split
-        # before entering PhyDLL's own internal MPI split.
-        color = MPI.UNDEFINED
-        print("[DL] Entering world_comm.Split(color=MPI.UNDEFINED)", flush=True)
-        local_comm = world_comm.Split(color, world_comm.Get_rank())
-        print("[DL] Returned from world_comm.Split", flush=True)
-        if local_comm != MPI.COMM_NULL:
-            local_comm.Free()
-
         # Configure Torch threading
         intra_threads = int(os.environ.get("MLCOUPLING_INTRA_OP_THREADS", os.environ.get("SLURM_CPUS_PER_TASK", "-1")))
         inter_threads = int(os.environ.get("MLCOUPLING_INTER_OP_THREADS", "-1"))
