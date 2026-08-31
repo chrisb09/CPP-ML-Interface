@@ -137,6 +137,8 @@ build_variant() {
     echo "Installing AIX ${variant} variant to ${install_dir}..."
     cmake --install "${build_dir}"
 
+    git -C "${AIX_DIR}" rev-parse HEAD > "${install_dir}/.git_commit"
+
     validate_install "${variant}" "${install_dir}"
     echo "AIX ${variant} install ready at ${install_dir}"
 }

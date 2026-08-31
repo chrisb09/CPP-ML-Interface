@@ -223,6 +223,8 @@ if(WITH_AIX)
                     -DAIX_SKIP_VENV_CREATION=ON
                     -DUSE_PYTHON_TORCH_CMAKE_PREFIX=${USE_PYTHON_TORCH_CMAKE_PREFIX}
                     -DTORCH_VERSION=${TORCH_VERSION}
+                    -DLIBTORCH_DIR=${LIBTORCH_DIR}
+                    -DAIX_VENV_DIR=${AIX_VENV_DIR}
                     ${_aixelerator_scorep_arg}
                     ${_aixelerator_cmake_args}
                 RESULT_VARIABLE AIXELERATOR_CONFIGURE_RESULT
