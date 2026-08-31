@@ -372,7 +372,7 @@ class AggregatedCallTree:
             selfs_all = [d["per_rank_step_self"].get(r, 0.0) for r in range(num_ranks)]
             vis_all = [d["per_rank_visits"].get(r, 0) for r in range(num_ranks)]
 
-            active_incls = list(d["per_rank_step_incl"].values())
+            active_incls = [v for v in d["per_rank_step_incl"].values() if v > 1e-9]
             active_ranks = len(active_incls)
 
             rank0_incl = d["per_rank_step_incl"].get(0, 0.0)
