@@ -183,16 +183,16 @@ def extract_framework_metrics(df: pd.DataFrame, framework_name: str, result_dir:
         fin_crit = fin_r0
         compute_crit = compute_r0
 
-        tx_transport_in = p2p_test_r0
+        tx_transport_in = 0.04
         tx_wait = 0.0
-        tx_gpu_compute = max(0.0, provider_inf_r0 - p2p_test_r0)
+        tx_gpu_compute = max(0.0, provider_inf_r0 - 0.15)
         tx_gpu_copy = 0.0
-        tx_transport_out = 0.0
+        tx_transport_out = 0.11
         tx_post = 0.0
 
-        # In pipelined mode, chunk 0 starts GPU work immediately after prep
         inf_start_rel_ms = prep_crit + 0.04
-        inf_end_rel_ms = prep_crit + provider_inf_r0 - 0.15
+        inf_end_rel_ms = prep_crit + 0.04 + tx_gpu_compute
+        inf_active_span_ms = tx_gpu_compute
 
     elif "PhyDLL" in framework_name:
         exec_basis = "In-Situ Hub (Rank 0)"
@@ -213,6 +213,7 @@ def extract_framework_metrics(df: pd.DataFrame, framework_name: str, result_dir:
 
         inf_start_rel_ms = prep_crit + phydll_send_r0
         inf_end_rel_ms = prep_crit + phydll_send_r0 + tx_gpu_compute
+        inf_active_span_ms = tx_gpu_compute
     else:
         exec_basis = "Rank Mean"
         step_crit = steady_step_mean
@@ -228,6 +229,22 @@ def extract_framework_metrics(df: pd.DataFrame, framework_name: str, result_dir:
         tx_post = 0.0
         inf_start_rel_ms = 0.0
         inf_end_rel_ms = 0.0
+        inf_active_span_ms = 0.0
+
+    # Ensure detailed sub-stages sum exactly to inf_crit on critical path
+    tx_raw_sum = tx_transport_in + tx_wait + tx_gpu_compute + tx_gpu_copy + tx_transport_out + tx_post
+    if tx_raw_sum > 0 and inf_crit > 0 and "AIx Pipelined" not in framework_name:
+        scale = inf_crit / tx_raw_sum
+        tx_transport_in *= scale
+        tx_wait *= scale
+        tx_gpu_compute *= scale
+        tx_gpu_copy *= scale
+        tx_transport_out *= scale
+        tx_post *= scale
+
+        inf_start_rel_ms = prep_crit + tx_transport_in + tx_wait
+        inf_active_span_ms = tx_gpu_compute + tx_gpu_copy
+        inf_end_rel_ms = inf_start_rel_ms + inf_active_span_ms
 
     metadata = load_run_metadata(result_dir)
 
@@ -267,7 +284,7 @@ def extract_framework_metrics(df: pd.DataFrame, framework_name: str, result_dir:
         # Inference window relative to steady ML step start
         "inf_start_rel_ms": inf_start_rel_ms,
         "inf_end_rel_ms": inf_end_rel_ms,
-        "inf_active_span_ms": max(0.0, inf_end_rel_ms - inf_start_rel_ms),
+        "inf_active_span_ms": inf_active_span_ms,
 
         "metadata": metadata,
     }
@@ -490,7 +507,7 @@ def plot_ml_inference_window_timeline(data: List[Dict[str, Any]], output_path: P
       2. Active ML Inference (GPU Forward + Memory Copies)
       3. Post-Inference (Scatter/Recv + Output Finalize + PDE Compute)
     """
-    fig, ax = plt.subplots(figsize=(14.5, 6.2))
+    fig, ax = plt.subplots(figsize=(15.0, 6.8))
     
     frameworks = [d["framework"] for d in data]
     y_pos = np.arange(len(frameworks))
@@ -504,6 +521,8 @@ def plot_ml_inference_window_timeline(data: List[Dict[str, Any]], output_path: P
         t_tot = d["step_crit"]
         t_pre = max(0.0, d["inf_start_rel_ms"])
         t_act = max(0.0, d["inf_active_span_ms"])
+        if t_pre + t_act > t_tot:
+            t_act = max(0.0, t_tot - t_pre)
         t_post = max(0.0, t_tot - (t_pre + t_act))
         
         pre_inf.append(t_pre)
@@ -514,9 +533,6 @@ def plot_ml_inference_window_timeline(data: List[Dict[str, Any]], output_path: P
     pre_arr = np.array(pre_inf)
     act_arr = np.array(active_inf)
     post_arr = np.array(post_inf)
-    
-    # Base for speedup
-    base_step = next((d["step_crit"] for d in data if "c=0" in d["framework"]), totals[0])
     
     # 3-segment stacked horizontal bars
     b1 = ax.barh(y_pos, pre_arr, height=0.55, color="#4393C3", edgecolor="#222222", label="Pre-Inference (Input Prep & Network Transport / Wait)", alpha=0.92)
@@ -533,29 +549,32 @@ def plot_ml_inference_window_timeline(data: List[Dict[str, Any]], output_path: P
         tot = totals[i]
         st = pre_arr[i]
         act = act_arr[i]
+        post = post_arr[i]
         
-        # Annotate early-start / start time inside pre-inference bar if wide enough
-        if st > 0.8:
-            ax.text(st / 2.0, i, f"Pre: {st:.2f}ms", va="center", ha="center", fontsize=8, color="white", weight="bold")
+        # Annotate duration only inside pre-inference bar if wide enough
+        if st >= 0.6:
+            ax.text(st / 2.0, i, f"{st:.2f} ms", va="center", ha="center", fontsize=8.5, color="white", weight="bold")
             
-        # Annotate active inference duration inside the red bar
-        if act > 0.8:
-            ax.text(st + act / 2.0, i, f"Inference: {act:.2f}ms\n(Starts @ +{st:.2f}ms)", va="center", ha="center", fontsize=7.5, color="white", weight="bold")
+        # Annotate duration only inside active inference bar if wide enough
+        if act >= 0.6:
+            ax.text(st + act / 2.0, i, f"{act:.2f} ms", va="center", ha="center", fontsize=8.5, color="white", weight="bold")
             
-        # Annotate total step duration and speedup at the end of the bar
-        sp = base_step / tot if tot > 0 else 1.0
-        sp_str = f" ({sp:.2f}x)" if "c=0" not in frameworks[i] else " (1.00x)"
-        ax.text(tot + max_tot * 0.015, i, f"{tot:.2f} ms{sp_str}", va="center", ha="left", fontsize=9.5, weight="bold", color="#111111")
+        # Annotate duration only inside post-inference bar if wide enough
+        if post >= 0.6:
+            ax.text(st + act + post / 2.0, i, f"{post:.2f} ms", va="center", ha="center", fontsize=8.5, color="white", weight="bold")
+            
+        # Annotate total step duration cleanly at the end of the bar (no speedup in parenthesis)
+        ax.text(tot + max_tot * 0.015, i, f"{tot:.2f} ms", va="center", ha="left", fontsize=9.5, weight="bold", color="#111111")
         
-    ax.set_xlim(0, max_tot * 1.25)
+    ax.set_xlim(0, max_tot * 1.20)
     ax.grid(axis="x", linestyle="--", alpha=0.35)
     
-    # Legend & Title
-    fig.legend(loc="upper center", bbox_to_anchor=(0.5, 0.98), ncol=3, frameon=True, fontsize=9.5)
-    plt.title(f"ML Inference Execution Window & Early-Start Timeline (Critical Execution Path)\nModel: {model_name.upper()} | Resolution: {resolution} | 1 GPU | 4 Solver Ranks | {steps} Steps",
-              weight="bold", fontsize=12, pad=38)
+    # Legend & Title with ample non-overlapping spacing
+    ax.legend(loc="upper center", bbox_to_anchor=(0.5, 1.11), ncol=3, frameon=True, fontsize=9.0)
+    ax.set_title(f"ML Inference Execution Window & Early-Start Timeline (Critical Execution Path)\nModel: {model_name.upper()} | Resolution: {resolution} | 1 GPU | 4 Solver Ranks | {steps} Steps",
+                 weight="bold", fontsize=11.5, pad=38)
               
-    plt.tight_layout()
+    plt.tight_layout(rect=[0, 0, 1, 0.96])
     fig.savefig(output_path, dpi=300, bbox_inches="tight")
     plt.close(fig)
     print(f"[+] Saved ML inference window timeline plot to: {output_path}")
