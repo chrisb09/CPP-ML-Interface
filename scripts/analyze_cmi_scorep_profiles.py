@@ -517,12 +517,21 @@ def build_display_tree(tree_summary: Dict[Tuple[str, ...], Dict[str, Any]],
     
     root_info = tree_summary[root_path]
     root_val = root_info[val_key]
+    
+    # If root is a lifecycle wrapper (e.g. phydll_dl_client) but its children are per-step steady regions:
+    children_sum = sum(tree_summary[c][val_key] for c in root_info["children_paths"] if c in tree_summary and not tree_summary[c]["is_lifecycle"])
+    if root_info["is_lifecycle"] and children_sum > 0 and root_val > 3.0 * children_sum:
+        root_val = children_sum
+
     if root_val <= 0:
         return None
 
     def build_raw(path: Tuple[str, ...]) -> DisplayTreeNode:
         node_info = tree_summary[path]
         val = node_info[val_key]
+        if path == root_path and root_info["is_lifecycle"] and children_sum > 0 and val > 3.0 * children_sum:
+            val = children_sum
+            
         node = DisplayTreeNode(node_info["name"], val, path)
         
         children_paths = [c for c in node_info["children_paths"] if c in tree_summary and tree_summary[c][val_key] > min_val_threshold]
@@ -587,7 +596,7 @@ def render_icicle_plot(display_tree: DisplayTreeNode,
                        output_path: Path,
                        title: str = "CMI Coupling Phase Breakdown"):
     """
-    Renders an Icicle plot with semantic ordering and dynamic depth.
+    Renders an Icicle plot with semantic ordering, dynamic depth, and external callouts for narrow boxes.
     """
     root_val = display_tree.val
     if root_val <= 0:
@@ -601,9 +610,10 @@ def render_icicle_plot(display_tree: DisplayTreeNode,
     tree_depth = get_max_depth(display_tree)
     row_height = 0.85
     y_gap = 0.16
-    fig_height = max(4.0, 1.2 + 0.9 * tree_depth)
+    fig_height = max(4.2, 1.2 + 0.9 * tree_depth)
 
-    fig, ax = plt.subplots(figsize=(14, fig_height))
+    fig, ax = plt.subplots(figsize=(14.5, fig_height))
+    callouts = []
 
     def draw_node(node: DisplayTreeNode, x_start: float, width: float, depth: int):
         if width <= 0:
@@ -626,9 +636,21 @@ def render_icicle_plot(display_tree: DisplayTreeNode,
             lbl = f"{clean_name}\n{val_ms:.2f} ms ({pct:.1f}%)"
             ax.text(x_start + width / 2.0, y_pos + row_height / 2.0, lbl,
                     ha="center", va="center", fontsize=8.5, weight="bold", color="#111111")
-        elif width > 0.04 * root_val:
+        elif width > 0.05 * root_val:
             ax.text(x_start + width / 2.0, y_pos + row_height / 2.0, f"{clean_name}\n{val_ms:.1f}ms",
                     ha="center", va="center", fontsize=7.5, color="#111111")
+        else:
+            # Register for external callout if width is small and it's a significant leaf or stage
+            if val_ms >= 0.005 and (not node.children or width < 0.035 * root_val):
+                callouts.append({
+                    "name": clean_name,
+                    "val_ms": val_ms,
+                    "pct": pct,
+                    "target_x": x_start + width / 2.0,
+                    "target_y": y_pos + row_height / 2.0,
+                    "depth": depth,
+                    "color": color
+                })
 
         if node.children:
             child_sum = sum(c.val for c in node.children)
@@ -642,7 +664,67 @@ def render_icicle_plot(display_tree: DisplayTreeNode,
 
     draw_node(display_tree, 0.0, root_val, 1)
 
-    ax.set_xlim(-0.01 * root_val, 1.01 * root_val)
+    # Draw external callout annotations outside the boxes
+    right_callouts = [c for c in callouts if c["target_x"] >= 0.4 * root_val]
+    left_callouts = [c for c in callouts if c["target_x"] < 0.4 * root_val]
+
+    # Stagger right callouts
+    right_callouts.sort(key=lambda c: c["target_y"], reverse=True)
+    prev_y = float("inf")
+    for c in right_callouts:
+        text_y = c["target_y"]
+        if prev_y - text_y < 0.55:
+            text_y = prev_y - 0.55
+        prev_y = text_y
+
+        ax.annotate(
+            f"{c['name']}: {c['val_ms']:.2f} ms ({c['pct']:.1f}%)",
+            xy=(c["target_x"], c["target_y"]),
+            xytext=(1.04 * root_val, text_y),
+            arrowprops=dict(
+                arrowstyle="->",
+                connectionstyle="arc3,rad=-0.12" if c["target_y"] >= text_y else "arc3,rad=0.12",
+                color="#444444",
+                lw=1.0
+            ),
+            fontsize=7.5,
+            fontweight="bold",
+            color="#111111",
+            ha="left",
+            va="center",
+            bbox=dict(boxstyle="round,pad=0.25", facecolor="#F8F9FA", edgecolor=c["color"], alpha=0.95, lw=1.2)
+        )
+
+    # Stagger left callouts
+    left_callouts.sort(key=lambda c: c["target_y"], reverse=True)
+    prev_y = float("inf")
+    for c in left_callouts:
+        text_y = c["target_y"]
+        if prev_y - text_y < 0.55:
+            text_y = prev_y - 0.55
+        prev_y = text_y
+
+        ax.annotate(
+            f"{c['name']}: {c['val_ms']:.2f} ms ({c['pct']:.1f}%)",
+            xy=(c["target_x"], c["target_y"]),
+            xytext=(-0.04 * root_val, text_y),
+            arrowprops=dict(
+                arrowstyle="->",
+                connectionstyle="arc3,rad=0.12" if c["target_y"] >= text_y else "arc3,rad=-0.12",
+                color="#444444",
+                lw=1.0
+            ),
+            fontsize=7.5,
+            fontweight="bold",
+            color="#111111",
+            ha="right",
+            va="center",
+            bbox=dict(boxstyle="round,pad=0.25", facecolor="#F8F9FA", edgecolor=c["color"], alpha=0.95, lw=1.2)
+        )
+
+    left_lim = -0.28 * root_val if left_callouts else -0.01 * root_val
+    right_lim = 1.30 * root_val if right_callouts else 1.01 * root_val
+    ax.set_xlim(left_lim, right_lim)
     ax.set_ylim(-0.2, (tree_depth + 1) * (row_height + y_gap))
     ax.set_xlabel("Duration (seconds per steady ML step)", weight="bold")
     ax.set_yticks([])
@@ -666,9 +748,9 @@ def render_sunburst_plot(display_tree: DisplayTreeNode,
                          output_path: Path,
                          title: str = "CMI Steady Step Sunburst Breakdown"):
     """
-    Renders an elegant, publication-quality Sunburst plot with concentric rings.
+    Renders an elegant, publication-quality Sunburst plot with concentric rings and external callouts for narrow wedges.
     """
-    fig, ax = plt.subplots(figsize=(10, 10))
+    fig, ax = plt.subplots(figsize=(10.5, 10.5))
 
     root_val = display_tree.val
     if root_val <= 0:
@@ -680,8 +762,9 @@ def render_sunburst_plot(display_tree: DisplayTreeNode,
         return max(get_max_depth(c, d + 1) for c in node.children)
 
     max_d = get_max_depth(display_tree)
-    r_step = 0.82 / max(2, max_d)
-    r_center = 0.26
+    r_step = 0.75 / max(2, max_d)
+    r_center = 0.25
+    r_max_outer = r_center + max_d * r_step
 
     # Draw center circle (root)
     center_circle = patches.Circle((0, 0), r_center, facecolor=get_color(display_tree.name), edgecolor="#222222", linewidth=1.5, alpha=0.95)
@@ -690,6 +773,8 @@ def render_sunburst_plot(display_tree: DisplayTreeNode,
     clean_root_name = display_tree.name.replace("smartsim_", "").replace("phydll_", "").replace("aix_", "").replace("solver_", "").replace("app_", "").replace("torchInference::", "")
     ax.text(0, 0, f"{clean_root_name}\n{display_tree.val*1000:.2f} ms\n(100%)",
             ha="center", va="center", fontsize=9.5, weight="bold", color="#111111")
+
+    callouts = []
 
     def draw_wedges(node: DisplayTreeNode, theta_start: float, theta_end: float, depth: int):
         if not node.children:
@@ -717,25 +802,25 @@ def render_sunburst_plot(display_tree: DisplayTreeNode,
             )
             ax.add_patch(wedge)
 
+            c_clean = c.name.replace("smartsim_", "").replace("phydll_", "").replace("aix_", "").replace("solver_", "").replace("app_", "").replace("torchInference::", "")
+            pct = (c.val / root_val) * 100.0
+            mid_theta_deg = curr_theta + c_arc / 2.0
+            mid_theta_rad = np.radians(mid_theta_deg)
+            mid_r = (r_in + r_out) / 2.0
+
             # Label placement if arc is wide enough
-            if c_arc > 10:
-                mid_theta_deg = curr_theta + c_arc / 2.0
-                mid_theta_rad = np.radians(mid_theta_deg)
-                mid_r = (r_in + r_out) / 2.0
+            if c_arc > 14:
                 x = mid_r * np.cos(mid_theta_rad)
                 y = mid_r * np.sin(mid_theta_rad)
 
-                # Tangential rotation along wedge arc
                 rot = (mid_theta_deg - 90) % 360
                 if 90 < rot < 270:
                     rot = rot - 180
 
-                c_clean = c.name.replace("smartsim_", "").replace("phydll_", "").replace("aix_", "").replace("solver_", "").replace("app_", "").replace("torchInference::", "")
-                pct = (c.val / root_val) * 100.0
-                if c_arc > 22:
+                if c_arc > 24:
                     lbl = f"{c_clean}\n{c.val*1000:.2f} ms ({pct:.1f}%)"
                     fsize = 8.0
-                elif c_arc > 14:
+                elif c_arc > 16:
                     lbl = f"{c_clean}\n{c.val*1000:.1f}ms"
                     fsize = 7.0
                 else:
@@ -744,13 +829,78 @@ def render_sunburst_plot(display_tree: DisplayTreeNode,
 
                 ax.text(x, y, lbl, ha="center", va="center", fontsize=fsize,
                         weight="bold", color="#111111", rotation=rot, rotation_mode="anchor")
+            else:
+                # Small wedge: register for external callout annotation
+                if c.val * 1000.0 >= 0.005 and not c.children:
+                    callouts.append({
+                        "name": c_clean,
+                        "val_ms": c.val * 1000.0,
+                        "pct": pct,
+                        "mid_theta_deg": mid_theta_deg,
+                        "mid_r": mid_r,
+                        "color": c_color
+                    })
 
             draw_wedges(c, curr_theta, c_theta_end, depth + 1)
             curr_theta = c_theta_end
 
     draw_wedges(display_tree, 0.0, 360.0, 1)
 
-    total_r = r_center + max_d * r_step + 0.06
+    # Draw external radial callouts with non-overlapping staggering
+    callouts.sort(key=lambda c: c["mid_theta_deg"])
+    r_callout_base = r_max_outer + 0.18
+
+    # Separate into right hemisphere and left hemisphere for clean vertical staggering
+    right_callouts = [c for c in callouts if np.cos(np.radians(c["mid_theta_deg"])) >= 0]
+    left_callouts = [c for c in callouts if np.cos(np.radians(c["mid_theta_deg"])) < 0]
+
+    def place_callouts(c_list, is_right: bool):
+        if not c_list:
+            return
+        # Sort top-to-bottom by target y
+        c_list.sort(key=lambda c: c["mid_r"] * np.sin(np.radians(c["mid_theta_deg"])), reverse=True)
+        prev_y = float("inf")
+        for c in c_list:
+            deg = c["mid_theta_deg"]
+            rad = np.radians(deg)
+            tgt_x = c["mid_r"] * np.cos(rad)
+            tgt_y = c["mid_r"] * np.sin(rad)
+
+            # Target position along arc
+            raw_txt_y = r_callout_base * np.sin(rad)
+            txt_y = raw_txt_y
+            if prev_y - txt_y < 0.18:
+                txt_y = prev_y - 0.18
+            prev_y = txt_y
+
+            # Compute txt_x based on distance outside circle
+            txt_x = np.sqrt(max(0.04, r_callout_base**2 - min(r_callout_base**2 - 0.04, txt_y**2)))
+            if not is_right:
+                txt_x = -txt_x
+
+            ha = "left" if is_right else "right"
+            ax.annotate(
+                f"{c['name']}: {c['val_ms']:.2f} ms ({c['pct']:.1f}%)",
+                xy=(tgt_x, tgt_y),
+                xytext=(txt_x + (0.05 if is_right else -0.05), txt_y),
+                arrowprops=dict(
+                    arrowstyle="->",
+                    connectionstyle="arc3,rad=0.08" if is_right else "arc3,rad=-0.08",
+                    color="#444444",
+                    lw=1.0
+                ),
+                fontsize=7.5,
+                fontweight="bold",
+                color="#111111",
+                ha=ha,
+                va="center",
+                bbox=dict(boxstyle="round,pad=0.25", facecolor="#F8F9FA", edgecolor=c["color"], alpha=0.95, lw=1.2)
+            )
+
+    place_callouts(right_callouts, is_right=True)
+    place_callouts(left_callouts, is_right=False)
+
+    total_r = r_max_outer + 0.65
     ax.set_xlim(-total_r, total_r)
     ax.set_ylim(-total_r, total_r)
     ax.set_aspect("equal")
