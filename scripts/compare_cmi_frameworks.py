@@ -635,19 +635,19 @@ def compute_aix_pipeline_prediction(coll_data: Dict[str, Any], pipe_data: Dict[s
 def plot_aix_pipeline_model_validation(coll_data: Dict[str, Any], pipe_data: Dict[str, Any], output_path: Path):
     """
     Renders a publication-ready comparison between the theoretical pipelining model
-    prediction and the empirically measured AIx Pipelined performance.
+    prediction and the empirically measured AIx Pipelined performance on Controller Rank 0.
     """
     p = compute_aix_pipeline_prediction(coll_data, pipe_data, N=4)
     
-    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(16, 6.2))
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(15.5, 6.0))
     
     # -------------------------------------------------------------------------
     # Panel 1: 5-Stage Coupling Round-Trip
     # -------------------------------------------------------------------------
     categories = [
-        "AIx Collective\n(Empirical 5-Stage)",
+        "AIx Collective\n(Empirical Controller R0)",
         f"AIx Pipelined\n(Model Prediction, N={p['N']})",
-        "AIx Pipelined\n(Empirical Measured)"
+        "AIx Pipelined\n(Empirical Controller R0)"
     ]
     y_pos = np.arange(len(categories))
     
@@ -655,12 +655,12 @@ def plot_aix_pipeline_model_validation(coll_data: Dict[str, Any], pipe_data: Dic
     stage_vals = [p["stages_sum"], p["pred_stages_pipelined"], actual_5stage_pipe]
     colors_bar = ["#D6604D", "#2B5C8F", "#1B7837"]
     
-    bars1 = ax1.barh(y_pos, stage_vals, color=colors_bar, edgecolor="#111111", height=0.55, alpha=0.92)
+    bars1 = ax1.barh(y_pos, stage_vals, color=colors_bar, edgecolor="#111111", height=0.52, alpha=0.92)
     ax1.set_yticks(y_pos)
     ax1.set_yticklabels(categories, weight="bold", fontsize=10)
     ax1.invert_yaxis()
-    ax1.set_xlabel("5-Stage Coupling Duration (ms)", weight="bold")
-    ax1.set_title("A. 5-Stage Round-Trip: Model vs. Measured\n(Gather + H2D + Forward + D2H + Scatter)", weight="bold", fontsize=11, pad=10)
+    ax1.set_xlabel("5-Stage Coupling Duration on Controller (ms)", weight="bold")
+    ax1.set_title("A. Controller 5-Stage Round-Trip: Model vs. Measured\n(Gather + H2D + Forward + D2H + Scatter)", weight="bold", fontsize=11, pad=10)
     
     max_v1 = max(stage_vals)
     for i, (bar, val) in enumerate(zip(bars1, stage_vals)):
@@ -673,30 +673,25 @@ def plot_aix_pipeline_model_validation(coll_data: Dict[str, Any], pipe_data: Dic
     # Panel 2: Total Steady Step Duration with Stacked Breakdown
     # -------------------------------------------------------------------------
     step_cats = [
-        "AIx Collective\n(Empirical Total)",
+        "AIx Collective\n(Empirical Controller R0)",
         f"AIx Pipelined\n(Model Prediction, N={p['N']})",
-        "AIx Pipelined\n(Empirical Controller R0)",
-        "AIx Pipelined\n(Empirical Comm Mean)"
+        "AIx Pipelined\n(Empirical Controller R0)"
     ]
     y_pos2 = np.arange(len(step_cats))
     
-    # Breakdown components
-    # 1. Collective: Fixed (0.99ms) + 5-Stage (3.02ms)
-    # 2. Predicted Pipelined: Fixed (0.99ms) + Latency (tau_chunk=0.76ms) + Throughput (3*tau_max=1.06ms)
-    # 3. Measured Pipelined R0: Fixed (~0.29ms) + Overlap (~2.83ms)
-    # 4. Measured Pipelined Mean: Fixed (~0.35ms) + Overlap (~2.57ms)
-    fixed_arr = np.array([p["fixed_overhead"], p["fixed_overhead"], pipe_data["step_r0"] - pipe_data["inf_r0"], pipe_data["step_mean"] - pipe_data["inf_mean"]])
-    tx_arr = np.array([p["stages_sum"], p["pred_stages_pipelined"], pipe_data["inf_r0"], pipe_data["inf_mean"]])
+    # Breakdown components (Controller Rank 0)
+    fixed_arr = np.array([p["fixed_overhead"], p["fixed_overhead"], pipe_data["step_r0"] - pipe_data["inf_r0"]])
+    tx_arr = np.array([p["stages_sum"], p["pred_stages_pipelined"], pipe_data["inf_r0"]])
     total_steps = fixed_arr + tx_arr
     
-    b_fixed = ax2.barh(y_pos2, fixed_arr, color=COLORS["Input Prep"], edgecolor="#111111", height=0.55, label="Fixed Solver & Prepare Overhead", alpha=0.92)
-    b_tx = ax2.barh(y_pos2, tx_arr, left=fixed_arr, color=COLORS["ML Transaction"], edgecolor="#111111", height=0.55, label="5-Stage Coupling / P2P Overlap", alpha=0.92)
+    b_fixed = ax2.barh(y_pos2, fixed_arr, color=COLORS["Input Prep"], edgecolor="#111111", height=0.52, label="Fixed Solver & Prep Overhead", alpha=0.92)
+    b_tx = ax2.barh(y_pos2, tx_arr, left=fixed_arr, color=COLORS["ML Transaction"], edgecolor="#111111", height=0.52, label="5-Stage Coupling / P2P Overlap", alpha=0.92)
     
     ax2.set_yticks(y_pos2)
     ax2.set_yticklabels(step_cats, weight="bold", fontsize=10)
     ax2.invert_yaxis()
-    ax2.set_xlabel("Total Steady Step Duration (ms)", weight="bold")
-    ax2.set_title("B. Total Warm Step: Model vs. Measured", weight="bold", fontsize=11, pad=10)
+    ax2.set_xlabel("Total Steady Step Duration on Controller (ms)", weight="bold")
+    ax2.set_title("B. Total Warm Step on Controller: Model vs. Measured", weight="bold", fontsize=11, pad=10)
     
     max_v2 = max(total_steps)
     for i, tot in enumerate(total_steps):
@@ -708,20 +703,20 @@ def plot_aix_pipeline_model_validation(coll_data: Dict[str, Any], pipe_data: Dic
     
     # Formula Box at bottom
     formula_text = (
-        "Analytical Pipeline Speedup Model:  S = (N · τ_step) / (τ_step + (N - 1) · τ_max)"
+        "Analytical Pipeline Speedup Model (Controller Rank 0):  S = (N · τ_step) / (τ_step + (N - 1) · τ_max)"
         + "\n"
-        + f"τ_step = {p['stages_sum']:.2f} ms (5 stages)   |   "
+        + f"τ_step = {p['stages_sum']:.2f} ms (5 controller stages)   |   "
         + f"τ_max = {p['max_stage']:.2f} ms (GPU Forward)   |   "
         + f"N = {p['N']} ranks   |   "
         + f"Fixed Overhead = {p['fixed_overhead']:.2f} ms\n"
-        + f"Predicted Pipelined Step = {p['pred_total_step']:.2f} ms   |   "
-        + f"Actual Measured = {p['actual_step_mean']:.2f} ms (Mean) / {p['actual_step_r0']:.2f} ms (Rank 0)   |   "
-        + f"Model Accuracy: {100.0 - p['err_mean_pct']:.1f}%"
+        + f"Predicted Controller Step = {p['pred_total_step']:.2f} ms   |   "
+        + f"Actual Measured Controller Step = {p['actual_step_r0']:.2f} ms   |   "
+        + f"Model Accuracy: {100.0 - p['err_r0_pct']:.1f}% (Error: +{p['err_r0_ms']:.2f} ms)"
     )
     fig.text(0.5, -0.04, formula_text, ha="center", va="top", fontsize=9.5, weight="bold",
              bbox=dict(boxstyle="round,pad=0.5", facecolor="#F0F4F8", edgecolor="#2B5C8F", lw=1.2))
     
-    plt.suptitle("AIx Pipelining Efficiency: Analytical Pipeline Model vs. Empirical Measurement", fontsize=13, weight="bold", y=1.02)
+    plt.suptitle("AIx Controller Pipelining: Analytical Model vs. Empirical Measurement", fontsize=13, weight="bold", y=1.02)
     plt.tight_layout()
     fig.savefig(output_path, dpi=300, bbox_inches="tight")
     plt.close(fig)
@@ -792,15 +787,16 @@ def export_framework_comparison_reports(data: List[Dict[str, Any]], output_dir: 
             f.write(f"- Per-Chunk Latency ($\\tau_{{\\text{{chunk}}}} = \\tau_{{\\text{{step}}}} / N$): **{p['tau_chunk']:.3f} ms**\n")
             f.write(f"- Per-Chunk Bottleneck ($\\tau_{{\\text{{max\_chunk}}}} = \\tau_{{\\text{{max}}}} / N$): **{p['tau_max_chunk']:.3f} ms**\n")
             f.write(f"- Fixed Non-5-Stage Overhead ($T_{{\\text{{fixed}}}}$): **{p['fixed_overhead']:.3f} ms** (Compute + Prepare + Finalize + Post-scatter)\n\n")
-            f.write("### Pipelined Performance Comparison:\n\n")
-            f.write("| Metric | AIx Collective (Measured) | AIx Pipelined (Predicted) | AIx Pipelined (Empirical Rank 0) | AIx Pipelined (Empirical Mean) |\n")
-            f.write("|:---|---:|---:|---:|---:|\n")
-            f.write(f"| **5-Stage Round-Trip** | {p['stages_sum']:.3f} ms | **{p['pred_stages_pipelined']:.3f} ms** | {pipe_data['inf_r0']:.3f} ms | {pipe_data['inf_mean']:.3f} ms |\n")
-            f.write(f"| **Total Warm Step** | {coll_data['step_r0']:.3f} ms | **{p['pred_total_step']:.3f} ms** | **{p['actual_step_r0']:.3f} ms** | **{p['actual_step_mean']:.3f} ms** |\n")
-            f.write(f"| **5-Stage Speedup** | 1.00x | **{p['stage_speedup']:.2f}x** | {p['stages_sum']/pipe_data['inf_r0']:.2f}x | {p['stages_sum']/pipe_data['inf_mean']:.2f}x |\n")
-            f.write(f"| **Total Step Speedup** | 1.00x | **{coll_data['step_r0']/p['pred_total_step']:.2f}x** | {coll_data['step_r0']/p['actual_step_r0']:.2f}x | {coll_data['step_mean']/p['actual_step_mean']:.2f}x |\n")
-            f.write(f"| **Prediction Error** | — | — | **+{p['err_r0_ms']:.3f} ms ({p['err_r0_pct']:.1f}%)** | **+{p['err_mean_ms']:.3f} ms ({p['err_mean_pct']:.1f}%)** |\n\n")
-            f.write(f"**Conclusion:** The theoretical pipeline model predicts a steady step time of **{p['pred_total_step']:.2f} ms**, matching the empirical communicator mean of **{p['actual_step_mean']:.2f} ms** to within **{p['err_mean_pct']:.1f}% accuracy**. This confirms that AIx Pipelined achieves **{100.0 - p['err_mean_pct']:.1f}%** of its theoretical maximum overlap efficiency.\n")
+            f.write("### Pipelined Performance Comparison (Controller Rank 0):\n\n")
+            f.write("| Metric | AIx Collective (Empirical Controller R0) | AIx Pipelined (Analytical Prediction) | AIx Pipelined (Empirical Controller R0) |\n")
+            f.write("|:---|---:|---:|---:|\n")
+            f.write(f"| **5-Stage Round-Trip** | {p['stages_sum']:.3f} ms | **{p['pred_stages_pipelined']:.3f} ms** | {pipe_data['inf_r0']:.3f} ms |\n")
+            f.write(f"| **Total Warm Step** | {coll_data['step_r0']:.3f} ms | **{p['pred_total_step']:.3f} ms** | **{p['actual_step_r0']:.3f} ms** |\n")
+            f.write(f"| **5-Stage Speedup** | 1.00x | **{p['stage_speedup']:.2f}x** | {p['stages_sum']/pipe_data['inf_r0']:.2f}x |\n")
+            f.write(f"| **Total Step Speedup** | 1.00x | **{coll_data['step_r0']/p['pred_total_step']:.2f}x** | {coll_data['step_r0']/p['actual_step_r0']:.2f}x |\n")
+            f.write(f"| **Prediction Error** | — | — | **+{p['err_r0_ms']:.3f} ms ({p['err_r0_pct']:.1f}%)** |\n\n")
+            f.write(f"*Note: In both AIx Collective and Pipelined modes, the 5 pipeline stages (Gather, H2D, Forward, D2H, Scatter) are executed exclusively by the designated GPU Controller (Rank 0). Worker ranks do not possess a GPU and only participate in MPI Send/Receive. Therefore, the analytical pipelining model strictly evaluates the Controller Rank 0 execution timeline.*\n\n")
+            f.write(f"**Conclusion:** The theoretical pipeline model predicts a controller steady step time of **{p['pred_total_step']:.2f} ms**, matching the empirical controller measurement of **{p['actual_step_r0']:.2f} ms** to within **{100.0 - p['err_r0_pct']:.1f}% accuracy** (error: +{p['err_r0_ms']:.2f} ms).\n")
             
     print(f"[+] Saved comparison Markdown summary to: {md_path}")
 
