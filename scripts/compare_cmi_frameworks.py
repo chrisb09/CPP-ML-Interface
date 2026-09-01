@@ -27,6 +27,9 @@ from pathlib import Path
 from typing import Dict, List, Tuple, Any, Optional
 import numpy as np
 import pandas as pd
+import matplotlib
+matplotlib.use("Agg")
+import matplotlib.pyplot as plt
 
 
 def parse_summary_csv(csv_path: Path) -> pd.DataFrame:
@@ -472,8 +475,90 @@ def export_framework_comparison_reports(data: List[Dict[str, Any]], output_dir: 
                 adv_str = f"Starts {abs(adv):.2f} ms later"
             f.write(f"| `{d['framework']}` | +{st:.2f} ms | +{en:.2f} ms | {span:.2f} ms | {adv_str} |\n")
         f.write("\n*\\*Note: First ML Op Start / End measures when the ML runtime begins its earliest device/model operation (e.g. earliest chunk H2D copy in AIx Pipelined, run_model in SmartSim client, or post-gather H2D in AIx Collective) relative to the solver's steady ML step entry.* \n\n")
+        f.write("![ML Inference Execution Window Timeline](fig_ml_inference_window_timeline.png)\n\n")
 
     print(f"[+] Saved comparison Markdown report to: {md_path}")
+
+
+def plot_ml_inference_window_timeline(data: List[Dict[str, Any]], output_path: Path,
+                                       model_name: str = "WATERCNN",
+                                       resolution: str = "1920x1080",
+                                       steps: int = 22):
+    """
+    Renders a clean 3-part horizontal timeline stacked bar chart for each framework:
+      1. Pre-Inference (Prep + Put/Gather/Wait)
+      2. Active ML Inference (GPU Forward + Memory Copies)
+      3. Post-Inference (Scatter/Recv + Output Finalize + PDE Compute)
+    """
+    fig, ax = plt.subplots(figsize=(14.5, 6.2))
+    
+    frameworks = [d["framework"] for d in data]
+    y_pos = np.arange(len(frameworks))
+    
+    pre_inf = []
+    active_inf = []
+    post_inf = []
+    totals = []
+    
+    for d in data:
+        t_tot = d["step_crit"]
+        t_pre = max(0.0, d["inf_start_rel_ms"])
+        t_act = max(0.0, d["inf_active_span_ms"])
+        t_post = max(0.0, t_tot - (t_pre + t_act))
+        
+        pre_inf.append(t_pre)
+        active_inf.append(t_act)
+        post_inf.append(t_post)
+        totals.append(t_tot)
+        
+    pre_arr = np.array(pre_inf)
+    act_arr = np.array(active_inf)
+    post_arr = np.array(post_inf)
+    
+    # Base for speedup
+    base_step = next((d["step_crit"] for d in data if "c=0" in d["framework"]), totals[0])
+    
+    # 3-segment stacked horizontal bars
+    b1 = ax.barh(y_pos, pre_arr, height=0.55, color="#4393C3", edgecolor="#222222", label="Pre-Inference (Input Prep & Network Transport / Wait)", alpha=0.92)
+    b2 = ax.barh(y_pos, act_arr, left=pre_arr, height=0.55, color="#D73027", edgecolor="#222222", label="Active ML Inference (GPU Forward & Device Memory Copies)", alpha=0.95)
+    b3 = ax.barh(y_pos, post_arr, left=pre_arr + act_arr, height=0.55, color="#7FBC41", edgecolor="#222222", label="Post-Inference (Result Transport, Finalize & PDE Compute)", alpha=0.92)
+    
+    ax.set_yticks(y_pos)
+    ax.set_yticklabels(frameworks, weight="bold", fontsize=10.5)
+    ax.invert_yaxis()
+    ax.set_xlabel("Duration per Steady ML Step (ms)", weight="bold", fontsize=11)
+    
+    max_tot = max(totals)
+    for i in range(len(frameworks)):
+        tot = totals[i]
+        st = pre_arr[i]
+        act = act_arr[i]
+        
+        # Annotate early-start / start time inside pre-inference bar if wide enough
+        if st > 0.8:
+            ax.text(st / 2.0, i, f"Pre: {st:.2f}ms", va="center", ha="center", fontsize=8, color="white", weight="bold")
+            
+        # Annotate active inference duration inside the red bar
+        if act > 0.8:
+            ax.text(st + act / 2.0, i, f"Inference: {act:.2f}ms\n(Starts @ +{st:.2f}ms)", va="center", ha="center", fontsize=7.5, color="white", weight="bold")
+            
+        # Annotate total step duration and speedup at the end of the bar
+        sp = base_step / tot if tot > 0 else 1.0
+        sp_str = f" ({sp:.2f}x)" if "c=0" not in frameworks[i] else " (1.00x)"
+        ax.text(tot + max_tot * 0.015, i, f"{tot:.2f} ms{sp_str}", va="center", ha="left", fontsize=9.5, weight="bold", color="#111111")
+        
+    ax.set_xlim(0, max_tot * 1.25)
+    ax.grid(axis="x", linestyle="--", alpha=0.35)
+    
+    # Legend & Title
+    fig.legend(loc="upper center", bbox_to_anchor=(0.5, 0.98), ncol=3, frameon=True, fontsize=9.5)
+    plt.title(f"ML Inference Execution Window & Early-Start Timeline (Critical Execution Path)\nModel: {model_name.upper()} | Resolution: {resolution} | 1 GPU | 4 Solver Ranks | {steps} Steps",
+              weight="bold", fontsize=12, pad=38)
+              
+    plt.tight_layout()
+    fig.savefig(output_path, dpi=300, bbox_inches="tight")
+    plt.close(fig)
+    print(f"[+] Saved ML inference window timeline plot to: {output_path}")
 
 
 def main():
@@ -484,6 +569,7 @@ def main():
     parser.add_argument("--resolution", type=str, default=None, help="Resolution override (e.g. 1920x1080)")
     parser.add_argument("--batch-size", type=int, default=None, help="Batch size override (e.g. 50000)")
     parser.add_argument("--steps", type=int, default=None, help="Total steps override (e.g. 22)")
+    parser.add_argument("--no-plots", action="store_true", help="Skip rendering timeline plot")
     
     args = parser.parse_args()
     args.output_dir.mkdir(parents=True, exist_ok=True)
@@ -529,6 +615,15 @@ def main():
     if coll_data and pipe_data:
         prediction = compute_aix_pipeline_prediction(coll_data, pipe_data, N=4)
         write_aix_pipeline_prediction_markdown(prediction, args.output_dir / "aix_pipeline_prediction.md")
+    
+    # Render Timeline Graph
+    if not args.no_plots:
+        meta = framework_data[0].get("metadata", {})
+        m_name = args.model or meta.get("model", "watercnn")
+        m_res = args.resolution or meta.get("resolution", "1920x1080")
+        m_steps = args.steps or meta.get("total_steps", 22)
+        plot_ml_inference_window_timeline(framework_data, args.output_dir / "fig_ml_inference_window_timeline.png",
+                                          model_name=m_name, resolution=m_res, steps=m_steps)
     
     print(f"\n[✓] Cross-framework comparison & prediction complete. Artifacts saved to: {args.output_dir}")
 
