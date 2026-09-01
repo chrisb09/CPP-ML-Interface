@@ -1070,7 +1070,7 @@ def is_interesting_region(name: str) -> bool:
         return False
     return True
 
-def export_summary_tables(tree_summary: Dict[Tuple[str, ...], Dict[str, Any]], out_dir: Path, title: str = "CMI Profile Summary"):
+def export_summary_tables(tree_summary: Dict[Tuple[str, ...], Dict[str, Any]], out_dir: Path, title: str = "CMI Profile Summary", file_prefix: str = ""):
     rows = []
     for path, d in sorted(tree_summary.items(), key=lambda x: x[1]["incl_mean"], reverse=True):
         rows.append({
@@ -1091,27 +1091,37 @@ def export_summary_tables(tree_summary: Dict[Tuple[str, ...], Dict[str, Any]], o
     df = pd.DataFrame(rows)
     csv_path = out_dir / "cmi_phase_summary.csv"
     df.to_csv(csv_path, index=False)
+    if file_prefix:
+        df.to_csv(out_dir / f"{file_prefix}_cmi_phase_summary.csv", index=False)
     print(f"[+] Saved phase summary CSV to: {csv_path}")
 
     steady_df = df[~df["Is_Lifecycle"]].copy()
     lifecycle_df = df[df["Is_Lifecycle"]].copy()
 
     md_path = out_dir / "cmi_profile_summary.md"
-    with open(md_path, "w") as f:
-        f.write(f"# {title}\n\n")
-        f.write("## Steady-State Coupling Metrics (Normalized Per ML Step)\n\n")
-        f.write("| Region | Comm Mean (ms) | Controller/Rank0 (ms) | Max Rank (ms) | Self (ms) | Visits/Steady Step | Ranks |\n")
-        f.write("|:---|---:|---:|---:|---:|---:|---:|\n")
-        for _, r in steady_df.iterrows():
-            if is_interesting_region(r["Region"]):
-                f.write(f"| `{r['Region']}` | {r['Rank_Mean (ms)']:.3f} | {r['Controller_Rank0 (ms)']:.3f} | {r['Max_Rank (ms)']:.3f} | {r['Self (ms)']:.3f} | {r['Visits/Step']:.1f} | {int(r['Active_Ranks'])}/{int(r['Total_Ranks'])} |\n")
-        
-        f.write("\n## Lifecycle Phase Totals (One-Off Cumulative)\n\n")
-        f.write("| Phase | Duration (ms) | Total Visits | Ranks |\n")
-        f.write("|:---|---:|---:|---:|\n")
-        for _, r in lifecycle_df.iterrows():
-            if r["Region"] in ("terrain_solver", "solver_setup", "solver_step_ml_warmup", "solver_teardown"):
-                f.write(f"| `{r['Region']}` | {r['Rank_Mean (ms)']:.3f} | {r['Visits/Step']:.1f} | {int(r['Active_Ranks'])}/{int(r['Total_Ranks'])} |\n")
+    content = [
+        f"# {title}\n\n",
+        "## Steady-State Coupling Metrics (Normalized Per ML Step)\n\n",
+        "| Region | Comm Mean (ms) | Controller/Rank0 (ms) | Max Rank (ms) | Self (ms) | Visits/Steady Step | Ranks |\n",
+        "|:---|---:|---:|---:|---:|---:|---:|\n"
+    ]
+    for _, r in steady_df.iterrows():
+        if is_interesting_region(r["Region"]):
+            content.append(f"| `{r['Region']}` | {r['Rank_Mean (ms)']:.3f} | {r['Controller_Rank0 (ms)']:.3f} | {r['Max_Rank (ms)']:.3f} | {r['Self (ms)']:.3f} | {r['Visits/Step']:.1f} | {int(r['Active_Ranks'])}/{int(r['Total_Ranks'])} |\n")
+    
+    content.append("\n## Lifecycle Phase Totals (One-Off Cumulative)\n\n")
+    content.append("| Phase | Duration (ms) | Total Visits | Ranks |\n")
+    content.append("|:---|---:|---:|---:|\n")
+    for _, r in lifecycle_df.iterrows():
+        if r["Region"] in ("terrain_solver", "solver_setup", "solver_step_ml_warmup", "solver_teardown"):
+            content.append(f"| `{r['Region']}` | {r['Rank_Mean (ms)']:.3f} | {r['Visits/Step']:.1f} | {int(r['Active_Ranks'])}/{int(r['Total_Ranks'])} |\n")
+
+    md_text = "".join(content)
+    with open(md_path, "w", encoding="utf-8") as f:
+        f.write(md_text)
+    if file_prefix:
+        with open(out_dir / f"{file_prefix}_cmi_profile_summary.md", "w", encoding="utf-8") as f:
+            f.write(md_text)
 
     print(f"[+] Saved summary Markdown to: {md_path}")
 
@@ -1130,9 +1140,26 @@ def main():
     parser.add_argument("--output-dir", type=Path, default=Path("./cmi_profile_analysis"), help="Output directory for plots and reports")
     parser.add_argument("--title", type=str, default=None, help="Plot title override")
     parser.add_argument("--no-plots", action="store_true", help="Skip rendering plots and only generate CSV/MD reports")
+    parser.add_argument("--slug", "--file-prefix", dest="file_prefix", type=str, default="", help="Optional run slug prefix for generated filenames")
+    parser.add_argument("--model", type=str, default=None, help="Model name (e.g. watercnn)")
+    parser.add_argument("--resolution", type=str, default=None, help="Domain resolution (e.g. 1920x1080)")
+    parser.add_argument("--batch-size", type=int, default=None, help="ML batch size")
 
     args = parser.parse_args()
     args.output_dir.mkdir(parents=True, exist_ok=True)
+
+    # Save run metadata if model/resolution/batch provided or inferrable
+    meta = {}
+    if args.model: meta["model"] = args.model
+    if args.resolution: meta["resolution"] = args.resolution
+    if args.batch_size: meta["batch_size"] = args.batch_size
+    if args.steady_steps: meta["steady_steps"] = args.steady_steps
+    if meta:
+        meta_file = args.output_dir / "run_metadata.json"
+        with open(meta_file, "w") as f:
+            json.dump(meta, f, indent=2)
+
+    pfx = f"{args.file_prefix}_" if args.file_prefix else ""
 
     # 1. Process Solver CUBE Profiles
     cubex_files: List[Path] = []
@@ -1167,7 +1194,7 @@ def main():
         tree_summary = agg.compute_summary(rank_agg=args.rank_agg)
         if tree_summary:
             title = args.title or f"CMI Coupling Profile ({cubex_files[0].parent.parent.name if len(cubex_files)>1 else cubex_files[0].parent.name})"
-            export_summary_tables(tree_summary, args.output_dir, title=title)
+            export_summary_tables(tree_summary, args.output_dir, title=title, file_prefix=args.file_prefix)
 
             if not args.no_plots:
                 steady_candidates = [p for p in tree_summary if p[-1] in ("solver_ml_provider_call", "app_provider_inference") and not tree_summary[p]["is_lifecycle"]]
@@ -1178,16 +1205,16 @@ def main():
                     # Build and render Controller/Rank 0 perspective (where GPU forward execution happens)
                     ctrl_tree = build_display_tree(tree_summary, root_path, val_key="incl_rank0")
                     if ctrl_tree:
-                        render_icicle_plot(ctrl_tree, args.output_dir / "cmi_icicle_plot_controller_rank0.png", title=f"{title} - Controller/Rank 0 Breakdown")
-                        render_sunburst_plot(ctrl_tree, args.output_dir / "cmi_sunburst_plot_controller_rank0.png", title=f"{title} - Controller/Rank 0 Sunburst Breakdown")
-                        render_breakdown_bars(ctrl_tree, args.output_dir / "cmi_stage_breakdown_controller_rank0.png", title=f"{title} - Controller/Rank 0 Leaf Breakdown")
+                        render_icicle_plot(ctrl_tree, args.output_dir / f"{pfx}cmi_icicle_plot_controller_rank0.png", title=f"{title} - Controller/Rank 0 Breakdown")
+                        render_sunburst_plot(ctrl_tree, args.output_dir / f"{pfx}cmi_sunburst_plot_controller_rank0.png", title=f"{title} - Controller/Rank 0 Sunburst Breakdown")
+                        render_breakdown_bars(ctrl_tree, args.output_dir / f"{pfx}cmi_stage_breakdown_controller_rank0.png", title=f"{title} - Controller/Rank 0 Leaf Breakdown")
                 
                 # Build and render Communicator Mean
                 mean_tree = build_display_tree(tree_summary, root_path, val_key="incl_mean")
                 if mean_tree:
-                    render_icicle_plot(mean_tree, args.output_dir / "cmi_icicle_plot.png", title=f"{title} - Hierarchical Breakdown (Comm Mean)")
-                    render_sunburst_plot(mean_tree, args.output_dir / "cmi_sunburst_plot.png", title=f"{title} - Sunburst Breakdown (Comm Mean)")
-                    render_breakdown_bars(mean_tree, args.output_dir / "cmi_stage_breakdown.png", title=f"{title} - Leaf Breakdown (Comm Mean)")
+                    render_icicle_plot(mean_tree, args.output_dir / f"{pfx}cmi_icicle_plot.png", title=f"{title} - Hierarchical Breakdown (Comm Mean)")
+                    render_sunburst_plot(mean_tree, args.output_dir / f"{pfx}cmi_sunburst_plot.png", title=f"{title} - Sunburst Breakdown (Comm Mean)")
+                    render_breakdown_bars(mean_tree, args.output_dir / f"{pfx}cmi_stage_breakdown.png", title=f"{title} - Leaf Breakdown (Comm Mean)")
 
     # 2. Process DL-side CUBE Profile if supplied
     dl_files: List[Path] = []
@@ -1216,16 +1243,16 @@ def main():
             dl_root = dl_roots[0] if dl_roots else list(dl_summary.keys())[0]
             dl_tree = build_display_tree(dl_summary, dl_root, val_key="incl_mean")
             if dl_tree:
-                render_icicle_plot(dl_tree, args.output_dir / "phydll_dl_icicle_plot.png", title="PhyDLL DL-Side Breakdown")
-                render_sunburst_plot(dl_tree, args.output_dir / "phydll_dl_sunburst_plot.png", title="PhyDLL DL-Side Sunburst Breakdown")
-                render_breakdown_bars(dl_tree, args.output_dir / "phydll_dl_stage_breakdown.png", title="PhyDLL DL-Side Leaf Breakdown")
+                render_icicle_plot(dl_tree, args.output_dir / f"{pfx}phydll_dl_icicle_plot.png", title="PhyDLL DL-Side Breakdown")
+                render_sunburst_plot(dl_tree, args.output_dir / f"{pfx}phydll_dl_sunburst_plot.png", title="PhyDLL DL-Side Sunburst Breakdown")
+                render_breakdown_bars(dl_tree, args.output_dir / f"{pfx}phydll_dl_stage_breakdown.png", title="PhyDLL DL-Side Leaf Breakdown")
 
     # 3. Process AIx P2P Timeline CSVs
     if args.p2p_timeline_dir and args.p2p_timeline_dir.exists():
         print(f"[*] Analyzing AIx P2P Timeline in: {args.p2p_timeline_dir}")
         p2p_df = parse_aix_p2p_timeline(args.p2p_timeline_dir)
         if not p2p_df.empty and not args.no_plots:
-            plot_aix_pipeline_gantt(p2p_df, args.output_dir / "aix_pipeline_gantt.png")
+            plot_aix_pipeline_gantt(p2p_df, args.output_dir / f"{pfx}aix_pipeline_gantt.png")
 
     print("[✓] Analysis complete.")
 

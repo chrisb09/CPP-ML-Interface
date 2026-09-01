@@ -4,8 +4,10 @@
 import argparse
 import csv
 import json
+import os
 from collections import defaultdict
 from pathlib import Path
+from typing import Optional, Dict, Any
 
 import matplotlib.pyplot as plt
 from matplotlib.lines import Line2D
@@ -426,11 +428,47 @@ def write_summary(events, output_dir: Path, selected_steps, model_name: str):
         writer.writerows(rows)
 
 
+def resolve_model_name(args_model: Optional[str], timeline_dir: Path, metadata: Dict[str, Any]) -> str:
+    if args_model:
+        return args_model
+    if "model" in metadata and metadata["model"] != "unknown":
+        return metadata["model"]
+    
+    # Check for run_metadata.json in timeline_dir, parent, or grand-parent
+    for candidate in [timeline_dir / "run_metadata.json", timeline_dir.parent / "run_metadata.json", timeline_dir.parent.parent / "run_metadata.json"]:
+        if candidate.exists():
+            try:
+                m = json.loads(candidate.read_text())
+                if "model" in m:
+                    return m["model"]
+            except Exception:
+                pass
+
+    # Check environment
+    for env_var in ["MODEL_NAME", "MODEL_NAME_ENV"]:
+        if os.environ.get(env_var):
+            return os.environ[env_var]
+
+    # Heuristic based on directory path
+    path_str = str(timeline_dir.resolve()).lower()
+    if "watercnn" in path_str:
+        return "watercnn"
+    if "giant" in path_str:
+        return "benchmark_giant_mlp"
+    if "transformer" in path_str:
+        return "transformer_mlp"
+    if "perfect" in path_str:
+        return "perfect_model"
+
+    return "unknown"
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("timeline_dir", type=Path)
     parser.add_argument("--step", type=int, action="append", help="Render only this step; repeat to select several.")
     parser.add_argument("--output-dir", type=Path)
+    parser.add_argument("--model", type=str, default=None, help="Model name override (e.g. watercnn)")
     args = parser.parse_args()
 
     events = read_events(args.timeline_dir)
@@ -440,7 +478,7 @@ def main():
     output_dir.mkdir(parents=True, exist_ok=True)
     metadata_path = args.timeline_dir / "timeline_metadata.json"
     metadata = json.loads(metadata_path.read_text()) if metadata_path.exists() else {}
-    model_name = metadata.get("model", "unknown")
+    model_name = resolve_model_name(args.model, args.timeline_dir, metadata)
     warmup_steps = metadata.get("warmup_steps", 0)
     selected_steps = args.step or [step for step in sorted({event["step"] for event in events}) if step >= warmup_steps]
     for step in selected_steps:
