@@ -293,6 +293,7 @@ def parse_cubex_file(cubex_path: Path, explicit_steady_steps: Optional[int] = No
 
         # Compute per-step metrics
         for n in nodes.values():
+            n.steady_visits = steady_visits
             ancestors = get_ancestor_names(n.id)
             
             # Lifecycle classification
@@ -322,12 +323,21 @@ class AggregatedCallTree:
         self.paths: Dict[Tuple[str, ...], Dict[str, Any]] = {}
         self.total_ranks: int = 0
         self.rank_trees: List[Dict[int, CallTreeNode]] = []
+        self.rank_steady_visits: Dict[int, int] = {}
 
     def add_tree(self, nodes: Dict[int, CallTreeNode]):
         if not nodes:
             return
         self.total_ranks += 1
         self.rank_trees.append(nodes)
+        rank_idx = self.total_ranks - 1
+
+        steady_v = 1
+        for n in nodes.values():
+            if hasattr(n, "steady_visits") and n.steady_visits > 0:
+                steady_v = n.steady_visits
+                break
+        self.rank_steady_visits[rank_idx] = steady_v
 
         def get_path(cid: int) -> Tuple[str, ...]:
             p = []
@@ -337,14 +347,13 @@ class AggregatedCallTree:
                 curr = nodes[curr].parent_id
             return tuple(reversed(p))
 
-        rank_idx = self.total_ranks - 1
         for cid, n in nodes.items():
             path = get_path(cid)
             if path not in self.paths:
                 self.paths[path] = {
                     "name": n.name,
                     "parent_path": path[:-1] if len(path) > 1 else None,
-                    "children_paths": set(),
+                    "children_paths": [],
                     "is_lifecycle": n.is_lifecycle,
                     "per_rank_step_incl": {},
                     "per_rank_step_excl": {},
@@ -359,7 +368,8 @@ class AggregatedCallTree:
             if len(path) > 1:
                 parent_path = path[:-1]
                 if parent_path in self.paths:
-                    self.paths[parent_path]["children_paths"].add(path)
+                    if path not in self.paths[parent_path]["children_paths"]:
+                        self.paths[parent_path]["children_paths"].append(path)
 
     def compute_summary(self, rank_agg: str = "mean") -> Dict[Tuple[str, ...], Dict[str, Any]]:
         summary: Dict[Tuple[str, ...], Dict[str, Any]] = {}
@@ -370,7 +380,13 @@ class AggregatedCallTree:
             incls_all = [d["per_rank_step_incl"].get(r, 0.0) for r in range(num_ranks)]
             excls_all = [d["per_rank_step_excl"].get(r, 0.0) for r in range(num_ranks)]
             selfs_all = [d["per_rank_step_self"].get(r, 0.0) for r in range(num_ranks)]
-            vis_all = [d["per_rank_visits"].get(r, 0) for r in range(num_ranks)]
+            
+            # Normalized visits for steady-state (visits / steady_steps) vs raw for lifecycle
+            vis_norm_all = [
+                (d["per_rank_visits"].get(r, 0) / max(1, self.rank_steady_visits.get(r, 1)))
+                if not d["is_lifecycle"] else float(d["per_rank_visits"].get(r, 0))
+                for r in range(num_ranks)
+            ]
 
             active_incls = [v for v in d["per_rank_step_incl"].values() if v > 1e-9]
             active_ranks = len(active_incls)
@@ -393,7 +409,7 @@ class AggregatedCallTree:
             summary[path] = {
                 "name": d["name"],
                 "parent_path": d["parent_path"],
-                "children_paths": sorted(list(d["children_paths"])),
+                "children_paths": list(d["children_paths"]),
                 "is_lifecycle": d["is_lifecycle"],
                 "incl_mean": comm_mean_incl,
                 "incl_active_mean": active_mean_incl,
@@ -404,7 +420,7 @@ class AggregatedCallTree:
                 "self_mean": comm_mean_self,
                 "self_rank0": rank0_self,
                 "excl_mean": comm_mean_excl,
-                "visits_mean": float(np.mean(vis_all)),
+                "visits_mean": float(np.mean(vis_norm_all)),
                 "active_ranks": active_ranks,
                 "total_ranks": num_ranks,
             }
@@ -412,58 +428,200 @@ class AggregatedCallTree:
 
 
 # =============================================================================
-# True Icicle Plot Renderer
+# Semantic Display Tree & Visualization Renderers
 # =============================================================================
 
-def render_icicle_plot(tree_summary: Dict[Tuple[str, ...], Dict[str, Any]],
-                       root_path: Tuple[str, ...],
-                       output_path: Path,
-                       title: str = "CMI Coupling Phase Breakdown",
-                       use_rank0: bool = False):
+class DisplayTreeNode:
+    def __init__(self, name: str, val: float, orig_path: Tuple[str, ...]):
+        self.name: str = name
+        self.val: float = val
+        self.orig_path: Tuple[str, ...] = orig_path
+        self.children: List['DisplayTreeNode'] = []
+        self.collapsed_names: List[str] = [name]
+
+
+def get_semantic_phase_score(name: str) -> int:
     """
-    Renders a true Icicle plot where every child fits strictly within its parent rectangle.
+    Returns an integer score (lower = earlier in execution sequence)
+    to order sibling operations logically:
+      1. Setup / Token / Plan / Allocate
+      2. Input preparation / Extraction / Prepack
+      3. Communication Send / Gather / Put
+      4. Host-to-Device (H2D) transfer
+      5. ML Model Forward / Compute
+      6. Device-to-Host (D2H) transfer
+      7. Communication Receive / Scatter / Unpack
+      8. Output Reconstruct / Finalize / Post-Scatter
+      9. Worker Wait / Overhead
+    """
+    n = name.lower()
+    
+    # Phase 1: Setup / Token
+    if any(k in n for k in ("setup", "token_wait", "chunk_plan", "input_allocate")):
+        return 10
+        
+    # Phase 2: Input preparation
+    if any(k in n for k in ("prepare_input", "extract_cubes", "prepack", "input_unpack")):
+        return 20
+        
+    # Phase 3: Send / Put / Gather / Receive (Solver side)
+    if any(k in n for k in ("put_tensor", "gatherinputdata", "gather_mpi", "gatherv", "gather", "phydll_send", "dl_recv", "py_recv", "frame_copy")):
+        return 30
+        
+    # Phase 4: H2D transfer
+    if any(k in n for k in ("h2d", "host_to_device")):
+        return 40
+        
+    # Phase 5: Inference / Forward / Run Model
+    if any(k in n for k in ("forward", "run_model", "device_inference", "inferencedevice", "controller_inference", "pipelined_inference")):
+        return 50
+    if any(k in n for k in ("inference", "provider_inference", "static_step")):
+        return 55
+        
+    # Phase 6: D2H transfer
+    if any(k in n for k in ("d2h", "device_to_host")):
+        return 60
+
+    # Phase 8: Output reconstruction / Finalize / Post-scatter (check before generic scatter)
+    if any(k in n for k in ("reconstruct_output", "finalize_output", "post_scatter", "output_allocate")):
+        return 80
+
+    # Phase 7: Receive / Scatter / Unpack / Reorder / DL Send
+    if any(k in n for k in ("scatteroutputdata", "scatter_mpi", "scatterv", "scatter", "phydll_recv", "output_reorder", "dl_send", "py_send", "send_output", "unpack_tensor", "phydll_unpack")):
+        return 70
+        
+    # Phase 9: Worker wait
+    if "wait" in n:
+        return 85
+        
+    # Phase 10: Overhead / Self
+    if any(k in n for k in ("overhead", "self")):
+        return 95
+        
+    return 90
+
+
+def build_display_tree(tree_summary: Dict[Tuple[str, ...], Dict[str, Any]],
+                       root_path: Tuple[str, ...],
+                       val_key: str = "incl_mean",
+                       min_val_threshold: float = 1e-7) -> Optional[DisplayTreeNode]:
+    """
+    Constructs a clean, semantic display tree from the CUBE calltree summary:
+    1. Traverses from root_path.
+    2. Sorts sibling operations using semantic phase order.
+    3. Collapses consecutive 1-child chains with negligible self time.
+    4. Automatically generates explicit Overhead/Residual nodes when children sum < parent.
     """
     if root_path not in tree_summary:
-        candidates = [p for p in tree_summary if p[-1] in ("solver_ml_provider_call", "app_provider_inference", "phydll_dl_client", "py_inference")]
-        if candidates:
-            root_path = candidates[0]
-        else:
-            root_path = list(tree_summary.keys())[0]
-
-    val_key = "incl_rank0" if use_rank0 else "incl_mean"
-    self_key = "self_rank0" if use_rank0 else "self_mean"
-
+        return None
+    
     root_info = tree_summary[root_path]
     root_val = root_info[val_key]
     if root_val <= 0:
+        return None
+
+    def build_raw(path: Tuple[str, ...]) -> DisplayTreeNode:
+        node_info = tree_summary[path]
+        val = node_info[val_key]
+        node = DisplayTreeNode(node_info["name"], val, path)
+        
+        children_paths = [c for c in node_info["children_paths"] if c in tree_summary and tree_summary[c][val_key] > min_val_threshold]
+        
+        # Sort children by semantic phase score first, then first-seen order
+        children_paths.sort(key=lambda p: (get_semantic_phase_score(tree_summary[p]["name"]), p))
+        
+        child_nodes = []
+        for c in children_paths:
+            c_node = build_raw(c)
+            child_nodes.append(c_node)
+            
+        if child_nodes:
+            child_sum = sum(c.val for c in child_nodes)
+            residual = val - child_sum
+            if residual > 0.005 * root_val and residual * 1000.0 > 0.005:
+                overhead_node = DisplayTreeNode("Overhead", residual, path + ("Overhead",))
+                child_nodes.append(overhead_node)
+            
+        node.children = child_nodes
+        return node
+
+    def collapse_single_child_chains(node: DisplayTreeNode) -> DisplayTreeNode:
+        node.children = [collapse_single_child_chains(c) for c in node.children]
+        
+        # If node has exactly one non-overhead child and negligible self time, collapse child
+        while len(node.children) == 1 and node.children[0].name != "Overhead":
+            child = node.children[0]
+            self_diff = node.val - child.val
+            if self_diff <= max(0.005 * root_val, 5e-6):
+                node.collapsed_names.extend(child.collapsed_names)
+                node.orig_path = child.orig_path
+                node.children = child.children
+                if any(k in child.name for k in ("inferenceDevice", "inferenceHost", "p2p_pipelined_exchange", "smartsim_run_model", "phydll_dl_client", "torchInference::forward")):
+                    node.name = child.name
+            else:
+                break
+        return node
+
+    raw = build_raw(root_path)
+    clean = collapse_single_child_chains(raw)
+    return clean
+
+
+def collect_leaf_decomposition_from_display_tree(node: DisplayTreeNode) -> List[Tuple[str, float]]:
+    leaves: List[Tuple[str, float]] = []
+    def traverse(n: DisplayTreeNode):
+        if not n.children:
+            leaves.append((n.name, n.val * 1000.0))
+        else:
+            for c in n.children:
+                traverse(c)
+    traverse(node)
+    return leaves
+
+
+# =============================================================================
+# True Icicle Plot Renderer
+# =============================================================================
+
+def render_icicle_plot(display_tree: DisplayTreeNode,
+                       output_path: Path,
+                       title: str = "CMI Coupling Phase Breakdown"):
+    """
+    Renders an Icicle plot with semantic ordering and dynamic depth.
+    """
+    root_val = display_tree.val
+    if root_val <= 0:
         root_val = 1e-6
 
-    fig, ax = plt.subplots(figsize=(13, 6.5))
+    def get_max_depth(node: DisplayTreeNode, d: int = 1) -> int:
+        if not node.children:
+            return d
+        return max(get_max_depth(c, d + 1) for c in node.children)
 
+    tree_depth = get_max_depth(display_tree)
     row_height = 0.85
-    y_gap = 0.18
-    max_depth = 5
+    y_gap = 0.16
+    fig_height = max(4.0, 1.2 + 0.9 * tree_depth)
 
-    def draw_node(path: Tuple[str, ...], x_start: float, width: float, depth: int):
-        if width <= 0 or depth > max_depth or path not in tree_summary:
+    fig, ax = plt.subplots(figsize=(14, fig_height))
+
+    def draw_node(node: DisplayTreeNode, x_start: float, width: float, depth: int):
+        if width <= 0:
             return
 
-        node_info = tree_summary[path]
-        name = node_info["name"]
-        y_pos = (max_depth - depth) * (row_height + y_gap)
-        color = get_color(name)
+        y_pos = (tree_depth - depth) * (row_height + y_gap)
+        color = get_color(node.name)
 
-        # Draw rectangle
         rect = patches.Rectangle(
             (x_start, y_pos), width, row_height,
             linewidth=1.0, edgecolor="#111111", facecolor=color, alpha=0.92
         )
         ax.add_patch(rect)
 
-        val_ms = node_info[val_key] * 1000.0
-        pct = (node_info[val_key] / root_val) * 100.0
-        
-        clean_name = name.replace("smartsim_", "").replace("phydll_", "").replace("aix_", "").replace("solver_", "").replace("app_", "").replace("torchInference::", "")
+        val_ms = node.val * 1000.0
+        pct = (node.val / root_val) * 100.0
+
+        clean_name = node.name.replace("smartsim_", "").replace("phydll_", "").replace("aix_", "").replace("solver_", "").replace("app_", "").replace("torchInference::", "")
         if width > 0.12 * root_val:
             lbl = f"{clean_name}\n{val_ms:.2f} ms ({pct:.1f}%)"
             ax.text(x_start + width / 2.0, y_pos + row_height / 2.0, lbl,
@@ -472,34 +630,20 @@ def render_icicle_plot(tree_summary: Dict[Tuple[str, ...], Dict[str, Any]],
             ax.text(x_start + width / 2.0, y_pos + row_height / 2.0, f"{clean_name}\n{val_ms:.1f}ms",
                     ha="center", va="center", fontsize=7.5, color="#111111")
 
-        children = node_info["children_paths"]
-        if children and depth < max_depth:
-            child_sum = sum(tree_summary[c][val_key] for c in children if c in tree_summary)
+        if node.children:
+            child_sum = sum(c.val for c in node.children)
             curr_x = x_start
-            for c in children:
-                c_val = tree_summary[c][val_key]
-                if c_val <= 0:
+            for c in node.children:
+                if c.val <= 0:
                     continue
-                c_width = (c_val / max(width, child_sum, 1e-9)) * width
+                c_width = (c.val / max(width, child_sum, 1e-9)) * width
                 draw_node(c, curr_x, c_width, depth + 1)
                 curr_x += c_width
 
-            residual = max(0.0, width - child_sum)
-            if residual > 0.015 * root_val:
-                res_y = (max_depth - (depth + 1)) * (row_height + y_gap)
-                rect_res = patches.Rectangle(
-                    (curr_x, res_y), residual, row_height,
-                    linewidth=1.0, edgecolor="#555555", facecolor=COLOR_MAP["Self / Overhead"], alpha=0.75, linestyle=":"
-                )
-                ax.add_patch(rect_res)
-                if residual > 0.05 * root_val:
-                    ax.text(curr_x + residual / 2.0, res_y + row_height / 2.0,
-                            f"Overhead\n{residual*1000:.2f} ms", ha="center", va="center", fontsize=7.5, color="#333333")
-
-    draw_node(root_path, 0.0, root_val, 0)
+    draw_node(display_tree, 0.0, root_val, 1)
 
     ax.set_xlim(-0.01 * root_val, 1.01 * root_val)
-    ax.set_ylim(-0.2, (max_depth + 1) * (row_height + y_gap))
+    ax.set_ylim(-0.2, (tree_depth + 1) * (row_height + y_gap))
     ax.set_xlabel("Duration (seconds per steady ML step)", weight="bold")
     ax.set_yticks([])
     ax.set_title(title, fontsize=12, weight="bold", pad=12)
@@ -515,49 +659,121 @@ def render_icicle_plot(tree_summary: Dict[Tuple[str, ...], Dict[str, Any]],
 
 
 # =============================================================================
+# Sunburst Plot Renderer
+# =============================================================================
+
+def render_sunburst_plot(display_tree: DisplayTreeNode,
+                         output_path: Path,
+                         title: str = "CMI Steady Step Sunburst Breakdown"):
+    """
+    Renders an elegant, publication-quality Sunburst plot with concentric rings.
+    """
+    fig, ax = plt.subplots(figsize=(10, 10))
+
+    root_val = display_tree.val
+    if root_val <= 0:
+        root_val = 1e-6
+
+    def get_max_depth(node: DisplayTreeNode, d: int = 1) -> int:
+        if not node.children:
+            return d
+        return max(get_max_depth(c, d + 1) for c in node.children)
+
+    max_d = get_max_depth(display_tree)
+    r_step = 0.82 / max(2, max_d)
+    r_center = 0.26
+
+    # Draw center circle (root)
+    center_circle = patches.Circle((0, 0), r_center, facecolor=get_color(display_tree.name), edgecolor="#222222", linewidth=1.5, alpha=0.95)
+    ax.add_patch(center_circle)
+
+    clean_root_name = display_tree.name.replace("smartsim_", "").replace("phydll_", "").replace("aix_", "").replace("solver_", "").replace("app_", "").replace("torchInference::", "")
+    ax.text(0, 0, f"{clean_root_name}\n{display_tree.val*1000:.2f} ms\n(100%)",
+            ha="center", va="center", fontsize=9.5, weight="bold", color="#111111")
+
+    def draw_wedges(node: DisplayTreeNode, theta_start: float, theta_end: float, depth: int):
+        if not node.children:
+            return
+
+        r_in = r_center + (depth - 1) * r_step
+        r_out = r_in + r_step
+
+        curr_theta = theta_start
+        total_arc = theta_end - theta_start
+        child_val_sum = sum(c.val for c in node.children)
+
+        for c in node.children:
+            if c.val <= 0:
+                continue
+            c_arc = (c.val / max(node.val, child_val_sum, 1e-9)) * total_arc
+            c_theta_end = curr_theta + c_arc
+
+            c_color = get_color(c.name)
+            edge_col = "#FFFFFF" if c.name != "Overhead" else "#666666"
+            wedge = patches.Wedge(
+                (0, 0), r_out, curr_theta, c_theta_end,
+                width=(r_out - r_in), facecolor=c_color, edgecolor=edge_col,
+                linewidth=1.2, alpha=0.92
+            )
+            ax.add_patch(wedge)
+
+            # Label placement if arc is wide enough
+            if c_arc > 10:
+                mid_theta_deg = curr_theta + c_arc / 2.0
+                mid_theta_rad = np.radians(mid_theta_deg)
+                mid_r = (r_in + r_out) / 2.0
+                x = mid_r * np.cos(mid_theta_rad)
+                y = mid_r * np.sin(mid_theta_rad)
+
+                # Tangential rotation along wedge arc
+                rot = (mid_theta_deg - 90) % 360
+                if 90 < rot < 270:
+                    rot = rot - 180
+
+                c_clean = c.name.replace("smartsim_", "").replace("phydll_", "").replace("aix_", "").replace("solver_", "").replace("app_", "").replace("torchInference::", "")
+                pct = (c.val / root_val) * 100.0
+                if c_arc > 22:
+                    lbl = f"{c_clean}\n{c.val*1000:.2f} ms ({pct:.1f}%)"
+                    fsize = 8.0
+                elif c_arc > 14:
+                    lbl = f"{c_clean}\n{c.val*1000:.1f}ms"
+                    fsize = 7.0
+                else:
+                    lbl = f"{c_clean}"
+                    fsize = 6.5
+
+                ax.text(x, y, lbl, ha="center", va="center", fontsize=fsize,
+                        weight="bold", color="#111111", rotation=rot, rotation_mode="anchor")
+
+            draw_wedges(c, curr_theta, c_theta_end, depth + 1)
+            curr_theta = c_theta_end
+
+    draw_wedges(display_tree, 0.0, 360.0, 1)
+
+    total_r = r_center + max_d * r_step + 0.06
+    ax.set_xlim(-total_r, total_r)
+    ax.set_ylim(-total_r, total_r)
+    ax.set_aspect("equal")
+    ax.axis("off")
+    ax.set_title(title, fontsize=12, weight="bold", pad=16)
+
+    plt.tight_layout()
+    fig.savefig(output_path, dpi=300)
+    plt.close(fig)
+    print(f"[+] Saved Sunburst plot to: {output_path}")
+
+
+# =============================================================================
 # Exact Leaf Decomposition Bar Chart
 # =============================================================================
 
-def collect_leaf_decomposition(tree_summary: Dict[Tuple[str, ...], Dict[str, Any]],
-                                root_path: Tuple[str, ...],
-                                val_key: str = "incl_mean") -> List[Tuple[str, float]]:
-    """
-    Collects a strictly non-overlapping partition of leaf stages under root_path.
-    """
-    leaves: List[Tuple[str, float]] = []
-
-    def traverse(path: Tuple[str, ...]):
-        if path not in tree_summary:
-            return
-        node = tree_summary[path]
-        node_val = node[val_key]
-        if node_val <= 0:
-            return
-
-        children = [c for c in node["children_paths"] if c in tree_summary and tree_summary[c][val_key] > 0]
-        if not children:
-            leaves.append((node["name"], node_val * 1000.0))
-        else:
-            child_sum = sum(tree_summary[c][val_key] for c in children)
-            for c in children:
-                traverse(c)
-            residual = max(0.0, node_val - child_sum)
-            if residual * 1000.0 > 0.005:
-                leaves.append((f"{node['name']} [Overhead]", residual * 1000.0))
-
-    traverse(root_path)
-    return leaves
-
-def render_breakdown_bars(tree_summary: Dict[Tuple[str, ...], Dict[str, Any]],
-                          root_path: Tuple[str, ...],
+def render_breakdown_bars(display_tree: DisplayTreeNode,
                           output_path: Path,
-                          title: str = "CMI Steady Step Leaf Breakdown",
-                          use_rank0: bool = False):
+                          title: str = "CMI Steady Step Leaf Breakdown"):
     """
-    Renders non-overlapping leaf phase breakdown bar charts.
+    Renders non-overlapping leaf phase breakdown bar charts directly from DisplayTree.
     """
-    val_key = "incl_rank0" if use_rank0 else "incl_mean"
-    raw_leaves = collect_leaf_decomposition(tree_summary, root_path, val_key=val_key)
+    raw_leaves = collect_leaf_decomposition_from_display_tree(display_tree)
     if not raw_leaves:
         return
 
@@ -734,18 +950,18 @@ def export_summary_tables(tree_summary: Dict[Tuple[str, ...], Dict[str, Any]], o
     with open(md_path, "w") as f:
         f.write(f"# {title}\n\n")
         f.write("## Steady-State Coupling Metrics (Normalized Per ML Step)\n\n")
-        f.write("| Region | Comm Mean (ms) | Controller/Rank0 (ms) | Max Rank (ms) | Self (ms) | Visits/Step | Ranks |\n")
+        f.write("| Region | Comm Mean (ms) | Controller/Rank0 (ms) | Max Rank (ms) | Self (ms) | Visits/Steady Step | Ranks |\n")
         f.write("|:---|---:|---:|---:|---:|---:|---:|\n")
         for _, r in steady_df.iterrows():
             if is_interesting_region(r["Region"]):
                 f.write(f"| `{r['Region']}` | {r['Rank_Mean (ms)']:.3f} | {r['Controller_Rank0 (ms)']:.3f} | {r['Max_Rank (ms)']:.3f} | {r['Self (ms)']:.3f} | {r['Visits/Step']:.1f} | {int(r['Active_Ranks'])}/{int(r['Total_Ranks'])} |\n")
         
         f.write("\n## Lifecycle Phase Totals (One-Off Cumulative)\n\n")
-        f.write("| Phase | Duration (ms) | Ranks |\n")
-        f.write("|:---|---:|---:|\n")
+        f.write("| Phase | Duration (ms) | Total Visits | Ranks |\n")
+        f.write("|:---|---:|---:|---:|\n")
         for _, r in lifecycle_df.iterrows():
             if r["Region"] in ("terrain_solver", "solver_setup", "solver_step_ml_warmup", "solver_teardown"):
-                f.write(f"| `{r['Region']}` | {r['Rank_Mean (ms)']:.3f} | {int(r['Active_Ranks'])}/{int(r['Total_Ranks'])} |\n")
+                f.write(f"| `{r['Region']}` | {r['Rank_Mean (ms)']:.3f} | {r['Visits/Step']:.1f} | {int(r['Active_Ranks'])}/{int(r['Total_Ranks'])} |\n")
 
     print(f"[+] Saved summary Markdown to: {md_path}")
 
@@ -809,13 +1025,19 @@ def main():
                 
                 has_controller_diff = any(tree_summary[p]["active_ranks"] < tree_summary[p]["total_ranks"] for p in tree_summary)
                 if has_controller_diff:
-                    # Render Controller/Rank 0 perspective (where forward execution happens)
-                    render_icicle_plot(tree_summary, root_path, args.output_dir / "cmi_icicle_plot_controller_rank0.png", title=f"{title} - Controller/Rank 0 Breakdown", use_rank0=True)
-                    render_breakdown_bars(tree_summary, root_path, args.output_dir / "cmi_stage_breakdown_controller_rank0.png", title=f"{title} - Controller/Rank 0 Leaf Breakdown", use_rank0=True)
+                    # Build and render Controller/Rank 0 perspective (where GPU forward execution happens)
+                    ctrl_tree = build_display_tree(tree_summary, root_path, val_key="incl_rank0")
+                    if ctrl_tree:
+                        render_icicle_plot(ctrl_tree, args.output_dir / "cmi_icicle_plot_controller_rank0.png", title=f"{title} - Controller/Rank 0 Breakdown")
+                        render_sunburst_plot(ctrl_tree, args.output_dir / "cmi_sunburst_plot_controller_rank0.png", title=f"{title} - Controller/Rank 0 Sunburst Breakdown")
+                        render_breakdown_bars(ctrl_tree, args.output_dir / "cmi_stage_breakdown_controller_rank0.png", title=f"{title} - Controller/Rank 0 Leaf Breakdown")
                 
-                # Render Communicator Mean
-                render_icicle_plot(tree_summary, root_path, args.output_dir / "cmi_icicle_plot.png", title=f"{title} - Hierarchical Breakdown (Comm Mean)", use_rank0=False)
-                render_breakdown_bars(tree_summary, root_path, args.output_dir / "cmi_stage_breakdown.png", title=f"{title} - Leaf Breakdown (Comm Mean)", use_rank0=False)
+                # Build and render Communicator Mean
+                mean_tree = build_display_tree(tree_summary, root_path, val_key="incl_mean")
+                if mean_tree:
+                    render_icicle_plot(mean_tree, args.output_dir / "cmi_icicle_plot.png", title=f"{title} - Hierarchical Breakdown (Comm Mean)")
+                    render_sunburst_plot(mean_tree, args.output_dir / "cmi_sunburst_plot.png", title=f"{title} - Sunburst Breakdown (Comm Mean)")
+                    render_breakdown_bars(mean_tree, args.output_dir / "cmi_stage_breakdown.png", title=f"{title} - Leaf Breakdown (Comm Mean)")
 
     # 2. Process DL-side CUBE Profile if supplied
     dl_files: List[Path] = []
@@ -842,8 +1064,11 @@ def main():
         if dl_summary and not args.no_plots:
             dl_roots = [p for p in dl_summary if p[-1] in ("phydll_dl_client", "py_inference", "user:py_inference")]
             dl_root = dl_roots[0] if dl_roots else list(dl_summary.keys())[0]
-            render_icicle_plot(dl_summary, dl_root, args.output_dir / "phydll_dl_icicle_plot.png", title="PhyDLL DL-Side Breakdown")
-            render_breakdown_bars(dl_summary, dl_root, args.output_dir / "phydll_dl_stage_breakdown.png", title="PhyDLL DL-Side Leaf Breakdown")
+            dl_tree = build_display_tree(dl_summary, dl_root, val_key="incl_mean")
+            if dl_tree:
+                render_icicle_plot(dl_tree, args.output_dir / "phydll_dl_icicle_plot.png", title="PhyDLL DL-Side Breakdown")
+                render_sunburst_plot(dl_tree, args.output_dir / "phydll_dl_sunburst_plot.png", title="PhyDLL DL-Side Sunburst Breakdown")
+                render_breakdown_bars(dl_tree, args.output_dir / "phydll_dl_stage_breakdown.png", title="PhyDLL DL-Side Leaf Breakdown")
 
     # 3. Process AIx P2P Timeline CSVs
     if args.p2p_timeline_dir and args.p2p_timeline_dir.exists():
