@@ -612,3 +612,9 @@ if __name__ == "__main__":
             print("[DL] Entering MPI.Finalize()", flush=True)
             MPI.Finalize()
             print("[DL] Exited MPI.Finalize()", flush=True)
+
+        if os.environ.get("PHYDLL_PY_FORCE_EXIT", "1") == "1":
+            print("[DL] Forcing clean process exit (PHYDLL_PY_FORCE_EXIT=1)...", flush=True)
+            sys.stdout.flush()
+            sys.stderr.flush()
+            os._exit(0)
