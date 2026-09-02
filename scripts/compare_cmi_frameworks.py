@@ -569,8 +569,8 @@ def plot_ml_inference_window_timeline(data: List[Dict[str, Any]], output_path: P
     ax.set_xlim(0, max_tot * 1.20)
     ax.grid(axis="x", linestyle="--", alpha=0.35)
     
-    # Legend & Title with ample non-overlapping spacing
-    ax.legend(loc="upper center", bbox_to_anchor=(0.5, 1.11), ncol=3, frameon=True, fontsize=9.0)
+    # Legend & Title with balanced non-overlapping spacing
+    ax.legend(loc="upper center", bbox_to_anchor=(0.5, 1.06), ncol=3, frameon=True, fontsize=9.0)
     ax.set_title(f"ML Inference Execution Window & Early-Start Timeline (Critical Execution Path)\nModel: {model_name.upper()} | Resolution: {resolution} | 1 GPU | 4 Solver Ranks | {steps} Steps",
                  weight="bold", fontsize=11.5, pad=38)
               
