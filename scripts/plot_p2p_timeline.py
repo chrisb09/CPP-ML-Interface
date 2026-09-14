@@ -163,7 +163,15 @@ def synchronize_step_clocks(step_events, wg_map, latency_s: float = 3e-6):
     return synchronized_events
 
 
-def render_step(events, step, output_dir: Path, model_name: str):
+def render_step(events, step, output_dir: Path, model_name: str, x_limit_ms=None,
+                overlays=None, output_name=None):
+    """Render one ML step as a multi-workgroup timeline.
+
+    overlays: optional {controller_world_rank: [(x_ms, label, linestyle, color)]}
+    dict of vertical marker lines drawn on the corresponding workgroup panel
+    (e.g. to compare against another run, times must already be on this
+    figure's axis). output_name overrides the default PNG filename.
+    """
     step_events = [event for event in events if event["step"] == step]
     if not step_events:
         return
@@ -176,7 +184,11 @@ def render_step(events, step, output_dir: Path, model_name: str):
     def x_coordinate(time_s):
         return (time_s - start) * 1e3
 
-    max_x = max(x_coordinate(event["time_s"]) for event in step_events)
+    # x_limit_ms: common x-axis span (ms) shared across all rendered steps of a
+    # run, so step figures remain directly comparable. Falls back to this
+    # step's own span when not provided.
+    step_max_x = max(x_coordinate(event["time_s"]) for event in step_events)
+    max_x = max(step_max_x, x_limit_ms) if x_limit_ms else step_max_x
 
     controller_ranks = sorted({e["world_rank"] for e in step_events if e["is_controller"]})
     if not controller_ranks:
@@ -320,6 +332,12 @@ def render_step(events, step, output_dir: Path, model_name: str):
         axis.axvline(x_coordinate(g_start), color="#2a9d8f", linestyle="--", linewidth=0.8)
         axis.axvline(x_coordinate(g_end), color="#e76f51", linestyle="--", linewidth=0.8)
 
+        # Overlay marker lines (e.g. collective-run reference points)
+        for ov_x, ov_label, ov_ls, ov_color in (overlays or {}).get(ctrl_rank, []):
+            axis.axvline(ov_x, color=ov_color, linestyle=ov_ls, linewidth=1.0, alpha=0.75, zorder=5)
+            axis.text(ov_x, len(member_world_ranks) - 0.6, f" {ov_label}", rotation=90,
+                      fontsize=5.5, color=ov_color, ha="right", va="top", alpha=0.9)
+
         # Y-axis formatting: show world_rank and color code Local vs Remote
         y_ticks = list(range(len(member_world_ranks)))
         y_labels = []
@@ -385,12 +403,30 @@ def render_step(events, step, output_dir: Path, model_name: str):
         Patch(facecolor="#1f77b4", label="Remote Worker (c23mm Inter-Node)"),
     ])
 
-    figure.suptitle(f"AIx P2P Hetjob ML Step {step} | Model: {model_name} | {num_wgs} GPU Workgroups", fontsize=11, y=0.99)
-    figure.legend(handles=legend_handles, loc="upper center", bbox_to_anchor=(0.5, 0.95),
-                  fontsize=6.0, frameon=False, ncol=min(4, max(1, len(legend_handles))))
+    # Compact title + legend band: size the reserved top area in *inches* so the
+    # gaps between title, legend and the panels stay small and constant
+    # regardless of figure height (large multi-workgroup figures previously
+    # reserved ~12% of a very tall canvas as empty space).
+    import math
+    n_handles = len(legend_handles)
+    ncol = min(5, max(1, n_handles))
+    legend_rows = math.ceil(n_handles / ncol) if n_handles else 0
+    title_band_in = 0.40
+    legend_h_in = legend_rows * 0.16 + 0.08
+    reserved_in = title_band_in + legend_h_in + 0.10
+    rect_top = max(0.75, 1.0 - reserved_in / fig_height)
 
-    figure.tight_layout(rect=(0, 0, 1, 0.88))
-    figure.savefig(output_dir / f"p2p_timeline_step_{step:03d}.png", dpi=180)
+    figure.suptitle(
+        f"AIx P2P Hetjob ML Step {step} | Model: {model_name} | {num_wgs} GPU Workgroups",
+        fontsize=11, y=1.0 - 0.02 / fig_height, va="top")
+    figure.legend(
+        handles=legend_handles, loc="upper center",
+        bbox_to_anchor=(0.5, 1.0 - title_band_in / fig_height),
+        fontsize=6.0, frameon=False, ncol=ncol, columnspacing=1.0, handlelength=1.4)
+
+    figure.tight_layout(rect=(0, 0, 1, rect_top))
+    png_name = output_name or f"p2p_timeline_step_{step:03d}.png"
+    figure.savefig(output_dir / png_name, dpi=180)
     plt.close(figure)
 
 
@@ -469,6 +505,9 @@ def main():
     parser.add_argument("--step", type=int, action="append", help="Render only this step; repeat to select several.")
     parser.add_argument("--output-dir", type=Path)
     parser.add_argument("--model", type=str, default=None, help="Model name override (e.g. watercnn)")
+    parser.add_argument("--per-step-x", action="store_true",
+                        help="Give every step its own x-axis span instead of one common span shared "
+                             "by all rendered steps (default: common span for visual comparability).")
     args = parser.parse_args()
 
     events = read_events(args.timeline_dir)
@@ -481,8 +520,23 @@ def main():
     model_name = resolve_model_name(args.model, args.timeline_dir, metadata)
     warmup_steps = metadata.get("warmup_steps", 0)
     selected_steps = args.step or [step for step in sorted({event["step"] for event in events}) if step >= warmup_steps]
+
+    # Common x-axis across all rendered steps: take the widest clock-corrected
+    # step span so every figure uses the same scale.
+    common_x_limit = None
+    if not args.per_step_x:
+        spans = []
+        for step in selected_steps:
+            step_events = [e for e in events if e["step"] == step]
+            if not step_events:
+                continue
+            step_events = synchronize_step_clocks(step_events, get_workgroup_mapping(step_events))
+            start = min(e["time_s"] for e in step_events)
+            spans.append((max(e["time_s"] for e in step_events) - start) * 1e3)
+        common_x_limit = max(spans) if spans else None
+
     for step in selected_steps:
-        render_step(events, step, output_dir, model_name)
+        render_step(events, step, output_dir, model_name, x_limit_ms=common_x_limit)
     write_summary(events, output_dir, selected_steps, model_name)
 
 

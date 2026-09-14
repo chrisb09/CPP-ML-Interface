@@ -27,6 +27,7 @@ import re
 import glob
 import argparse
 import subprocess
+import json
 from shutil import which as shutil_which
 from pathlib import Path
 from collections import defaultdict
@@ -375,6 +376,26 @@ class AggregatedCallTree:
         summary: Dict[Tuple[str, ...], Dict[str, Any]] = {}
         num_ranks = max(1, self.total_ranks)
 
+        # Detect the GPU-controller rank: only controller ranks execute the
+        # inferenceDevice comms/device region (AIx collective + pipelined).
+        # In het jobs the controller is NOT rank 0 (e.g. the lone c23g task in
+        # the 24mm+1g scenarios), so the "Controller_Rank0" columns report the
+        # actual controller's values. Worker ranks may carry tiny non-zero
+        # values, hence the >=50%-of-max threshold; among qualifying ranks the
+        # lowest is used (rank 0 for the validated single-allocation runs).
+        self.controller_rank = 0
+        for path_d, d_c in self.paths.items():
+            if path_d[-1] != "inferenceDevice":
+                continue
+            vals = {r: d_c["per_rank_step_incl"].get(r, 0.0)
+                    for r in range(num_ranks)}
+            mx = max(vals.values()) if vals else 0.0
+            if mx > 1e-9:
+                qualifying = [r for r, v in vals.items() if v >= 0.5 * mx]
+                self.controller_rank = min(qualifying)
+            break
+        print(f"    Controller rank for stage extraction: {self.controller_rank}")
+
         for path, d in self.paths.items():
             # Pad missing ranks with 0.0 for consistent tree algebra across MPI communicator
             incls_all = [d["per_rank_step_incl"].get(r, 0.0) for r in range(num_ranks)]
@@ -391,8 +412,8 @@ class AggregatedCallTree:
             active_incls = [v for v in d["per_rank_step_incl"].values() if v > 1e-9]
             active_ranks = len(active_incls)
 
-            rank0_incl = d["per_rank_step_incl"].get(0, 0.0)
-            rank0_self = d["per_rank_step_self"].get(0, 0.0)
+            rank0_incl = d["per_rank_step_incl"].get(self.controller_rank, 0.0)
+            rank0_self = d["per_rank_step_self"].get(self.controller_rank, 0.0)
 
             # Communicator-wide mean (sum across ranks / total_ranks)
             comm_mean_incl = float(np.mean(incls_all))
