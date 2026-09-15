@@ -13,6 +13,20 @@ import matplotlib.pyplot as plt
 from matplotlib.lines import Line2D
 from matplotlib.patches import Patch
 
+# Apply thesis style for consistent fonts.  The thesis_style.py lives in
+# Master-Thesis/gitlab/sourcecode/.  We search there as a fallback when the
+# script is run from the smartsim repo.
+import sys as _sys
+_thesis_src = Path.home() / "Master-Thesis" / "gitlab" / "sourcecode"
+if _thesis_src.exists() and str(_thesis_src) not in _sys.path:
+    _sys.path.insert(0, str(_thesis_src))
+try:
+    import thesis_style as ts
+    ts.apply()
+    _HAS_TS = True
+except ImportError:
+    _HAS_TS = False
+
 
 def read_events(directory: Path):
     events = []
@@ -291,7 +305,8 @@ def render_step(events, step, output_dir: Path, model_name: str, x_limit_ms=None
                                      (ctrl_y - 0.24, 0.22), facecolors="#8e6bbd", alpha=0.9)
                     chunk_label = str(event["range_first_rank"]) if event["range_end_rank"] == event["range_first_rank"] + 1 \
                         else f"{event['range_first_rank']}-{event['range_end_rank'] - 1}"
-                    axis.text(begin, ctrl_y - 0.48, chunk_label, ha="center", va="top", fontsize=5.5, clip_on=False)
+                    axis.text(begin, ctrl_y - 0.48, chunk_label, ha="center", va="top",
+                              fontsize=ts.ANNOT if _HAS_TS else 5.5, clip_on=False)
 
         for start_name, end_name, lane_offset, color in (
             ("controller_input_copy_start", "controller_input_copy_end", -0.40, "#6c757d"),
@@ -336,7 +351,7 @@ def render_step(events, step, output_dir: Path, model_name: str, x_limit_ms=None
         for ov_x, ov_label, ov_ls, ov_color in (overlays or {}).get(ctrl_rank, []):
             axis.axvline(ov_x, color=ov_color, linestyle=ov_ls, linewidth=1.0, alpha=0.75, zorder=5)
             axis.text(ov_x, len(member_world_ranks) - 0.6, f" {ov_label}", rotation=90,
-                      fontsize=5.5, color=ov_color, ha="right", va="top", alpha=0.9)
+                      fontsize=ts.ANNOT if _HAS_TS else 5.5, color=ov_color, ha="right", va="top", alpha=0.9)
 
         # Y-axis formatting: show world_rank and color code Local vs Remote
         y_ticks = list(range(len(member_world_ranks)))
@@ -356,19 +371,21 @@ def render_step(events, step, output_dir: Path, model_name: str, x_limit_ms=None
             tick_colors.append(color)
 
         axis.set_yticks(y_ticks)
-        axis.set_yticklabels(y_labels, fontsize=6.5)
+        axis.set_yticklabels(y_labels, fontsize=ts.ANNOT if _HAS_TS else 6.5)
         for tick_label, col in zip(axis.get_yticklabels(), tick_colors):
             tick_label.set_color(col)
             if "Ctrl" in tick_label.get_text():
                 tick_label.set_weight("bold")
 
-        axis.set_ylabel(f"GPU Workgroup {wg_idx}\n(Controller r{ctrl_rank})", fontsize=7.5, weight="bold")
+        axis.set_ylabel(f"GPU Workgroup {wg_idx}\n(Controller r{ctrl_rank})",
+                        fontsize=ts.TICK if _HAS_TS else 7.5, weight="bold")
         axis.set_ylim(-0.8, len(member_world_ranks) - 0.2)
         axis.set_xlim(-0.4, max_x + 0.8)
-        axis.tick_params(axis="x", labelsize=7)
+        axis.tick_params(axis="x", labelsize=ts.TICK if _HAS_TS else 7)
         axis.grid(axis="x", alpha=0.15, linewidth=0.4)
 
-    axes[-1, 0].set_xlabel("Clock-corrected time since first event (ms)", fontsize=8)
+    axes[-1, 0].set_xlabel("Clock-corrected time since first event (ms)",
+                            fontsize=ts.AXIS_LABEL if _HAS_TS else 8)
 
     # Controller performance lines
     controller_lines = []
@@ -418,15 +435,23 @@ def render_step(events, step, output_dir: Path, model_name: str, x_limit_ms=None
 
     figure.suptitle(
         f"AIx P2P Hetjob ML Step {step} | Model: {model_name} | {num_wgs} GPU Workgroups",
-        fontsize=11, y=1.0 - 0.02 / fig_height, va="top")
+        fontsize=ts.FIGURE_TITLE if _HAS_TS else 11, y=1.0 - 0.02 / fig_height, va="top")
     figure.legend(
         handles=legend_handles, loc="upper center",
         bbox_to_anchor=(0.5, 1.0 - title_band_in / fig_height),
-        fontsize=6.0, frameon=False, ncol=ncol, columnspacing=1.0, handlelength=1.4)
+        fontsize=ts.ANNOT if _HAS_TS else 6.0, frameon=False, ncol=ncol,
+        columnspacing=1.0, handlelength=1.4)
 
     figure.tight_layout(rect=(0, 0, 1, rect_top))
     png_name = output_name or f"p2p_timeline_step_{step:03d}.png"
-    figure.savefig(output_dir / png_name, dpi=180)
+    png_path = output_dir / png_name
+    if _HAS_TS:
+        # Save PNG only (no PGF/PDF for timeline frames — they're not LaTeX-included)
+        import matplotlib
+        matplotlib.rcParams.setdefault("savefig.dpi", 180)
+        figure.savefig(png_path, dpi=180, bbox_inches="tight")
+    else:
+        figure.savefig(png_path, dpi=180)
     plt.close(figure)
 
 
