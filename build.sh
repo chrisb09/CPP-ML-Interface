@@ -3,7 +3,11 @@
 # Source the main environment script from the project root
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 BASE_DIR="$(realpath "${SCRIPT_DIR}/..")"
-source "${BASE_DIR}/set_env_claix23_cuda12.4.sh"
+if [ -f "${BASE_DIR}/setup_env_claix23.sh" ]; then
+    source "${BASE_DIR}/setup_env_claix23.sh"
+elif [ -f "${SCRIPT_DIR}/set_env_claix23_cuda12.4.sh" ]; then
+    source "${SCRIPT_DIR}/set_env_claix23_cuda12.4.sh"
+fi
 
 if [[ "${USE_SCOREP}" == "1" ]]; then
     if [ -f "${SCRIPT_DIR}/env_scorep.sh" ]; then
@@ -49,6 +53,10 @@ else
 fi
 
 # Set up environment for clang and CUDA
+if [ -d "${HOME}/.local/lib/python3.11/site-packages/clang/native" ]; then
+    export LIBCLANG_PATH="${HOME}/.local/lib/python3.11/site-packages/clang/native"
+    export LD_LIBRARY_PATH="${LIBCLANG_PATH}:${LD_LIBRARY_PATH:-}"
+fi
 USER_PYTHON_ENV="${PWD}/extern/python/smartsim_cuda-12"
 USER_PYTHON="$USER_PYTHON_ENV/bin/python"
 CUDA_ROOT="/cvmfs/software.hpc.rwth.de/Linux/RH9/x86_64/intel/sapphirerapids/software/CUDA/12.4.0"
@@ -81,6 +89,7 @@ cmake -S . -B build \
 	-DAIX_SKIP_VENV_CREATION=ON \
 	-DTorch_DIR="" \
 	-DTORCH_VERSION="2.4.0" \
+	-DLIBTORCH_DIR="${SCRIPT_DIR}/extern/libtorch" \
 	-DTORCH_CUDA_ARCH_LIST="9.0" \
 	-DCPPML_RUN_REGISTRY_TESTS="${run_registry_tests}" \
 	-DWITH_SMARTSIM="${with_smartsim}" \

@@ -31,6 +31,8 @@ set(AIXELERATOR_DIR "${CMAKE_CURRENT_SOURCE_DIR}/extern/AIxeleratorService" CACH
 set(AIXELERATOR_PREBUILT_INSTALL_PREFIX "${AIXELERATOR_DIR}/INSTALL-SCOREP" CACHE PATH "Install prefix used for prebuilt AIxelerator")
 set(AIXELERATOR_PREBUILT_LIB_DIR "${AIXELERATOR_PREBUILT_INSTALL_PREFIX}/lib" CACHE PATH "Library directory containing prebuilt AIxelerator .so")
 set(AIXELERATOR_CMAKE_ARGS "-DWITH_TORCH=ON" CACHE STRING "Additional CMake args used when auto-building prebuilt AIxelerator")
+set(TORCH_VERSION "2.4.0" CACHE STRING "PyTorch/LibTorch version")
+set(LIBTORCH_DIR "${CMAKE_CURRENT_SOURCE_DIR}/extern/libtorch" CACHE PATH "Path to libtorch directory")
 set(PHYDLL_BUILD_DIR "${CMAKE_CURRENT_SOURCE_DIR}/extern/phydll/build" CACHE PATH "PhyDLL build prefix")
 
 message("WITH_SMARTSIM: ${WITH_SMARTSIM}")

@@ -18,7 +18,17 @@ fi
 EXTERN_RUNTIME_ROOT="/home/thes2181/python"
 DEFAULT_RUNTIME_ROOT="${SCRIPT_DIR}/extern/python"
 
-EXTERN_LIBTORCH_ROOT="/home/thes2181/libtorch"
+if [ -n "${SMARTSIM_EXTERN_LIBTORCH_ROOT:-}" ]; then
+    EXTERN_LIBTORCH_ROOT="${SMARTSIM_EXTERN_LIBTORCH_ROOT}"
+elif [ -d "/home/thes2181/libtorch" ] && [ -f "/home/thes2181/libtorch/lib/libtorch.so" ]; then
+    EXTERN_LIBTORCH_ROOT="/home/thes2181/libtorch"
+elif [ -d "${SCRIPT_DIR}/../../smartsim/CPP-ML-Interface/extern/libtorch" ] && [ -f "${SCRIPT_DIR}/../../smartsim/CPP-ML-Interface/extern/libtorch/lib/libtorch.so" ]; then
+    EXTERN_LIBTORCH_ROOT="$(realpath "${SCRIPT_DIR}/../../smartsim/CPP-ML-Interface/extern/libtorch")"
+elif [ -d "/rwthfs/rz/cluster/hpcwork/ro092286/smartsim/CPP-ML-Interface/extern/libtorch" ] && [ -f "/rwthfs/rz/cluster/hpcwork/ro092286/smartsim/CPP-ML-Interface/extern/libtorch/lib/libtorch.so" ]; then
+    EXTERN_LIBTORCH_ROOT="/rwthfs/rz/cluster/hpcwork/ro092286/smartsim/CPP-ML-Interface/extern/libtorch"
+else
+    EXTERN_LIBTORCH_ROOT="/home/thes2181/libtorch"
+fi
 CREATE_LIBTORCH_SYMLINK=1
 FORCE_LIBTORCH_SYMLINK="${SMARTSIM_FORCE_LIBTORCH_SYMLINK:-0}"
 
@@ -94,7 +104,16 @@ fi
 libtorch_ready=false
 if [ -d "$LIBTORCH_DIR" ]; then
     if [ -f "$LIBTORCH_DIR/lib/libtorch.so" ] && [ -f "$LIBTORCH_DIR/lib/libc10.so" ]; then
-        libtorch_ready=true
+        if [ -f "$LIBTORCH_DIR/build-version" ]; then
+            installed_ver="$(cat "$LIBTORCH_DIR/build-version" | tr -d '[:space:]')"
+            if [[ "$installed_ver" == "${LIBTORCH_VERSION}"* ]]; then
+                libtorch_ready=true
+            else
+                echo "libtorch version mismatch in $LIBTORCH_DIR (found $installed_ver, expected ${LIBTORCH_VERSION})."
+            fi
+        else
+            libtorch_ready=true
+        fi
     fi
 fi
 

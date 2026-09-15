@@ -10,8 +10,9 @@
 #ifdef PHYDLL_DL_USE_TORCH
 #include <torch/script.h>
 #include <torch/torch.h>
-#if defined(USE_SCOREP) || defined(WITH_CUDA)
+#if __has_include(<c10/cuda/CUDAStream.h>)
 #include <c10/cuda/CUDAStream.h>
+#define PHYDLL_HAS_CUDA_STREAM 1
 #endif
 #endif
 
@@ -487,9 +488,11 @@ int main(int argc, char **argv) {
             auto input_tensor = torch::from_blob(input.data(), {batch_size, input_per_rank_used}, options).clone();
             input_tensor = input_tensor.view(actual_shape);
             input_tensor = input_tensor.to(torch_device);
+            #ifdef PHYDLL_HAS_CUDA_STREAM
             if (torch_device.is_cuda()) {
                 c10::cuda::getCurrentCUDAStream(torch_device.index()).synchronize();
             }
+            #endif
             #ifdef USE_SCOREP
             if (profile_details) SCOREP_USER_REGION_END(handle_dl_h2d);
             #endif
