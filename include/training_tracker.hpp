@@ -99,21 +99,39 @@ public:
     }
 
     /**
-     * @brief Retrieves the most recently recorded value of a given metric.
+     * @brief Retrieves the current (most recent) value for a specific metric.
      * @param field Metric name.
-     * @return Most recent scalar value, or 0.0 if not found.
+     * @return Most recent scalar value.
+     * @throws std::runtime_error If no history exists or the field was not recorded.
      */
-    double get_latest(const std::string &field) const
+    double get_current(const std::string &field) const
     {
-        for (auto it = history.rbegin(); it != history.rend(); ++it)
+        if (history.empty()) throw std::runtime_error("No training history available.");
+        auto it = history.back().values.find(field);
+        if (it != history.back().values.end())
         {
-            auto fit = it->values.find(field);
-            if (fit != it->values.end())
-            {
-                return fit->second;
-            }
+            return it->second;
         }
-        return 0.0;
+        throw std::runtime_error("Field '" + field + "' not found in the latest training step.");
+    }
+
+    /**
+     * @brief Retrieves the map of all metric values from the most recent step.
+     * @return Map of current metric names to values.
+     */
+    std::map<std::string, double> get_current() const
+    {
+        if (history.empty()) return {};
+        return history.back().values;
+    }
+
+    /**
+     * @brief Retrieves the full sequence of recorded training metric snapshots.
+     * @return Vector of TrainingMetrics.
+     */
+    const std::vector<TrainingMetrics> &get_full_history() const
+    {
+        return history;
     }
 
 private:
