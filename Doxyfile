@@ -43,9 +43,7 @@ GENERATE_DEPRECATEDLIST= YES
 
 # Input options
 INPUT                  = include \
-                         documentation \
-                         docs/mainpage.md \
-                         docs/groups.dox
+                         docs
 USE_MDFILE_AS_MAINPAGE = docs/mainpage.md
 RECURSIVE              = YES
 EXCLUDE_SYMLINKS       = YES
