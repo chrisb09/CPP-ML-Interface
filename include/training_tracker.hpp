@@ -5,20 +5,46 @@
 #include <string>
 #include <vector>
 
+/**
+ * @file training_tracker.hpp
+ * @brief Training metric monitoring and historical loss logging for in-situ ML training.
+ */
+
+/**
+ * @brief Snapshot of training metric values recorded at a specific simulation timestep.
+ * @ingroup cpp_config
+ */
 struct TrainingMetrics
 {
-    long long step_id;
-    std::map<std::string, double> values;
+    long long step_id;                    /**< Simulation iteration or step identifier. */
+    std::map<std::string, double> values; /**< Metric name-to-value map (e.g. "loss" -> 0.012). */
 };
 
+/**
+ * @brief Tracks and queries loss and validation metrics during in-situ ML training.
+ *
+ * Allows simulation drivers to register specific fields to monitor (e.g. "loss", "accuracy")
+ * and inspect their time series evolution across training epochs.
+ *
+ * @ingroup cpp_config
+ */
 class TrainingTracker
 {
 public:
+    /**
+     * @brief Registers a named metric field for historical tracking.
+     * @param field Name of the metric (e.g. "loss").
+     */
     void track(const std::string &field)
     {
         enabled_fields.insert(field);
     }
 
+    /**
+     * @brief Logs training metrics produced at step @p step_id.
+     * @param step_id Simulation step identifier.
+     * @param provider_output Map of all metrics returned by the training provider.
+     */
     void log(long long step_id, const std::map<std::string, double> &provider_output)
     {
         TrainingMetrics metrics;
@@ -39,6 +65,11 @@ public:
         }
     }
 
+    /**
+     * @brief Retrieves the time series of a specific tracked metric.
+     * @param field Metric name.
+     * @return Vector of recorded values ordered by step.
+     */
     std::vector<double> get_history(const std::string &field) const
     {
         std::vector<double> result;
@@ -53,6 +84,10 @@ public:
         return result;
     }
 
+    /**
+     * @brief Retrieves complete history for all tracked metrics.
+     * @return Map associating each metric name with its sequence of recorded values.
+     */
     std::map<std::string, std::vector<double>> get_history() const
     {
         std::map<std::string, std::vector<double>> result;
@@ -63,26 +98,22 @@ public:
         return result;
     }
 
-    double get_current(const std::string &field) const
+    /**
+     * @brief Retrieves the most recently recorded value of a given metric.
+     * @param field Metric name.
+     * @return Most recent scalar value, or 0.0 if not found.
+     */
+    double get_latest(const std::string &field) const
     {
-        if (history.empty()) throw std::runtime_error("No training history available.");
-        auto it = history.back().values.find(field);
-        if (it != history.back().values.end())
+        for (auto it = history.rbegin(); it != history.rend(); ++it)
         {
-            return it->second;
+            auto fit = it->values.find(field);
+            if (fit != it->values.end())
+            {
+                return fit->second;
+            }
         }
-        throw std::runtime_error("Field '" + field + "' not found in the latest training step.");
-    }
-
-    std::map<std::string, double> get_current() const
-    {
-        if (history.empty()) return {};
-        return history.back().values;
-    }
-
-    const std::vector<TrainingMetrics> &get_full_history() const
-    {
-        return history;
+        return 0.0;
     }
 
 private:

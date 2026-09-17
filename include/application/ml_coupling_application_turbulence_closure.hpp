@@ -4,6 +4,23 @@
 
 #include "ml_coupling_application.hpp"
 
+/**
+ * @file ml_coupling_application_turbulence_closure.hpp
+ * @brief Application adapter for turbulence modeling and subgrid-scale closures.
+ */
+
+/**
+ * @brief Application pipeline specialized for turbulence closure models.
+ *
+ * Couples simulation velocity gradients and invariant tensors to ML models
+ * that predict turbulent viscosity or Reynolds stress tensors.
+ *
+ * @tparam CouplingInput Simulation input type.
+ * @tparam CouplingOutput Simulation output type.
+ * @tparam LibraryInput ML model input type.
+ * @tparam LibraryOutput ML model output type.
+ * @ingroup cpp_application
+ */
 // @registry_name: TurbulenceClosure
 // @registry_aliases: turbulence-closure, turbulence_closure, turbulence
 template <typename CouplingInput,
@@ -14,6 +31,12 @@ class MLCouplingApplicationTurbulenceClosure
     : public MLCouplingApplication<CouplingInput, CouplingOutput, LibraryInput, LibraryOutput>
 {
 public:
+    /**
+     * @brief Constructs turbulence closure application with 2-buffer setup.
+     * @param coupling_input Simulation velocity gradient/feature buffer.
+     * @param coupling_output Simulation stress tensor/closure output buffer.
+     * @param normalization Pointer to normalization component.
+     */
     MLCouplingApplicationTurbulenceClosure(
         MLCouplingData<CouplingInput> coupling_input,
         MLCouplingData<CouplingOutput> coupling_output,
@@ -23,6 +46,14 @@ public:
     {
     }
 
+    /**
+     * @brief Constructs turbulence closure application with 4-buffer setup.
+     * @param coupling_input Simulation input buffer.
+     * @param library_input Model input buffer.
+     * @param library_output Model output buffer.
+     * @param coupling_output Simulation output buffer.
+     * @param normalization Pointer to normalization component.
+     */
     MLCouplingApplicationTurbulenceClosure(
         MLCouplingData<CouplingInput> coupling_input,
         MLCouplingData<LibraryInput> library_input,

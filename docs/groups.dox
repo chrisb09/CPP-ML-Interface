@@ -1,0 +1,25 @@
+/**
+ * @defgroup cpp_api C++ API Reference
+ * @brief Modern C++17 interfaces and classes for ML-simulation coupling.
+ * @{
+ *
+ *   @defgroup cpp_core Core Orchestration & Data
+ *   @brief Fundamental classes including MLCoupling, MLCouplingData, and MLCouplingTensor.
+ *
+ *   @defgroup cpp_library ML Providers & Libraries
+ *   @brief Base library and concrete inference providers (PhyDLL, SmartSim, AIxelerator, Dummy, Generic).
+ *
+ *   @defgroup cpp_application Application Pipelines
+ *   @brief Pre/post-processing workflows and application adapters.
+ *
+ *   @defgroup cpp_behavior Stepping Behaviors
+ *   @brief Execution controllers, interval deciders, and timestep advancement.
+ *
+ *   @defgroup cpp_normalization Normalization Components
+ *   @brief Input feature and output prediction scaling components.
+ *
+ *   @defgroup cpp_config Configuration & Utilities
+ *   @brief TOML configuration parser, key balancing, and profiling utilities.
+ *
+ * @}
+ */

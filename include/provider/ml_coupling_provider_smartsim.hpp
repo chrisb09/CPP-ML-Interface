@@ -22,6 +22,23 @@
 #include <scorep/SCOREP_User.h>
 #endif
 
+/**
+ * @file ml_coupling_provider_smartsim.hpp
+ * @brief SmartSim / SmartRedis in-memory database inference provider.
+ */
+
+/**
+ * @brief Distributed inference provider communicating via SmartSim's Redis database.
+ *
+ * Utilizes the SmartRedis C++ client to transfer tensors across simulation nodes
+ * to a co-located or clustered Redis database where GPU/CPU inference models run.
+ * Supports automated DB layout balancing (shared, per-host, per-node), batching,
+ * and key prefixes.
+ *
+ * @tparam In Input feature scalar type.
+ * @tparam Out Output prediction scalar type.
+ * @ingroup cpp_library
+ */
 // @registry_name: Smartsim
 // @registry_aliases: smartsim, SmartSim
 template <typename In, typename Out>

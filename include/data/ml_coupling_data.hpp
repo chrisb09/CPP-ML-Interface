@@ -19,12 +19,30 @@
 #include <scorep/SCOREP_User.h>
 #endif
 
+/**
+ * @file ml_coupling_data.hpp
+ * @brief Multi-dimensional tensor structures, layout conversions, and data collection containers.
+ */
+
+/**
+ * @brief Memory ownership policy for MLCouplingTensor buffers.
+ * @ingroup cpp_core
+ */
 typedef enum
 {
-	MLCouplingOwnershipExternal = 0,
-	MLCouplingOwnershipOwned = 1
+	MLCouplingOwnershipExternal = 0, /**< Tensor borrows memory; caller manages lifecycle. */
+	MLCouplingOwnershipOwned = 1     /**< Tensor owns memory; frees buffer on destruction. */
 } MLCouplingOwnership;
 
+/**
+ * @brief High-performance multi-dimensional tensor class.
+ *
+ * Supports arbitrary dimensionality, row-major and column-major (Fortran) contiguous
+ * buffers, nested pointer arrays, and zero-copy external memory wrapping.
+ *
+ * @tparam T Primitive scalar element type (e.g. float, double).
+ * @ingroup cpp_core
+ */
 template <typename T>
 class MLCouplingTensor
 {
@@ -771,6 +789,15 @@ private:
 	}
 };
 
+/**
+ * @brief Ordered collection container holding one or more MLCouplingTensor objects.
+ *
+ * Serves as the primary data exchange unit passed between simulation applications,
+ * preprocessing filters, normalization scalers, and ML inference providers.
+ *
+ * @tparam T Primitive scalar element type of contained tensors.
+ * @ingroup cpp_core
+ */
 template <typename T>
 class MLCouplingData
 {
@@ -779,25 +806,35 @@ public:
 	using iterator = typename container_type::iterator;
 	using const_iterator = typename container_type::const_iterator;
 
+	/** @brief Constructs an empty container. */
 	MLCouplingData() = default;
 
+	/** @brief Constructs a container by taking ownership of a vector of tensors. */
 	explicit MLCouplingData(std::vector<MLCouplingTensor<T>> tensors)
 		: tensors_(std::move(tensors)) {}
 
+	/** @brief Appends a copy of a tensor. */
 	void add_tensor(const MLCouplingTensor<T> &tensor)
 	{
 		tensors_.push_back(tensor);
 	}
 
+	/** @brief Appends a tensor via move semantics. */
 	void add_tensor(MLCouplingTensor<T> &&tensor)
 	{
 		tensors_.push_back(std::move(tensor));
 	}
 
+	/** @brief Returns number of tensors in the collection. */
 	size_t size() const { return tensors_.size(); }
+
+	/** @brief Returns true if container holds zero tensors. */
 	bool empty() const { return tensors_.empty(); }
 
+	/** @brief Accesses tensor by 0-based index. */
 	MLCouplingTensor<T> &operator[](size_t i) { return tensors_.at(i); }
+
+	/** @brief Accesses tensor by 0-based index (const). */
 	const MLCouplingTensor<T> &operator[](size_t i) const { return tensors_.at(i); }
 
 	iterator begin() { return tensors_.begin(); }
@@ -882,6 +919,11 @@ std::ostream &operator<<(std::ostream &os, const MLCouplingData<T> &data)
 	return os;
 }
 
+/**
+ * @brief 0D/1-element scalar specialization of MLCouplingTensor.
+ * @tparam T Primitive scalar type.
+ * @ingroup cpp_core
+ */
 template <typename T>
 class MLCouplingScalar : public MLCouplingTensor<T>
 {
@@ -893,6 +935,11 @@ public:
 		: MLCouplingTensor<T>(MLCouplingTensor<T>::wrap_flat(ptr, std::vector<int>{1}, MLCouplingMemLayoutContiguous, ownership)) {}
 };
 
+/**
+ * @brief 1D vector specialization of MLCouplingTensor.
+ * @tparam T Primitive scalar type.
+ * @ingroup cpp_core
+ */
 template <typename T>
 class MLCouplingVector : public MLCouplingTensor<T>
 {
@@ -904,6 +951,11 @@ public:
 		: MLCouplingTensor<T>(MLCouplingTensor<T>::wrap_flat(ptr, std::vector<int>{size}, MLCouplingMemLayoutContiguous, ownership)) {}
 };
 
+/**
+ * @brief 2D matrix specialization of MLCouplingTensor.
+ * @tparam T Primitive scalar type.
+ * @ingroup cpp_core
+ */
 template <typename T>
 class MLCouplingMatrix : public MLCouplingTensor<T>
 {

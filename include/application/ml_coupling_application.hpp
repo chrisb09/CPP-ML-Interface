@@ -16,6 +16,23 @@
 #include <scorep/SCOREP_User.h>
 #endif
 
+/**
+ * @file ml_coupling_application.hpp
+ * @brief Base application class managing simulation-library data transitions and step execution.
+ */
+
+/**
+ * @brief Base class for simulation applications coupled to ML inference.
+ *
+ * Manages buffer ownership, type conversion between simulation and inference layers,
+ * preprocessing of inputs, postprocessing of predictions, and step orchestration.
+ *
+ * @tparam CouplingInput Primitive scalar type of simulation inputs.
+ * @tparam CouplingOutput Primitive scalar type of simulation outputs.
+ * @tparam LibraryInput Primitive scalar type expected by ML model inputs.
+ * @tparam LibraryOutput Primitive scalar type produced by ML model outputs.
+ * @ingroup cpp_application
+ */
 // @category: application
 // Applications own conversion between the public coupling boundary and the
 // tensor boundary consumed by an interchangeable coupling library.
@@ -26,11 +43,17 @@ template <typename CouplingInput,
 class MLCouplingApplication
 {
 public:
-    MLCouplingData<CouplingInput> coupling_input;
-    MLCouplingData<LibraryInput> library_input;
-    MLCouplingData<LibraryOutput> library_output;
-    MLCouplingData<CouplingOutput> coupling_output;
+    MLCouplingData<CouplingInput> coupling_input;   /**< Primary simulation input data container. */
+    MLCouplingData<LibraryInput> library_input;     /**< Preprocessed input data container passed to ML model. */
+    MLCouplingData<LibraryOutput> library_output;   /**< Raw output prediction container from ML model. */
+    MLCouplingData<CouplingOutput> coupling_output; /**< Postprocessed output data container restored to simulation. */
 
+    /**
+     * @brief Constructs an application with 2 buffers (coupling input and output).
+     * @param coupling_input Simulation input data container.
+     * @param coupling_output Simulation output data container.
+     * @param normalization Optional pointer to normalization scaler.
+     */
     MLCouplingApplication(MLCouplingData<CouplingInput> coupling_input,
                           MLCouplingData<CouplingOutput> coupling_output,
                           MLCouplingNormalization<LibraryInput, CouplingOutput>* normalization = nullptr)
@@ -42,6 +65,14 @@ public:
     {
     }
 
+    /**
+     * @brief Constructs an application with 4 distinct buffers.
+     * @param coupling_input Simulation input container.
+     * @param library_input ML input container.
+     * @param library_output ML output container.
+     * @param coupling_output Simulation output container.
+     * @param normalization Optional pointer to normalization scaler.
+     */
     MLCouplingApplication(MLCouplingData<CouplingInput> coupling_input,
                           MLCouplingData<LibraryInput> library_input,
                           MLCouplingData<LibraryOutput> library_output,
@@ -66,6 +97,16 @@ public:
         }
     }
 
+    /**
+     * @brief Executes a single ML step if scheduled by @p behavior.
+     *
+     * Prepares library inputs, runs model inference, finalizes coupling outputs,
+     * and returns the timestep delta.
+     *
+     * @param library ML inference provider.
+     * @param behavior Stepping decision controller.
+     * @return Timestep delta to advance (0 if inference did not run).
+     */
     virtual int ml_step(MLCouplingLibrary<LibraryInput, LibraryOutput>& library,
                         MLCouplingBehavior& behavior)
     {

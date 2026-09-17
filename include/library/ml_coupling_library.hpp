@@ -22,27 +22,56 @@
 #endif
 #endif
 
+/**
+ * @file ml_coupling_library.hpp
+ * @brief Base class and tiered staging system for ML inference providers.
+ */
 
+/**
+ * @brief Strategy used to merge multiple staged input tensors across ranks or time steps.
+ * @ingroup cpp_library
+ */
 enum class MLCouplingMergeStrategy {
-    List,
-    Stack,
-    Auto,
-    None
+    List,  /**< Concatenate tensors per batch item along feature dimension. */
+    Stack, /**< Interleave tensors across an added dimension. */
+    Auto,  /**< Automatically select best strategy based on tensor shape compatibility. */
+    None   /**< Do not merge (single tensor expected). */
 };
 
+/**
+ * @brief Base abstraction for Machine Learning inference and training providers.
+ *
+ * Implements a three-tier architecture:
+ * - **Tier 0 (Static)**: Direct synchronous execution on input/output `MLCouplingData` buffers.
+ * - **Tier 1 (Ordered Flexible)**: Staging inputs and targets by sequence index with automatic merging fallback.
+ * - **Tier 2 (Keyed Flexible)**: Staging inputs and targets by string key with order-independent routing.
+ *
+ * Concrete implementations include PhyDLL, SmartSim, AIxelerator, Dummy, and Generic.
+ *
+ * @tparam LibraryInput Primitive scalar type of input features.
+ * @tparam LibraryOutput Primitive scalar type of output features.
+ * @ingroup cpp_library
+ */
 // @category: library
 template <typename LibraryInput, typename LibraryOutput>
 class MLCouplingLibrary
 {
 public:
-    MLCouplingMergeStrategy merge_strategy = MLCouplingMergeStrategy::Auto;
+    MLCouplingMergeStrategy merge_strategy = MLCouplingMergeStrategy::Auto; /**< Strategy for merging flexible inputs. */
 
+    /**
+     * @brief Sets the merge strategy for tiered flexible inference.
+     * @param strategy Merge strategy enum.
+     */
     void set_merge_strategy(MLCouplingMergeStrategy strategy) {
         merge_strategy = strategy;
     }
 
-    int rank = 0;
+    int rank = 0; /**< MPI rank of the current process. */
 
+    /**
+     * @brief Constructs library and attempts to auto-detect MPI rank.
+     */
     MLCouplingLibrary()
     {
 #ifdef MLCOUPLING_PROVIDER_HAS_MPI
@@ -56,8 +85,10 @@ public:
 #endif
     }
 
-    // Manually set the rank if needed, for example if MPI is initialized after the provider is created, or if we use something other than MPI for parallelism
-
+    /**
+     * @brief Constructs library with an explicit process rank.
+     * @param rank Process rank integer.
+     */
     MLCouplingLibrary(int rank)
     {
         this->rank = rank;
@@ -65,16 +96,30 @@ public:
 
     virtual ~MLCouplingLibrary() = default;
 
+    /**
+     * @brief Sets process rank explicitly.
+     * @param rank Process rank integer.
+     */
     void set_rank(int rank)
     {
         this->rank = rank;
     }
 
     // --- Tier 0: Static (Mandatory) ---
-    // Perform inference with the ML model and get the output data
+    /**
+     * @brief Executes synchronous model inference (Tier 0).
+     * @param input Container holding input feature tensors.
+     * @param output Container populated with output inference tensors.
+     */
     virtual void static_inference(MLCouplingData<LibraryInput> *input,
                                   MLCouplingData<LibraryOutput> *output) = 0;
 
+    /**
+     * @brief Executes synchronous model training (Tier 0).
+     * @param input Training inputs.
+     * @param target Ground-truth targets.
+     * @return Map of training metric names to metric values.
+     */
     virtual std::map<std::string, double> static_train(MLCouplingData<LibraryInput> *input,
                                                         MLCouplingData<LibraryOutput> *target)
     {

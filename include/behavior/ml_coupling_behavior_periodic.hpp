@@ -23,6 +23,7 @@ public:
      * @param coupled_steps_before_inference Number of coupled steps to perform before each inference.
      * @param coupled_steps_stride Stride (step size) for coupled steps between inferences.
      * @param step_increment_after_inference Step increment to apply after each inference operation.
+     * @param prohibit_inference Optional predicate returning true if inference is prohibited at a given step.
      */
     MLCouplingBehaviorPeriodic(
         int inference_interval,

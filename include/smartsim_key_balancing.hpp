@@ -7,10 +7,20 @@
 #include <string_view>
 #include <vector>
 
+/**
+ * @file smartsim_key_balancing.hpp
+ * @brief Hash slot calculation and key distribution balancing for clustered SmartSim Redis backends.
+ */
+
 namespace mlcoupling::smartsim_key_balancing {
 
 constexpr std::uint16_t redis_slot_count = 16384;
 
+/**
+ * @brief Computes CRC16-XMODEM checksum for Redis hash tags.
+ * @param value String slice to hash.
+ * @return 16-bit CRC checksum.
+ */
 inline std::uint16_t crc16_xmodem(std::string_view value)
 {
     std::uint16_t crc = 0;
@@ -25,17 +35,34 @@ inline std::uint16_t crc16_xmodem(std::string_view value)
     return crc;
 }
 
+/**
+ * @brief Computes Redis cluster hash slot for a given key or hash tag.
+ * @param tag Key or hash tag.
+ * @return Slot index in range [0, 16383].
+ */
 inline std::uint16_t redis_hash_slot(std::string_view tag)
 {
     return static_cast<std::uint16_t>(crc16_xmodem(tag) % redis_slot_count);
 }
 
+/**
+ * @brief Checks whether balanced keys are enabled via `SMARTSIM_BALANCED_KEYS=1`.
+ * @return True if enabled in environment.
+ */
 inline bool enabled_from_environment()
 {
     const char* value = std::getenv("SMARTSIM_BALANCED_KEYS");
     return value != nullptr && std::string_view(value) == "1";
 }
 
+/**
+ * @brief Balances tensor keys uniformly across clustered Redis database nodes.
+ *
+ * Appends `{tag}` prefixes to keys to guarantee that data and execution requests
+ * target the optimal database node, avoiding communication bottlenecks.
+ *
+ * @ingroup cpp_config
+ */
 // Redis Cluster assigns an initially balanced cluster contiguous, equally sized
 // slot ranges. Query CLUSTER SLOTS when a cluster has been resharded.
 class RedisKeyBalancer

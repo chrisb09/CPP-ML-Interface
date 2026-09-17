@@ -10,27 +10,43 @@
 #include "sr_enums.h"
 #endif
 
+/**
+ * @file ml_coupling_data_type.hpp
+ * @brief Primitive scalar type enumerations, traits, and conversions.
+ */
 
-
+/**
+ * @brief Supported primitive scalar types for tensors.
+ * @ingroup cpp_core
+ */
 typedef enum
 {
-    MLCouplingDataTypeInvalid = 0, // Invalid or uninitialized tensor type
-    MLCouplingDataTypeDouble = 1,  // Double-precision floating point tensor type
-    MLCouplingDataTypeFloat = 2,   // Floating point tensor type
-    MLCouplingDataTypeInt8 = 3,    // 8-bit signed integer tensor type
-    MLCouplingDataTypeInt16 = 4,   // 16-bit signed integer tensor type
-    MLCouplingDataTypeInt32 = 5,   // 32-bit signed integer tensor type
-    MLCouplingDataTypeInt64 = 6,   // 64-bit signed integer tensor type
-    MLCouplingDataTypeUint8 = 7,   // 8-bit unsigned integer tensor type
-    MLCouplingDataTypeUint16 = 8   // 16-bit unsigned integer tensor type
+    MLCouplingDataTypeInvalid = 0, /**< Invalid or uninitialized tensor type */
+    MLCouplingDataTypeDouble = 1,  /**< Double-precision floating point tensor type */
+    MLCouplingDataTypeFloat = 2,   /**< Floating point tensor type */
+    MLCouplingDataTypeInt8 = 3,    /**< 8-bit signed integer tensor type */
+    MLCouplingDataTypeInt16 = 4,   /**< 16-bit signed integer tensor type */
+    MLCouplingDataTypeInt32 = 5,   /**< 32-bit signed integer tensor type */
+    MLCouplingDataTypeInt64 = 6,   /**< 64-bit signed integer tensor type */
+    MLCouplingDataTypeUint8 = 7,   /**< 8-bit unsigned integer tensor type */
+    MLCouplingDataTypeUint16 = 8   /**< 16-bit unsigned integer tensor type */
 } MLCouplingDataType;
 
+/**
+ * @brief Primitive scalar types exposed in C API dispatch (float and double).
+ * @ingroup cpp_core
+ */
 typedef enum
 {
-    MLCouplingCAPIDataTypeDouble = 1, // Double-precision floating point tensor type
-    MLCouplingCAPIDataTypeFloat = 2,  // Floating point tensor type
-} MLCouplingCAPIDataType; // To prevent excessive compile times, we limit the types that are exposed in the C API, as due to the template-based design, we have to otherwise create n*n combinations of input/output types, where n is the number of supported types. So going from 8 to 2 types reduces the combinations from 64 to 4.
+    MLCouplingCAPIDataTypeDouble = 1, /**< Double-precision floating point tensor type */
+    MLCouplingCAPIDataTypeFloat = 2,  /**< Floating point tensor type */
+} MLCouplingCAPIDataType;
 
+/**
+ * @brief Converts an MLCouplingDataType enum to a human-readable string.
+ * @param type Data type enum.
+ * @return Static string constant describing the type.
+ */
 inline constexpr const char *to_string(MLCouplingDataType type)
 {
     switch (type)

@@ -1,5 +1,10 @@
 #pragma once
 
+/**
+ * @file config.hpp
+ * @brief TOML configuration parser and dynamic factory orchestrator for MLCoupling.
+ */
+
 // This file is supposed to provide the definitions for the functions
 // that allow us to read a configuration string (potentially from a file, but
 // not necessarily) and set up the MLCoupling instance accordingly.

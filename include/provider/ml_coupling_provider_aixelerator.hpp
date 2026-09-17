@@ -24,6 +24,21 @@
 #include <scorep/SCOREP_User.h>
 #endif
 
+/**
+ * @file ml_coupling_provider_aixelerator.hpp
+ * @brief Accelerated AIxelerator inference provider supporting ONNX, TensorRT, and Torch.
+ */
+
+/**
+ * @brief High-throughput distributed inference provider utilizing AIxeleratorService.
+ *
+ * Implements GPU-accelerated and hybrid CPU/GPU inference with batching, pipelining,
+ * and MPI rank aggregation across nodes.
+ *
+ * @tparam In Input feature scalar type (float or double).
+ * @tparam Out Output prediction scalar type (float or double).
+ * @ingroup cpp_library
+ */
 // @registry_name: Aixelerator
 // @registry_aliases: aixelerator, AIxelerator, aix, AIx, AIX
 template <typename In, typename Out>

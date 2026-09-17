@@ -5,11 +5,38 @@
 
 #include "ml_coupling_behavior.hpp"
 
+/**
+ * @file ml_coupling_behavior_flow_extrapolator.hpp
+ * @brief Behavior scheduling for multi-step flow field extrapolation.
+ */
+
+/**
+ * @brief Complex stepping behavior coordinating history accumulation and forecast leap-frogging.
+ *
+ * Designed for extrapolation tasks where the simulation must provide multiple consecutive
+ * historical snapshots before triggering a forecasting model, and then advances the simulation
+ * clock forward by the forecast horizon.
+ *
+ * @ingroup cpp_behavior
+ */
 // @registry_name: FlowExtrapolatorBehavior
 // @registry_aliases: flow-extrapolator-behavior, maia-flow-extrapolator-behavior
 class MLCouplingBehaviorFlowExtrapolator : public MLCouplingBehavior
 {
 public:
+    /**
+     * @brief Constructs flow extrapolator behavior.
+     * @param inference_interval Steps between inference cycles.
+     * @param coupled_steps_before_inference History steps collected prior to inference.
+     * @param step_increment_after_inference Simulation steps jumped forward after inference.
+     * @param hdf_output_interval Output frequency to avoid colliding with inference intervals.
+     * @param total_timesteps Total planned simulation timesteps.
+     * @param scaling_factor Distance scaling factor.
+     * @param forecast_window Forecast length in steps.
+     * @param input_step_distance Distance between consecutive input snapshots.
+     * @param inference_start_step First simulation step where inference is permitted.
+     * @param global_step_offset Global timestep offset.
+     */
     MLCouplingBehaviorFlowExtrapolator(
         int inference_interval,
         int coupled_steps_before_inference,

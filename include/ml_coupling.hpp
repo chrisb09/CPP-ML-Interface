@@ -220,6 +220,18 @@ MLCoupling<In, Out> *create_mlcoupling_from_config_file(
     ConfigParameterMatchMode parameter_match_mode,
     const ConfigOverrides &overrides);
 
+/**
+ * @brief Top-level coordinator managing the coupled ML-simulation lifecycle.
+ *
+ * Provides the primary developer-facing interface for static and flexible tiered
+ * inference, key-ordered routing, in-situ training, and Score-P manual profiling.
+ *
+ * @tparam CouplingInput Simulation input data type.
+ * @tparam CouplingOutput Simulation output data type.
+ * @tparam LibraryInput ML model input data type.
+ * @tparam LibraryOutput ML model output data type.
+ * @ingroup cpp_core
+ */
 template <typename CouplingInput,
           typename CouplingOutput,
           typename LibraryInput,

@@ -9,16 +9,28 @@
 #include <mpi.h>
 #endif
 
+/**
+ * @file logging.hpp
+ * @brief Thread-safe, MPI-aware logging utilities for CPP-ML-Interface.
+ */
+
+/**
+ * @brief Logging namespace providing severity levels, prefixes, and output routing.
+ * @ingroup cpp_config
+ */
 namespace logging
 {
 
+    /**
+     * @brief Logging severity levels.
+     */
     enum class Level
     {
-        NONE,
-        DEBUG,
-        INFO,
-        WARNING,
-        ERROR
+        NONE,    /**< Disable logging output. */
+        DEBUG,   /**< Verbose debug information. */
+        INFO,    /**< General progress notifications. */
+        WARNING, /**< Recoverable anomalies or performance warnings. */
+        ERROR    /**< Serious runtime failures. */
     };
 
     inline Level GLOBAL_LEVEL = Level::INFO;

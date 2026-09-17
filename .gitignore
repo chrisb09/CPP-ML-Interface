@@ -1,6 +1,8 @@
 .*
 !.gitignore
 !*/.gitignore
+!.github
+!.github/**
 /build*
 /BUILD*
 __pycache__
@@ -47,3 +49,8 @@ scorep-measurement-*/
 
 # Local dependency symlinks
 extern/AIxeleratorService-pipelined
+
+# Generated documentation
+/docs/html/
+/docs/latex/
+/docs/xml/

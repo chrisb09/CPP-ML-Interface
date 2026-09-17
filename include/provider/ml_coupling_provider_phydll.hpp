@@ -38,6 +38,22 @@ extern "C"
 }
 #endif
 
+/**
+ * @file ml_coupling_provider_phydll.hpp
+ * @brief In-situ / in-transit MPMD inference provider via PhyDLL.
+ */
+
+/**
+ * @brief High-performance MPMD inference provider coupling physics solvers to Python/Torch clients.
+ *
+ * Transfers field data between physics ranks and dedicated DL processes via MPI-based
+ * point-to-point or collective communication channels. Supports both `packed` and
+ * `uniform_chunks` wire transport layouts.
+ *
+ * @tparam In Input feature scalar type.
+ * @tparam Out Output prediction scalar type.
+ * @ingroup cpp_library
+ */
 // @registry_name: Phydll
 // @registry_aliases: phydll, PhyDLL
 template <typename In, typename Out>

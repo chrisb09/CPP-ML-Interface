@@ -18,6 +18,24 @@
 #include <scorep/SCOREP_User.h>
 #endif
 
+/**
+ * @file ml_coupling_application_flow_extrapolator.hpp
+ * @brief Application decomposing unstructured fluid flow fields into 3D sub-cubes for neural networks.
+ */
+
+/**
+ * @brief Application pipeline decomposing fluid flow fields into overlapping 3D sub-cubes.
+ *
+ * Slices 3D unstructured fluid simulation fields (e.g. from m-AIA) into cubical tensor
+ * sub-volumes with configurable halo/overlap padding, feeds them to spatial-temporal
+ * extrapolation networks, and reconstructs predicted fields back into the simulation mesh.
+ *
+ * @tparam CouplingInput Simulation input scalar type.
+ * @tparam CouplingOutput Simulation output scalar type.
+ * @tparam LibraryInput Model input scalar type.
+ * @tparam LibraryOutput Model output scalar type.
+ * @ingroup cpp_application
+ */
 // @registry_name: MLCouplingApplicationFlowExtrapolator
 // @registry_aliases: flow-extrapolator, flow_extrapolator, maia-flow-extrapolator
 // @registry_description: Preprocesses three raw flow fields into cube-based model tensors and reconstructs model output back into the raw fields.
@@ -29,6 +47,17 @@ class MLCouplingApplicationFlowExtrapolator
     : public MLCouplingApplication<CouplingInput, CouplingOutput, LibraryInput, LibraryOutput>
 {
 public:
+    /**
+     * @brief Constructs flow extrapolator application with automatic buffer allocation.
+     * @param coupling_input Simulation input fields container.
+     * @param coupling_output Simulation output fields container.
+     * @param normalization Optional pointer to normalization scaler.
+     * @param cube_dimension Edge length of each spatial sub-cube in grid cells.
+     * @param cube_overlap Overlap between adjacent sub-cubes.
+     * @param input_sequence_length Number of past time snapshots required as input.
+     * @param forecast_window Number of future time steps predicted by the model.
+     * @param n_ghost_layers Number of boundary ghost layers to omit.
+     */
     MLCouplingApplicationFlowExtrapolator(MLCouplingData<CouplingInput> coupling_input,
                                           MLCouplingData<CouplingOutput> coupling_output,
                                           MLCouplingNormalization<LibraryInput, CouplingOutput> *normalization = nullptr,

@@ -5,7 +5,7 @@ physics solver ranks and the DL client. The layout is selected per solver via
 the TOML `[provider]` option `transport_layout`.
 
 - `auto` (default): automatically selects `uniform_chunks` when input and output
-  shapes have a valid positive $\gcd$ deriving field counts $\le 4096$; otherwise
+  shapes have a valid positive GCD deriving field counts <= 4096; otherwise
   safely falls back to `packed`.
 - `uniform_chunks`: forces the many-fields transport that removes response padding when
   the input and output sizes differ strongly (e.g. `[B,18] -> [B]`).

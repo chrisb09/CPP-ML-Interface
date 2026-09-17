@@ -910,6 +910,34 @@ def write_class_hierarchy_functions(f, base_classes, found_classes):
     f.write("}\n\n")
 
 
+def write_c_api_introspection(f, base_classes, base_class_categories, found_classes):
+    """Generate C API introspection helper functions."""
+    f.write("// C API introspection helpers\n")
+    f.write("inline int cmi_registry_get_class_count(const std::string& category) {\n")
+    f.write("    std::string base = resolve_category_to_base_class(category);\n")
+    f.write("    return static_cast<int>(get_subclasses(base).size());\n")
+    f.write("}\n\n")
+
+    f.write("inline std::string cmi_registry_get_class_name(const std::string& category, int index) {\n")
+    f.write("    std::string base = resolve_category_to_base_class(category);\n")
+    f.write("    auto subs = get_subclasses(base);\n")
+    f.write("    if (index >= 0 && static_cast<size_t>(index) < subs.size()) {\n")
+    f.write("        return subs[index];\n")
+    f.write("    }\n")
+    f.write("    return \"\";\n")
+    f.write("}\n\n")
+
+    f.write("inline bool cmi_registry_is_class_registered(const std::string& category, const std::string& name) {\n")
+    f.write("    std::string base = resolve_category_to_base_class(category);\n")
+    f.write("    std::string resolved = resolve_class_name(name);\n")
+    f.write("    auto subs = get_subclasses(base);\n")
+    f.write("    for (const auto& s : subs) {\n")
+    f.write("        if (s == resolved || s == name) return true;\n")
+    f.write("    }\n")
+    f.write("    return false;\n")
+    f.write("}\n\n")
+
+
 def _get_template_strings(base_class, template_params):
     """Get template declaration and argument strings."""
     if not template_params:
@@ -1499,6 +1527,7 @@ def generate():
         write_constructor_signatures(f, base_classes, found_classes, subclass_constructors)
         write_print_constructor_help(f)
         write_class_hierarchy_functions(f, base_classes, found_classes)
+        write_c_api_introspection(f, base_classes, base_class_categories, found_classes)
         write_type_identification_functions(f, base_classes, template_parameters, found_classes)
         write_config_param_cast_helper(f)
         write_factory_functions(f, base_classes, template_parameters, base_class_categories,

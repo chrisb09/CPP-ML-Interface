@@ -8,6 +8,21 @@
 
 #include <limits>
 
+/**
+ * @file ml_coupling_minmax_normalization.hpp
+ * @brief Min-Max linear feature normalization component.
+ */
+
+/**
+ * @brief Normalization component that linearly scales inputs to [0, 1] and restores outputs.
+ *
+ * Scales input features using: `x_norm = (x - x_min) / (x_max - x_min)`
+ * and unscales predictions using: `y = y_norm * (y_max - y_min) + y_min`.
+ *
+ * @tparam In Input feature arithmetic type.
+ * @tparam Out Output feature arithmetic type.
+ * @ingroup cpp_normalization
+ */
 // @registry_name: MinMax
 // @registry_aliases: minmax, min-max, MinMaxNormalization
 // template <typename In, typename Out>
@@ -16,6 +31,13 @@ template <typename In, typename Out,
 class MLCouplingMinMaxNormalization : public MLCouplingNormalization<In, Out>
 {
 public:
+    /**
+     * @brief Constructs MinMax normalization from explicit scalar min/max bounds.
+     * @param input_min Minimum input value.
+     * @param input_max Maximum input value.
+     * @param output_min Minimum output value.
+     * @param output_max Maximum output value.
+     */
     MLCouplingMinMaxNormalization(In input_min, In input_max, Out output_min, Out output_max)
         : input_min(input_min), input_max(input_max),
           output_min(output_min), output_max(output_max) {}
