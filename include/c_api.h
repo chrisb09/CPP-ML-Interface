@@ -822,7 +822,7 @@ int cmi_application_create_generic(cmi_application_t* out,
  * @brief Instantiates an application component by name via the code-generated factory.
  *
  * @param[out] out Receives the created application handle.
- * @param[in]  name Registered application class name or alias (e.g. "TurbulenceClosure").
+ * @param[in]  name Registered application class name or alias (e.g. "flow-extrapolator").
  * @param[in]  coupling_in_type Coupling input type.
  * @param[in]  coupling_out_type Coupling output type.
  * @param[in]  library_in_type Library input type.

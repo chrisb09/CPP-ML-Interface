@@ -75,4 +75,3 @@ Instead of creating derived classes for simple use cases or non-C++ languages, y
 2. **AIxelerator Single-Tensor Limitation**: @ref MLCouplingLibraryAixelerator currently binds only the first tensor (`[0]`) in an @ref MLCouplingData container. Any additional tensors are ignored.
 3. **Contiguous Buffers Required**: All underlying inference providers require flat contiguous buffers (@ref CMI_LAYOUT_CONTIGUOUS or @ref CMI_LAYOUT_FORTRAN_CONTIGUOUS). Nested pointer trees (@ref CMI_LAYOUT_NESTED) must be converted using @ref MLCouplingTensor::flatten() prior to provider calls.
 4. **C and Fortran Type Dispatch**: The C and Fortran interfaces support single-precision (`float` / `CMI_DTYPE_FLOAT`) and double-precision (`double` / `CMI_DTYPE_DOUBLE`) scalars.
-5. **Turbulence Closure Application**: @ref MLCouplingApplicationTurbulenceClosure is currently a skeletal placeholder; custom domain transformations should be implemented using @ref MLCouplingApplicationGeneric.

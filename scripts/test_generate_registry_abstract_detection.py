@@ -54,7 +54,7 @@ class TestAbstractDetection(unittest.TestCase):
             ("include/behavior/ml_coupling_behavior.hpp", "MLCouplingBehavior", True),
             ("include/behavior/ml_coupling_behavior_default.hpp", "MLCouplingBehaviorDefault", False),
             ("include/application/ml_coupling_application.hpp", "MLCouplingApplication", False),
-            ("include/application/ml_coupling_application_turbulence_closure.hpp", "MLCouplingApplicationTurbulenceClosure", False),
+            ("include/application/ml_coupling_application_flow_extrapolator.hpp", "MLCouplingApplicationFlowExtrapolator", False),
         ]
 
         mismatches = []
