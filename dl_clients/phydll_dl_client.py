@@ -236,14 +236,10 @@ def main():
     dll = None
     world_comm = MPI.COMM_WORLD
     try:
-        # Configure Torch threading
+        # Thread settings were applied after importing Torch above; inter-op
+        # threads cannot be configured a second time.
         intra_threads = int(os.environ.get("MLCOUPLING_INTRA_OP_THREADS", os.environ.get("SLURM_CPUS_PER_TASK", "-1")))
         inter_threads = int(os.environ.get("MLCOUPLING_INTER_OP_THREADS", "-1"))
-
-        if intra_threads > 0:
-            torch.set_num_threads(intra_threads)
-        if inter_threads > 0:
-            torch.set_num_interop_threads(inter_threads)
 
         dl_count = int(os.environ.get("PHYDLL_DL_FIELD_COUNT", os.environ.get("PHYDLL_DL_COUNT", "1")))
         
