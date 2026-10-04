@@ -7,8 +7,8 @@
 	branch = develop
 [submodule "extern/phydll"]
 	path = extern/phydll
-	url = https://gitlab.com/cerfacs/phydll.git
-	branch = release/0.2
+	url = git@github.com:chrisb09/phydll.git
+	branch = fix/diagnostic-instrumentation
 [submodule "extern/papi"]
 	path = extern/papi
 	url = https://github.com/icl-utk-edu/papi.git
