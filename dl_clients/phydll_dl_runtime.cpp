@@ -75,6 +75,7 @@ void DlRuntime::initialize() {
     std::fprintf(stderr, "[PHYDLL:DL] runtime before phydll_init\n");
     std::fflush(stderr);
     phydll_init(const_cast<char*>("dl"));
+    MPI_Comm_dup(MPI_COMM_WORLD, &control_comm_);
     std::fprintf(stderr, "[PHYDLL:DL] runtime after phydll_init\n");
     std::fflush(stderr);
     std::fprintf(stderr, "[PHYDLL:DL] runtime before phydll_define_dl count=%d\n", dl_count_);
@@ -169,7 +170,17 @@ void DlRuntime::send_output(const std::vector<double>& output) {
         phydll_set_field(&output_ptrs_[i], out_label);
     }
     
+    std::vector<MPI_Request> readiness_requests;
+    if (solver_readiness_wait_) {
+        readiness_requests.resize(source_count_, MPI_REQUEST_NULL);
+        for (int i = 0; i < source_count_; ++i)
+            MPI_Isend(&frame_id_, 1, MPI_UINT64_T, phydll_get_dest()[i], 0,
+                      control_comm_, &readiness_requests[i]);
+    }
     phydll_send();
+    if (!readiness_requests.empty())
+        MPI_Waitall(source_count_, readiness_requests.data(), MPI_STATUSES_IGNORE);
+    ++frame_id_;
 
     // The first response completes the initialization frame.
     detailed_profile_enabled_ = true;
@@ -179,6 +190,10 @@ void DlRuntime::send_output(const std::vector<double>& output) {
         SCOREP_USER_REGION_END(handle_dl_send);
     }
     #endif
+}
+
+void DlRuntime::free_control_comm() {
+    if (control_comm_ != MPI_COMM_NULL) MPI_Comm_free(&control_comm_);
 }
 
 void DlRuntime::receive_fields() {

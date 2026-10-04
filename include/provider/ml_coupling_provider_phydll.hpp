@@ -1,6 +1,7 @@
 #pragma once
 
 #include "../library/ml_coupling_library.hpp"
+#include "../tool.h"
 #include "../scorep_profiling_state.hpp"
 #include "../data/ml_coupling_data_type.hpp"
 #include "../data/ml_coupling_memory_layout.hpp"
@@ -13,6 +14,12 @@
 #include <numeric>
 #include <string>
 #include <vector>
+#include <chrono>
+#include <thread>
+#include <cstdint>
+#ifdef FORWARD_CPU_DIAGNOSTIC
+#include "forward_cpu_diagnostic.hpp"
+#endif
 
 #ifndef MPICH_SKIP_MPICXX
 #define MPICH_SKIP_MPICXX
@@ -61,17 +68,21 @@ class MLCouplingLibraryPhydll : public MLCouplingLibrary<In, Out>
 {
 
 public:
+    // Opt-in readiness polling sleeps for 100 us between MPI_Test calls. It has
+    // no inference deadline and always completes the payload receive afterward.
     MLCouplingLibraryPhydll(std::string model_file,
                              std::string backend = "TORCH",
                              std::string device = "GPU",
                              int batch_size = 0,
                              std::string transport_layout = "auto",
-                             MLCouplingData<In> *input_after_preprocessing = nullptr,
-                             MLCouplingData<Out> *output_before_postprocessing = nullptr)
+                              MLCouplingData<In> *input_after_preprocessing = nullptr,
+                              MLCouplingData<Out> *output_before_postprocessing = nullptr,
+                              bool solver_readiness_wait = false)
                 : model_file(std::move(model_file)),
                     backend(std::move(backend)),
                     device(std::move(device)),
                     batch_size(batch_size),
+                    solver_readiness_wait_(solver_readiness_wait),
                     input_after_preprocessing(input_after_preprocessing),
                     output_before_postprocessing(output_before_postprocessing)
     {
@@ -108,6 +119,7 @@ public:
         if (phydll_initialized_)
         {
             phydll_finalize();
+            MPI_Comm_free(&control_comm_);
         }
 #endif
     }
@@ -128,6 +140,7 @@ public:
         SCOREP_USER_REGION_DEFINE(handle_phydll_prepack)
          SCOREP_USER_REGION_DEFINE(handle_phydll_send)
          SCOREP_USER_REGION_DEFINE(handle_phydll_recv)
+         SCOREP_USER_REGION_DEFINE(handle_phydll_readiness_wait)
          SCOREP_USER_REGION_DEFINE(handle_phydll_unpack)
          SCOREP_USER_REGION_DEFINE(handle_phydll_library_static_step)
         SCOREP_USER_METRIC_LOCAL(bytes_sent_logical);
@@ -203,6 +216,17 @@ public:
             char data_label[] = "PHY-DATA";
             phydll_set_field(&data_ptr, data_label);
         }
+        std::vector<uint64_t> readiness_tokens;
+        std::vector<MPI_Request> readiness_requests;
+        if (solver_readiness_wait_)
+        {
+            const int count = phydll_get_ndest();
+            readiness_tokens.resize(count);
+            readiness_requests.resize(count, MPI_REQUEST_NULL);
+            for (int i = 0; i < count; ++i)
+                MPI_Irecv(&readiness_tokens[i], 1, MPI_UINT64_T, phydll_get_dest()[i],
+                          0, control_comm_, &readiness_requests[i]);
+        }
         phydll_send();
 #ifdef USE_SCOREP
         if (profile_details) {
@@ -212,7 +236,55 @@ public:
         }
 #endif
 
-        phydll_recv();
+#ifdef FORWARD_CPU_DIAGNOSTIC
+        forward_cpu_diagnostic::buffer();
+        const auto wait_start = forward_cpu_diagnostic::Stamp::now();
+#endif
+        if (solver_readiness_wait_)
+        {
+            // Posting before send would reset the PHY field registration counters.
+            phydll_irecv();
+#ifdef USE_SCOREP
+            if (profile_details) {
+                SCOREP_USER_REGION_BEGIN(handle_phydll_readiness_wait, "phydll_readiness_wait", SCOREP_USER_REGION_TYPE_COMMON)
+            }
+#endif
+            bool pending;
+            do {
+                pending = false;
+                for (size_t i = 0; i < readiness_requests.size(); ++i) {
+                    if (readiness_requests[i] == MPI_REQUEST_NULL) continue;
+                    int ready = 0;
+                    MPI_Status status;
+                    MPI_Test(&readiness_requests[i], &ready, &status);
+                    if (ready) {
+                        int count = 0;
+                        MPI_Get_count(&status, MPI_UINT64_T, &count);
+                        if (count != 1 || readiness_tokens[i] != frame_id_) {
+                            std::cerr << "PhyDLL readiness sequence mismatch" << std::endl;
+                            MPI_Abort(control_comm_, 1);
+                        }
+                    } else pending = true;
+                }
+                if (pending) std::this_thread::sleep_for(std::chrono::microseconds(100));
+            } while (pending);
+#ifdef USE_SCOREP
+            if (profile_details) {
+                SCOREP_USER_REGION_END(handle_phydll_readiness_wait)
+            }
+#endif
+            // A readiness token is not payload completion (including labels).
+            phydll_wait_irecv();
+        }
+        else
+        {
+            phydll_recv();
+        }
+        ++frame_id_;
+#ifdef FORWARD_CPU_DIAGNOSTIC
+        forward_cpu_diagnostic::record("solver_recv", wait_start,
+            forward_cpu_diagnostic::Stamp::now());
+#endif
 
         if (transport_layout_ == TransportLayout::UniformChunks)
         {
@@ -304,13 +376,18 @@ private:
     static constexpr int kMetaVersion = 1;
     static constexpr int kHeaderFixedCount = 14;
     static constexpr int kBcastMetaMagic = 0x4D4C434D; // "MLCM"
-    static constexpr int kBcastMetaVersion = 3;
+    static constexpr int kBcastMetaVersion = 4;
     static constexpr int kMaxFieldCount = 4096;
 
     std::string model_file;
     std::string backend;
     std::string device;
     int batch_size = 0;
+    bool solver_readiness_wait_ = false;
+    uint64_t frame_id_ = 0;
+#ifdef WITH_PHYDLL
+    MPI_Comm control_comm_ = MPI_COMM_NULL;
+#endif
 
     TransportLayoutConfig layout_config_ = TransportLayoutConfig::Auto;
     TransportLayout transport_layout_ = TransportLayout::Packed;
@@ -353,10 +430,13 @@ private:
         int32_t layout_kind = 0;
         int32_t phy_count = 0;
         int32_t dl_count = 0;
+        int32_t solver_readiness_wait = 0;
         int64_t field_size = 0;
     };
     static_assert(sizeof(BcastMetaHeader) == 88,
                   "BcastMetaHeader size must be exactly 88 bytes to match dl_client wire protocol");
+    static_assert(offsetof(BcastMetaHeader, solver_readiness_wait) == 76,
+                  "Readiness flag wire offset must be 76");
 
     std::vector<int64_t> input_dims_;
     std::vector<int64_t> output_dims_;
@@ -424,6 +504,7 @@ private:
         header.phy_count = static_cast<int32_t>(phy_field_count_);
         header.dl_count = static_cast<int32_t>(dl_field_count_);
         header.field_size = static_cast<int64_t>(field_size_);
+        header.solver_readiness_wait = solver_readiness_wait_ ? 1 : 0;
 
         const size_t sizes_bytes = (input_dims_.size() + output_dims_.size()) * sizeof(int64_t);
         payload.resize(static_cast<size_t>(header.model_len + header.backend_len + header.device_len) + sizes_bytes);
@@ -604,6 +685,7 @@ private:
         char mode[] = "physical";
         std::cerr << "[PHYDLL:PHY] before phydll_init" << std::endl;
         phydll_init(mode);
+        MPI_Comm_dup(MPI_COMM_WORLD, &control_comm_);
         std::cerr << "[PHYDLL:PHY] after phydll_init" << std::endl;
         phydll_initialized_ = true;
 #endif

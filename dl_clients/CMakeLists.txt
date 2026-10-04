@@ -69,6 +69,7 @@ find_package(MPI QUIET)
 
 if(MPI_FOUND)
     target_link_libraries(phydll_dl_client PRIVATE MPI::MPI_CXX)
+    target_link_libraries(phydll_dl_runtime PRIVATE MPI::MPI_CXX)
 endif()
 
 # MPMD regression harness: 2 solver ranks + 1 DL rank. Header-only: the PhyDLL
@@ -88,6 +89,26 @@ target_link_directories(phydll_phy_test PRIVATE
 )
 target_link_libraries(phydll_phy_test PRIVATE phydll MPI::MPI_CXX)
 target_compile_definitions(phydll_phy_test PRIVATE WITH_PHYDLL MPI_FOUND)
+set(PHYDLL_TEST_REGISTRY_DIR "" CACHE PATH "Directory containing isolated generated phydll_test_registry.hpp")
+if(PHYDLL_TEST_REGISTRY_DIR)
+    target_include_directories(phydll_phy_test PRIVATE ${PHYDLL_TEST_REGISTRY_DIR})
+    target_compile_definitions(phydll_phy_test PRIVATE PHYDLL_TEST_REGISTRY)
+endif()
+set(PHYDLL_TEST_CONFIG_DIR "" CACHE PATH "Directory containing isolated generated_registry.hpp for full TOML tests")
+set(PHYDLL_TEST_TOML_INCLUDE_DIR "" CACHE PATH "toml++ include directory for full TOML tests")
+if(PHYDLL_TEST_CONFIG_DIR)
+    target_include_directories(phydll_phy_test PRIVATE ${PHYDLL_TEST_CONFIG_DIR} ${PHYDLL_TEST_TOML_INCLUDE_DIR})
+    target_compile_definitions(phydll_phy_test PRIVATE PHYDLL_TEST_CONFIG)
+endif()
+
+option(PHYDLL_TEST_FAULT_CLIENT "Build test-only readiness token fault injector" OFF)
+if(PHYDLL_TEST_FAULT_CLIENT)
+    add_executable(phydll_dl_fault_client
+        dl_client.cpp ../test/phydll_mpmd/readiness_fault.cpp)
+    target_include_directories(phydll_dl_fault_client PRIVATE ${PHYDLL_BUILD_DIR}/include)
+    target_link_directories(phydll_dl_fault_client PRIVATE ${PHYDLL_BUILD_DIR}/lib)
+    target_link_libraries(phydll_dl_fault_client PRIVATE phydll phydll_dl_runtime MPI::MPI_CXX)
+endif()
 
 if(WITH_SCOREP)
     list(APPEND CMAKE_MODULE_PATH "${CPP_MODULE_DIR}/extern/AIxeleratorService/cmake")

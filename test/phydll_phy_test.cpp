@@ -4,11 +4,11 @@
  * MPMD regression harness for the C++ PhyDLL DL client.
  *
  * Each physics (solver) rank wraps deterministic tensors and drives
- * MLCouplingLibraryPhydll directly through two static_inference calls,
+ * MLCouplingLibraryPhydll through repeated static_inference calls,
  * verifying the received outputs numerically after each call.
  *
  * Usage:
- *   phydll_phy_test <mode> <model.pt> <transport_layout> <batch_chunk>
+ *   phydll_phy_test <mode> <model.pt> <transport_layout> <batch_chunk> [default|0|1|mixed] [steps]
  *
  *   mode            18to1 | 1to18
  *   transport_layout  packed | uniform_chunks
@@ -19,9 +19,17 @@
 
 #include <cmath>
 #include <cstdlib>
+#include <cstring>
 #include <iostream>
 #include <string>
 #include <vector>
+#include <memory>
+#include <sstream>
+#ifdef PHYDLL_TEST_CONFIG
+#include "ml_coupling.hpp"
+#elif defined(PHYDLL_TEST_REGISTRY)
+#include "phydll_test_registry.hpp"
+#endif
 
 #include <mpi.h>
 
@@ -39,12 +47,17 @@ std::string g_mode;
 std::string g_model;
 std::string g_layout;
 int g_batch_chunk = 0;
+int g_rank_frame_offset = 0;
 
-int local_batch() { return g_rank == 0 ? 3 : 2; }
+int local_batch() {
+    const char* value = std::getenv("PHYDLL_TEST_LOCAL_BATCH");
+    const int batch = value ? std::max(1, std::atoi(value)) : 2;
+    return batch + (g_rank == 0 ? 1 : 0);
+}
 
 long long feature_offset(int rank, int b) {
     // Deterministic per-rank base so cross-rank values are distinguishable.
-    return 1000LL * rank + b;
+    return 1000LL * rank + b + g_rank_frame_offset;
 }
 
 bool check_sum18(const std::vector<float>& out) {
@@ -144,11 +157,45 @@ int main(int argc, char** argv) {
         MLCouplingMemLayoutContiguous, MLCouplingOwnershipExternal));
 
     try {
-        MLCouplingLibraryPhydll<float, float> provider(g_model, "TORCH", "CPU", g_batch_chunk, g_layout);
+        const std::string readiness = argc > 5 ? argv[5] : "default";
+        bool readiness_wait = readiness == "1" || (readiness == "mixed" && g_rank == 0);
+        const int steps = argc > 6 ? std::atoi(argv[6]) : 8;
+        std::unique_ptr<MLCouplingLibrary<float, float>> provider;
+#ifdef PHYDLL_TEST_CONFIG
+        std::ostringstream config;
+        config << "[library]\nclass = 'Phydll'\nmodel_file = '" << g_model
+               << "'\nbackend = 'TORCH'\ndevice = 'CPU'\nbatch_size = " << g_batch_chunk
+               << "\ntransport_layout = '" << g_layout << "'\n";
+        if (readiness != "default")
+            config << "solver_readiness_wait = " << (readiness_wait ? "true" : "false") << "\n";
+        config << "[application]\nclass = 'MLCouplingApplicationGeneric'\n";
+        std::unique_ptr<MLCoupling<float, float>> coupling(
+            create_mlcoupling_from_config<float, float>(config.str(), in_data, out_data));
+        if (!coupling) MPI_Abort(MPI_COMM_WORLD, 1);
+#elif defined(PHYDLL_TEST_REGISTRY)
+        // Same typed parameter map used by the config and C API factories.
+        std::string backend = "TORCH", device = "CPU";
+        int64_t batch_chunk = g_batch_chunk;
+        std::unordered_map<std::string, std::pair<int, void*>> params = {
+            {"model_file", {3, g_model.data()}}, {"backend", {3, backend.data()}},
+            {"device", {3, device.data()}}, {"batch_size", {1, &batch_chunk}},
+            {"transport_layout", {3, g_layout.data()}}};
+        if (readiness != "default") params["solver_readiness_wait"] = {4, &readiness_wait};
+        provider.reset(create_instance_mlcouplinglibrary<float, float>("Phydll", params));
+        if (!provider) MPI_Abort(MPI_COMM_WORLD, 1);
+#else
+        provider = std::make_unique<MLCouplingLibraryPhydll<float, float>>(
+            g_model, "TORCH", "CPU", g_batch_chunk, g_layout, nullptr, nullptr, readiness_wait);
+#endif
 
-        for (int step = 0; step < 2; ++step) {
+        for (int step = 0; step < steps; ++step) {
+            ml_coupling_scorep::set_detailed_regions_enabled(step > 0);
             std::fill(out_buf.begin(), out_buf.end(), 0.0f);
-            provider.static_inference(&in_data, &out_data);
+#ifdef PHYDLL_TEST_CONFIG
+            coupling->step();
+#else
+            provider->static_inference(&in_data, &out_data);
+#endif
 
             const bool ok = is_18to1 ? check_sum18(out_buf) : check_expand18(out_buf);
             if (!ok) {
@@ -156,6 +203,9 @@ int main(int argc, char** argv) {
             }
             std::cerr << "[PHYDLL:PHY] rank=" << g_rank << " step=" << step
                       << (ok ? " OK" : " MISMATCH") << "\n";
+            // Vary successive frames so stale payloads cannot pass numerically.
+            for (auto& value : in_buf) value += is_18to1 ? 18.0f : 1.0f;
+            ++g_rank_frame_offset;
         }
     } catch (const std::exception& e) {
         std::cerr << "[PHYDLL:PHY] rank=" << g_rank << " provider error: " << e.what() << "\n";
@@ -170,6 +220,9 @@ int main(int argc, char** argv) {
     // which is already tearing down and would never join this collective.
     MPI_Allreduce(&local_fail, &global_fail, 1, MPI_INT, MPI_MAX, solver_app_comm);
     MPI_Comm_free(&solver_app_comm);
+    if (const char* barrier = std::getenv("PHYDLL_MPMD_SHUTDOWN_BARRIER");
+        barrier && std::strcmp(barrier, "1") == 0)
+        MPI_Barrier(MPI_COMM_WORLD);
     MPI_Finalize();
     return global_fail;
 }

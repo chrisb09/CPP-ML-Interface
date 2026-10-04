@@ -41,6 +41,8 @@ test/phydll_mpmd/scorep-failed-*/
 test/phydll_mpmd/core.*
 test/phydll_mpmd/models/*.pt
 phydll_mpmd.conf
+/phydll_mpmd_[0-9]*.conf
+/test/phydll_mpmd/phydll_mpmd_[0-9]*.conf
 
 # Score-P profiling measurements
 scorep-*/

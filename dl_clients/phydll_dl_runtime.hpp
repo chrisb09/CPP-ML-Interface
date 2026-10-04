@@ -60,6 +60,8 @@ public:
     ~DlRuntime();
 
     void initialize();
+    void set_solver_readiness_wait(bool enabled) { solver_readiness_wait_ = enabled; }
+    void free_control_comm();
     bool is_running() const;
 
     Frame receive_frame();
@@ -76,6 +78,9 @@ private:
     int field_size_ = 0;
     bool initialized_ = false;
     bool detailed_profile_enabled_ = false;
+    bool solver_readiness_wait_ = false;
+    uint64_t frame_id_ = 0;
+    MPI_Comm control_comm_ = MPI_COMM_NULL;
 
     std::vector<double> meta_buffer_;
     std::vector<double> data_buffer_;

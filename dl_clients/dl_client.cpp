@@ -6,11 +6,15 @@
 #include <mpi.h>
 
 #include "phydll_dl_runtime.hpp"
+#ifdef FORWARD_CPU_DIAGNOSTIC
+#include "forward_cpu_diagnostic.hpp"
+#include <ATen/Parallel.h>
+#endif
 
 #ifdef PHYDLL_DL_USE_TORCH
 #include <torch/script.h>
 #include <torch/torch.h>
-#if __has_include(<c10/cuda/CUDAStream.h>)
+#if __has_include(<c10/cuda/CUDAStream.h>) && __has_include(<c10/cuda/impl/cuda_cmake_macros.h>)
 #include <c10/cuda/CUDAStream.h>
 #define PHYDLL_HAS_CUDA_STREAM 1
 #endif
@@ -60,8 +64,11 @@ struct BcastMetaHeader
     int32_t layout_kind = 0;   // 0 = packed, 1 = uniform_chunks
     int32_t phy_count = 0;     // fields sent by the source PHY rank
     int32_t dl_count = 0;      // fields the source PHY rank expects back
+    int32_t solver_readiness_wait = 0;
     int64_t field_size = 0;    // per-field per-source size in doubles
 };
+static_assert(sizeof(BcastMetaHeader) == 88, "Metadata wire header must be 88 bytes");
+static_assert(offsetof(BcastMetaHeader, solver_readiness_wait) == 76, "Readiness flag wire offset must be 76");
 
 struct BcastMeta
 {
@@ -78,12 +85,13 @@ struct BcastMeta
     int layout_kind = 0;
     int phy_count = 0;
     int dl_count = 0;
+    bool solver_readiness_wait = false;
 };
 
 BcastMeta receive_p2p_metadata(int source_rank)
 {
     constexpr int kBcastMetaMagic = 0x4D4C434D; // "MLCM"
-    constexpr int kBcastMetaVersion = 3;
+    constexpr int kBcastMetaVersion = 4;
 
     BcastMetaHeader header;
     MPI_Status status;
@@ -94,6 +102,10 @@ BcastMeta receive_p2p_metadata(int source_rank)
     if (header.magic != kBcastMetaMagic || header.version != kBcastMetaVersion)
     {
         return {};
+    }
+    if (header.solver_readiness_wait != 0 && header.solver_readiness_wait != 1) {
+        std::fprintf(stderr, "[PHYDLL:DL] ERROR: invalid solver_readiness_wait flag\n");
+        MPI_Abort(MPI_COMM_WORLD, 1);
     }
 
     const size_t payload_size = static_cast<size_t>(header.model_len + header.backend_len + header.device_len) +
@@ -116,6 +128,7 @@ BcastMeta receive_p2p_metadata(int source_rank)
     meta.layout_kind = header.layout_kind;
     meta.phy_count = header.phy_count;
     meta.dl_count = header.dl_count;
+    meta.solver_readiness_wait = header.solver_readiness_wait != 0;
 
     size_t offset = 0;
     if (header.model_len > 0)
@@ -243,6 +256,11 @@ int main(int argc, char **argv) {
         int source_rank = dests[i];
         std::fprintf(stderr, "[PHYDLL:DL] receiving metadata from dests[%d] = %d\n", i, source_rank); std::fflush(stderr);
         const auto p2p_meta = receive_p2p_metadata(source_rank);
+        if (!p2p_meta.valid || (meta_initialized &&
+            p2p_meta.solver_readiness_wait != final_meta.solver_readiness_wait)) {
+            std::fprintf(stderr, "[PHYDLL:DL] ERROR: invalid metadata or mixed solver_readiness_wait flags across coupled ranks\n");
+            MPI_Abort(MPI_COMM_WORLD, 1);
+        }
         if (p2p_meta.valid)
         {
             if (!meta_initialized)
@@ -265,6 +283,7 @@ int main(int argc, char **argv) {
         }
     }
     std::fprintf(stderr, "[PHYDLL:DL] Finished receiving metadata from all %d sources\n", ndest); std::fflush(stderr);
+    runtime.set_solver_readiness_wait(final_meta.solver_readiness_wait);
 
     const bool uniform_chunks = rank_layout_kind[0] == 1;
     for (int i = 0; i < ndest; ++i)
@@ -301,11 +320,15 @@ int main(int argc, char **argv) {
     }
     std::uint64_t frame_id = 0;
     while (runtime.is_running()) {
+#ifndef FORWARD_CPU_DIAGNOSTIC
         std::fprintf(stderr, "[PHYDLL:DL] Waiting for frame %llu\n", (unsigned long long)frame_id); std::fflush(stderr);
+#endif
         const auto frame = runtime.receive_frame();
+#ifndef FORWARD_CPU_DIAGNOSTIC
         std::fprintf(stderr, "[PHYDLL:DL] Received frame %llu (has_meta=%d, data_size=%zu)\n", 
                      (unsigned long long)frame_id, frame.has_meta, frame.data.size()); 
         std::fflush(stderr);
+#endif
 
         if (frame.has_meta && !meta_initialized && frame.meta.phase == phydll_dl::MetaPhase::Init) {
             model_path = frame.meta.entries.empty() ? std::string() : frame.meta.entries.front().model_path;
@@ -412,9 +435,11 @@ int main(int argc, char **argv) {
             const long long field_size_per_rank = runtime.field_size() / std::max(1, ndest);
             const long long input_per_rank_used = static_cast<long long>(total_input_size) / batch_size;
 
+#ifndef FORWARD_CPU_DIAGNOSTIC
             std::fprintf(stderr, "[PHYDLL:DL] Frame %llu extracting data: total_input_size=%lld, batch=%lld, field/rank=%lld, used/rank=%lld\n",
                          (unsigned long long)frame_id, (long long)total_input_size, batch_size, field_size_per_rank, input_per_rank_used);
             std::fflush(stderr);
+#endif
 
             long long offset_so_far = 0;
             long long src_rank_start = 0;
@@ -463,7 +488,9 @@ int main(int argc, char **argv) {
             if (profile_details) SCOREP_USER_REGION_END(handle_dl_input_unpack);
             #endif
 
+#ifndef FORWARD_CPU_DIAGNOSTIC
             std::fprintf(stderr, "[PHYDLL:DL] Frame %llu running inference\n", (unsigned long long)frame_id); std::fflush(stderr);
+#endif
 
             auto options = torch::TensorOptions().dtype(torch::kFloat32);
             std::vector<int64_t> actual_shape = {batch_size};
@@ -506,12 +533,23 @@ int main(int argc, char **argv) {
                 for (long long chunk_idx = 0; chunk_idx < batch_size; chunk_idx += max_chunk_size) {
                     long long chunk_size = std::min(max_chunk_size, batch_size - chunk_idx);
                     auto chunk_tensor = input_tensor.slice(0, chunk_idx, chunk_idx + chunk_size);
+#ifdef FORWARD_CPU_DIAGNOSTIC
+                    forward_cpu_diagnostic::metadata("phydll_forward", chunk_tensor, model,
+                        at::get_num_threads(), at::get_num_interop_threads());
+                    std::vector<torch::jit::IValue> forward_inputs = {chunk_tensor};
+                    outputs.push_back(forward_cpu_diagnostic::forward("phydll_forward", [&] {
+                        return model.forward(forward_inputs).toTensor();
+                    }));
+#else
                     outputs.push_back(model.forward({chunk_tensor}).toTensor());
+#endif
                 }
                 auto output_tensor = torch::cat(outputs, 0);
+#ifdef PHYDLL_HAS_CUDA_STREAM
                 if (torch_device.is_cuda()) {
                     c10::cuda::getCurrentCUDAStream(torch_device.index()).synchronize();
                 }
+#endif
                 #ifdef USE_SCOREP
                 if (profile_details) SCOREP_USER_REGION_END(handle_dl_torch_forward);
                 #endif
@@ -601,13 +639,16 @@ int main(int argc, char **argv) {
         #ifdef USE_SCOREP
         if (frame_id > 0) SCOREP_USER_REGION_END(handle_dl_send_output);
         #endif
+#ifndef FORWARD_CPU_DIAGNOSTIC
         std::fprintf(stderr, "[PHYDLL:DL] sent output for frame %llu\n", (unsigned long long)frame_id); std::fflush(stderr);
+#endif
 
         ++frame_id;
     }
     std::fprintf(stderr, "[PHYDLL:DL] exited main loop after %llu frames\n", (unsigned long long)frame_id); std::fflush(stderr);
 
     phydll_finalize();
+    runtime.free_control_comm();
     if (const char* barrier_env = std::getenv("PHYDLL_MPMD_SHUTDOWN_BARRIER");
         barrier_env != nullptr && std::strcmp(barrier_env, "1") == 0) {
         std::fprintf(stderr, "[PHYDLL:DL] waiting for solver teardown\n");

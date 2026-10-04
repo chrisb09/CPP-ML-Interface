@@ -4,7 +4,7 @@ Unit test for decode_metadata_header in dl_clients/phydll_dl_client.py.
 
 Builds an 88-byte BcastMetaHeader using the exact C++ struct offsets
 (ml_coupling_provider_phydll.hpp) and verifies the Python decoder reads every
-field correctly -- in particular the 4-byte alignment pad before field_size.
+field correctly, including the readiness flag replacing the former padding.
 
 Run locally:  python3 test/phydll_mpmd/test_metadata_decode.py
 """
@@ -13,16 +13,18 @@ import os
 import struct
 import sys
 
-import numpy as np
+import ast
 
 CLIENT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "dl_clients", "phydll_dl_client.py"))
 
-import importlib.util
-
-spec = importlib.util.spec_from_file_location("phydll_dl_client_mod", CLIENT)
-mod = importlib.util.module_from_spec(spec)
-spec.loader.exec_module(mod)
-decode = mod.decode_metadata_header
+# Test the pure decoder without importing Torch, MPI, or starting the MPMD split.
+with open(CLIENT) as source:
+    tree = ast.parse(source.read())
+decoder = next(node for node in tree.body
+               if isinstance(node, ast.FunctionDef) and node.name == "decode_metadata_header")
+namespace = {'struct': struct}
+exec(compile(ast.Module(body=[decoder], type_ignores=[]), CLIENT, 'exec'), namespace)
+decode = namespace['decode_metadata_header']
 
 
 def build_header(**overrides):
@@ -36,7 +38,7 @@ def build_header(**overrides):
 
     fields = {
         'magic': 0x4D4C434D,
-        'version': 3,
+        'version': 4,
         'model_len': 12,
         'backend_len': 5,
         'device_len': 3,
@@ -53,6 +55,7 @@ def build_header(**overrides):
         'phy_count': 18,
         'dl_count': 1,
         'field_size': 3,
+        'solver_readiness_wait': 0,
     }
     fields.update(overrides)
 
@@ -73,7 +76,7 @@ def build_header(**overrides):
     put_int32(64, fields['layout_kind'])
     put_int32(68, fields['phy_count'])
     put_int32(72, fields['dl_count'])
-    # 76-79: alignment pad, left zero
+    put_int32(76, fields['solver_readiness_wait'])
     put_int64(80, fields['field_size'])
     return buf
 
@@ -89,14 +92,22 @@ def check(label, cond):
 
 
 h = decode(build_header())
-check("header is 88 bytes exactly", struct.calcsize("=8i 2q 7i 4x q") == 88)
+check("header is 88 bytes exactly", struct.calcsize("=8i 2q 8i q") == 88)
 check("valid", h['valid'])
 check("magic", h['magic'] == 0x4D4C434D)
-check("version", h['version'] == 3)
+check("version", h['version'] == 4)
+check("readiness disabled", h['solver_readiness_wait'] is False)
+check("readiness enabled", decode(build_header(solver_readiness_wait=1))['solver_readiness_wait'] is True)
+check("old runtime version rejected", not decode(build_header(version=3))['valid'])
+try:
+    decode(build_header(solver_readiness_wait=2))
+    check("invalid readiness flag raises", False)
+except RuntimeError:
+    check("invalid readiness flag raises", True)
 check("layout_kind uniform_chunks", h['layout_kind'] == 1)
 check("phy_count", h['phy_count'] == 18)
 check("dl_count", h['dl_count'] == 1)
-check("field_size (after pad)", h['field_size'] == 3)
+check("field_size (after readiness flag)", h['field_size'] == 3)
 check("total_input", h['total_input'] == 90)
 check("total_output", h['total_output'] == 5)
 check("num_input_dims", h['num_input_dims'] == 2)

@@ -165,7 +165,8 @@ def receive_p2p_metadata(comm, source_rank):
         'field_size': header['field_size'],
         'layout_kind': header['layout_kind'],
         'phy_count': header['phy_count'],
-        'dl_count': header['dl_count']
+        'dl_count': header['dl_count'],
+        'solver_readiness_wait': header['solver_readiness_wait'],
     }
 
 
@@ -192,19 +193,21 @@ def decode_metadata_header(header_buf):
         int32_t layout_kind;     // 64 (0 = packed, 1 = uniform_chunks)
         int32_t phy_count;       // 68
         int32_t dl_count;        // 72
-        [4-byte alignment pad]   // 76
+        int32_t solver_readiness_wait; // 76
         int64_t field_size;      // 80
     } (Total: 88 bytes)
 
-    "=8i 2q 7i 4x q": 8 int32, 2 int64, 7 int32, 4 pad bytes, 1 int64 == 88 bytes.
+    "=8i 2q 8i q": 8 int32, 2 int64, 8 int32, 1 int64 == 88 bytes.
     """
     (magic, version, model_len, backend_len, device_len, batch_size,
      num_inputs, num_outputs, total_input, total_output, dtype, layout,
      num_input_dims, num_output_dims, layout_kind, phy_count, dl_count,
-     field_size) = struct.unpack("=8i 2q 7i 4x q", header_buf)
+      solver_readiness_wait, field_size) = struct.unpack("=8i 2q 8i q", header_buf)
 
-    if magic != 0x4D4C434D or version != 3:
+    if magic != 0x4D4C434D or version != 4:
         return {'valid': False}
+    if solver_readiness_wait not in (0, 1):
+        raise RuntimeError("Invalid solver_readiness_wait flag.")
     if layout_kind not in (0, 1):
         print(f"[DL] ERROR: unsupported transport layout {layout_kind} "
               "(valid: 0 = packed, 1 = uniform_chunks).", flush=True)
@@ -230,10 +233,12 @@ def decode_metadata_header(header_buf):
         'phy_count': phy_count,
         'dl_count': dl_count,
         'field_size': field_size,
+        'solver_readiness_wait': bool(solver_readiness_wait),
     }
 
 def main():
     dll = None
+    control_comm = None
     world_comm = MPI.COMM_WORLD
     try:
         # Thread settings were applied after importing Torch above; inter-op
@@ -247,6 +252,7 @@ def main():
         dll = PhyDLL()
         print("[DL] calling dll.init(...)", flush=True)
         dll.init("dl")
+        control_comm = world_comm.Dup()
         print("[DL] Calling dll.define_dl...", flush=True)
         if intra_threads > 0 or inter_threads > 0:
             print(f"[DL] torch threads: intra={torch.get_num_threads()}, inter={torch.get_num_interop_threads()}", flush=True)
@@ -283,6 +289,10 @@ def main():
         # Receive metadata from each connected physical rank
         for source_rank in dests:
             p2p_meta = receive_p2p_metadata(world_comm, source_rank)
+            if not p2p_meta['valid'] or (meta_initialized and
+                    p2p_meta['solver_readiness_wait'] != final_meta['solver_readiness_wait']):
+                print("[DL] ERROR: invalid metadata or mixed solver_readiness_wait flags across coupled ranks", file=sys.stderr, flush=True)
+                world_comm.Abort(1)
             if p2p_meta['valid']:
                 if not meta_initialized:
                     model_path = p2p_meta.get('model_path', '')
@@ -567,11 +577,27 @@ def main():
                     # overwrite them, so use set_field directly).
                     for f in range(dll.dl_count):
                         dll.set_field(output[f], "DL-OUT")
-                    dll.send()
                 else:
-                    dll.send({"DL-OUT": output})
+                    dll.set_field(output, "DL-OUT")
+                # Keep the buffer alive until every asynchronous notification completes.
+                requests = []
+                if final_meta['solver_readiness_wait']:
+                    token = np.array([frame_id], dtype=np.uint64)
+                    requests = [control_comm.Isend([token, MPI.UINT64_T], dest=int(r), tag=0)
+                                for r in dests]
+                try:
+                    dll.send()
+                finally:
+                    if requests:
+                        MPI.Request.Waitall(requests)
             frame_id += 1
 
+    except Exception as error:
+        # A local metadata/protocol error cannot enter collective teardown while
+        # the solvers are still waiting for their response.
+        print(f"[PHYDLL:DL:PY] fatal client error: {error}", file=sys.stderr, flush=True)
+        world_comm.Abort(1)
+        raise
     finally:
         if dll is not None:
             try:
@@ -581,6 +607,8 @@ def main():
                 print(f"{prefix} Exited dll.finalize()", flush=True)
             except Exception as e:
                 print(f"[PHYDLL:DL:PY] dll.finalize() failed: {e}", file=sys.stderr)
+        if control_comm is not None:
+            control_comm.Free()
         # Keep this MPMD DL rank alive until every solver rank has destroyed its
         # PhyDLL provider and reached teardown, mirroring the C++ DL client and
         # the solver-side barrier in terrain_solver.cpp. Without this, srun aborts
