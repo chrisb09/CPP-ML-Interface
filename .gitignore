@@ -52,6 +52,9 @@ scorep-measurement-*/
 # Local dependency symlinks
 extern/AIxeleratorService-pipelined
 
+# Local scratch checkouts (not the extern/AIxeleratorService submodule)
+extern/AIxeleratorService-trace/
+
 # Generated documentation
 /docs/html/
 /docs/latex/
