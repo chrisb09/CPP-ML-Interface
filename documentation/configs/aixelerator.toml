@@ -1,0 +1,23 @@
+# TEMPLATE ONLY: replace the model placeholder and provide an enabled, compatible
+# AIxelerator backend. Requires WITH_AIX=ON; initialize MPI before construction.
+# C++ supplies three float32 input and three output fields, each [8, 8, 8].
+# Model input/output must each be [3, 1, 512]; no normalization is applied.
+coupling_type = "STATIC"
+
+[library]
+class = "Aixelerator"
+model_file = "/REPLACE_WITH_MODEL/flow_extrapolator.pt"
+batchsize = 1 # This provider uses batchsize, not batch_size.
+enable_hybrid = false
+communication_mode = "collective" # Alternative: "pipelined".
+# app_comm defaults to MPI_COMM_WORLD; no communicator is encoded in TOML.
+
+[application]
+class = "MLCouplingApplicationFlowExtrapolator"
+cube_dimension = 8
+cube_overlap = 0
+input_sequence_length = 1
+forecast_window = 1
+n_ghost_layers = 0
+
+# No behavior table: inference on every step.

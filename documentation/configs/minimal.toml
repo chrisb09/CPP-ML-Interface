@@ -1,0 +1,12 @@
+# Construction only. Dummy intentionally fails at inference (including the
+# first step with the default behavior). C++ must supply three contiguous
+# input and three writable output fields, each shaped [8, 8, 8].
+coupling_type = "STATIC"
+
+[library]
+class = "Dummy"
+
+[application]
+class = "MLCouplingApplicationFlowExtrapolator"
+# Defaults: cube_dimension=8, cube_overlap=0, input_sequence_length=1,
+# forecast_window=1, n_ghost_layers=0. No normalization; infer every step.

@@ -2,6 +2,9 @@
 
 This guide details how to interact with the redesigned C++ `MLCoupling` interface. The interface supports simple static operations as well as flexible (ordered and keyed) multi-step workflows.
 
+For constructor parameters, ownership, typed data flow, TOML examples, and
+C/Fortran creation examples, see the [coupling guide](coupling_guide.md).
+
 ## 1. Initialization
 
 Creating a coupling instance is identical across all interaction types. It usually involves passing configuration and buffers (if not using flexible coupling exclusively).

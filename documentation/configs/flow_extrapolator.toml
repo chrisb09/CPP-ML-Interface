@@ -1,0 +1,18 @@
+# Construction-only baseline, NOT runnable inference: Dummy intentionally fails
+# when step() reaches inference. Supply three contiguous float32 input fields
+# and three writable output fields, all shaped [8, 8, 8], from C++.
+coupling_type = "STATIC"
+
+[library]
+class = "Dummy"
+
+[application]
+class = "MLCouplingApplicationFlowExtrapolator"
+cube_dimension = 8
+cube_overlap = 0
+input_sequence_length = 1
+forecast_window = 1
+n_ghost_layers = 0
+
+# Model-side buffers are each one tensor shaped [3, 1, 512].
+# No behavior table: inference on every step. No normalization: no scaling.

@@ -1,39 +1,24 @@
-[general]
-
+# Construction-only example, NOT an inference demo: Dummy intentionally fails
+# when inference is reached by step(). Supply three contiguous float32 input
+# fields and three writable output fields, all shaped [8, 8, 8], from C++.
+# The manual --config-file harness supplies empty buffers and cannot use this.
+# See documentation/configs/README.md for buffer setup and backend templates.
 coupling_type = "STATIC"
 
 [logging]
-level = "debug"
+level = "info"
 error_separate = false
 
 [library]
-#class = "Smartsim"
-#device = "CPU"
-#model_backend = "TORCH"
-#model_path = "/hpcwork/ro092286/smartsim/mini_app/train_models/#best_model_field_jit_watercnn.pt"
-#model_name = "watercnn"
-#
-#class = "Aixelerator"
-#model_file = "/path/to/model.pt"
-#batchsize = 1
-#communication_mode = "collective"  # "collective" (default) or "pipelined"
-#enable_hybrid = false
 class = "Dummy"
 
-
-[normalization]
-class="minmax"
-input_min=-1.0
-input_max=1.0
-output_min=0.0
-output_max=1.0
-
-[behavior]
-class="periodic"
-inference_interval = 50
-coupled_steps_before_inference = 6
-coupled_steps_stride = 1
-step_increment_after_inference = 24
-
 [application]
-class="MLCouplingApplicationTurbulenceClosure"
+class = "MLCouplingApplicationFlowExtrapolator"
+cube_dimension = 8
+cube_overlap = 0
+input_sequence_length = 1
+forecast_window = 1
+n_ghost_layers = 0
+
+# No behavior table: inference is requested on every step.
+# No normalization table: values are passed through without scaling.

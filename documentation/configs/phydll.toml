@@ -1,0 +1,23 @@
+# TEMPLATE ONLY: replace the model placeholder and launch matching PhyDLL DL
+# ranks with a compatible backend/runtime. Requires WITH_PHYDLL=ON and MPI.
+# C++ supplies three float32 input and three output fields, each [8, 8, 8].
+# Model input/output must each be [3, 1, 512]; no normalization is applied.
+coupling_type = "STATIC"
+
+[library]
+class = "Phydll"
+model_file = "/REPLACE_WITH_MODEL/flow_extrapolator.pt"
+backend = "TORCH"
+device = "CPU"
+batch_size = 0
+transport_layout = "auto" # Also supported: "packed", "uniform_chunks".
+
+[application]
+class = "MLCouplingApplicationFlowExtrapolator"
+cube_dimension = 8
+cube_overlap = 0
+input_sequence_length = 1
+forecast_window = 1
+n_ghost_layers = 0
+
+# No behavior table: inference on every step.

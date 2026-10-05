@@ -1,0 +1,28 @@
+# TEMPLATE ONLY: replace the model and database host placeholders; provision a
+# SmartSim/RedisAI database with TORCH support. Requires WITH_SMARTSIM=ON.
+# C++ supplies three float32 input and three output fields, each [8, 8, 8].
+# Model input/output must each be [3, 1, 512]; no normalization is applied.
+coupling_type = "STATIC"
+
+[library]
+class = "Smartsim"
+device = "CPU"
+model_backend = "TORCH"
+model_path = "/REPLACE_WITH_MODEL/flow_extrapolator.pt"
+model_name = "flow_extrapolator"
+host = "REPLACE_WITH_DATABASE_HOST"
+port = 6379 # Replace if the provisioned database uses a different port.
+nodes = 1
+num_gpus = 0
+batch_size = 0
+db_layout = "shared"
+
+[application]
+class = "MLCouplingApplicationFlowExtrapolator"
+cube_dimension = 8
+cube_overlap = 0
+input_sequence_length = 1
+forecast_window = 1
+n_ghost_layers = 0
+
+# No behavior table: inference on every step.

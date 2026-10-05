@@ -34,8 +34,15 @@ The CMakeLists.txt file includes two targets, one to actually compile a `libcpp_
 **Example**:
 ```bash
 ./build.sh
-./build/cpp_ml_interface_executable --config-file example.config.toml --behavior 100
 ```
+
+The root `example.config.toml` is a construction-only FlowExtrapolator/Dummy
+example requiring three live 3D input/output fields supplied by C++. The
+command-line harness supplies empty buffers, so it cannot construct this
+application; Dummy also intentionally fails on inference. See the
+[coupling guide](documentation/coupling_guide.md) for runnable C++, C, and
+Fortran callback examples, and [configuration examples](documentation/configs/README.md)
+for buffer setup and real-provider templates.
 
 `build.sh` actually does two builds, one normal and one with -O3 optimizations, which are placed in `build/` and `build_release/` respectively.
 

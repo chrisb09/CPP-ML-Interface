@@ -1,89 +1,116 @@
 @startuml CPP_ML_Interface_Simplified
 
+allowmixing
 top to bottom direction
 skinparam classAttributeIconSize 0
 skinparam backgroundColor #FFFFFF
+skinparam shadowing false
 skinparam packageStyle rectangle
-skinparam nodesep 16
-skinparam ranksep 30
+skinparam nodesep 18
+skinparam ranksep 24
+skinparam linetype polyline
+skinparam minClassWidth 150
 skinparam class {
+    BackgroundColor #EAF3FB
     BackgroundColor<<abstract>> #FFF3C4
-    BackgroundColor<<concrete>> #EAF3FB
-    BorderColor #333333
-    ArrowColor #333333
-    FontSize 13
+    BorderColor #444444
+    ArrowColor #444444
+    FontSize 14
 }
 skinparam package {
-    BorderColor #666666
+    BorderColor #888888
     BackgroundColor #FCFCFC
-    FontSize 13
+    FontSize 14
 }
 
-class "MLCoupling<CouplingInput, CouplingOutput,\nLibraryInput, LibraryOutput>" as Coupling <<concrete>>
-
-package "API" {
-    class "C API" as CApi <<concrete>>
-    class "Fortran module cmi" as Fortran <<concrete>>
+package "Data Containers" as Containers {
+    class "MLCouplingData" as Data <<concrete>>
+    class "MLCouplingTensor" as Tensor <<concrete>>
+    Data "1" *-left- "0..*" Tensor : tensors
 }
 
-package "Library (inference backend)" {
-    abstract class "MLCouplingLibrary<LibraryInput, LibraryOutput>" as Library
+package "Language Bindings" as API {
+    rectangle "C API" as CApi
+    rectangle "Fortran module cmi" as Fortran
+    Fortran ..left.> CApi : wraps
+}
+
+class "MLCoupling" as Coupling <<concrete>>
+
+package "Inference Backend" as Libraries {
+    abstract class "MLCouplingLibrary" as Library <<abstract>>
     class "PhyDLL" as LibPhy <<concrete>>
     class "AIxelerator" as LibAix <<concrete>>
     class "SmartSim" as LibSs <<concrete>>
     class "Generic" as LibGen <<concrete>>
+    Library <|-- LibPhy
+    Library <|-- LibAix
+    Library <|-- LibSs
+    Library <|-- LibGen
+    LibPhy -[hidden]right- LibAix
+    LibPhy -[hidden]down- LibSs
+    LibAix -[hidden]down- LibGen
+    LibSs -[hidden]right- LibGen
 }
 
-package "Behavior (step scheduling)" {
-    abstract class "MLCouplingBehavior" as Behavior
+package "Step Scheduling" as Behaviors {
+    abstract class "MLCouplingBehavior" as Behavior <<abstract>>
     class "Default" as BehDefault <<concrete>>
     class "Periodic" as BehPeriodic <<concrete>>
     class "FlowExtrapolator" as BehFlow <<concrete>>
+    class "Generic" as BehGen <<concrete>>
+    Behavior <|-- BehDefault
+    Behavior <|-- BehPeriodic
+    Behavior <|-- BehFlow
+    Behavior <|-- BehGen
+    BehDefault -[hidden]right- BehPeriodic
+    BehDefault -[hidden]down- BehFlow
+    BehPeriodic -[hidden]down- BehGen
+    BehFlow -[hidden]right- BehGen
 }
 
-package "Normalization" {
-    abstract class "MLCouplingNormalization<In, Out>" as Normalization
-    class "MinMax" as NormMinMax <<concrete>>
-    class "Generic" as NormGen <<concrete>>
-}
-
-package "Application (simulation adapter)" {
-    abstract class "MLCouplingApplication<CouplingInput, CouplingOutput,\nLibraryInput, LibraryOutput>" as Application
+package "Simulation Adapter" as Applications {
+    class "MLCouplingApplication" as Application <<concrete>>
     class "FlowExtrapolator" as AppFlow <<concrete>>
     class "Generic" as AppGen <<concrete>>
+    Application <|-- AppFlow
+    Application <|-- AppGen
+    AppFlow -[hidden]right- AppGen
 }
 
-package "Data" {
-    class "MLCouplingData<T>" as Data <<concrete>>
-    class "MLCouplingTensor<T>" as Tensor <<concrete>>
+package "Normalization" as Normalizations {
+    abstract class "MLCouplingNormalization" as Normalization <<abstract>>
+    class "MinMax" as NormMinMax <<concrete>>
+    class "Generic" as NormGen <<concrete>>
+    Normalization <|-- NormMinMax
+    Normalization <|-- NormGen
+    NormMinMax -[hidden]right- NormGen
 }
 
-Coupling "1" *-- "1" Library : owns
-Coupling "1" *-- "1" Behavior : owns
-Coupling "1" *-- "1" Normalization : owns
-Coupling "1" *-- "1" Application : owns
+CApi ..left.> Coupling : delegates
+Data "4" -right- "1" Coupling : buffers
+Coupling "1" *-down- "1" Library : library
+Coupling "1" *-down- "1" Behavior : behavior
+Coupling "1" *-down- "1" Application : application
+Application "1" *-down- "0..1" Normalization : normalization
+'Application "1" *-down- "4" Data : buffers
+'Coupling "1" *-left- "4" Data : buffers
 
-Library <|-- LibPhy
-Library <|-- LibAix
-Library <|-- LibSs
-Library <|-- LibGen
-Behavior <|-- BehDefault
-Behavior <|-- BehPeriodic
-Behavior <|-- BehFlow
-Normalization <|-- NormMinMax
-Normalization <|-- NormGen
-Application <|-- AppFlow
-Application <|-- AppGen
+' Layout constraints only; these links are not rendered.
+Containers -[hidden]right- Coupling
+Application -[hidden]right- Library
+Library -[hidden]right- Behavior
+'LibGen -[hidden]down- Data
+BehFlow -[hidden]down- Normalization
+'Data -[hidden]left- Coupling
 
-Application "1" o-- "4" Data : buffers
-Data "1" o-- "0..*" Tensor : contains
-
-CApi -up-> Coupling : facade
-Fortran -up-> CApi : wraps
-
-legend bottom
-  Public architecture, simplified.
-  *-- composition   o-- aggregation   <|-- inheritance   ..> uses / facade
+legend bottom left
+  <b>UML notation</b>: hollow triangle = generalization; filled diamond = composition;
+  dashed arrow = dependency. Triangle points to base; diamond marks owner.
+  Yellow / italic = abstract class; blue = concrete class; grey = language binding.
+  <b>Simplifications</b>: template parameters and members omitted; selected subclasses,
+  abbreviated within each group. Multiplicities count objects, not scalar elements.
+  Composition describes container ownership, not ownership of external tensor memory.
 endlegend
 
 @enduml
