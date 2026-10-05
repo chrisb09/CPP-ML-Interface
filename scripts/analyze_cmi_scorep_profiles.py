@@ -1161,6 +1161,8 @@ def main():
     parser.add_argument("--output-dir", type=Path, default=Path("./cmi_profile_analysis"), help="Output directory for plots and reports")
     parser.add_argument("--title", type=str, default=None, help="Plot title override")
     parser.add_argument("--no-plots", action="store_true", help="Skip rendering plots and only generate CSV/MD reports")
+    parser.add_argument("--p2p-gantt", action="store_true",
+                        help="Render the per-rank AIx pipeline Gantt from --p2p-timeline-dir (opt-in: one lane per rank, impractical beyond ~200 ranks)")
     parser.add_argument("--slug", "--file-prefix", dest="file_prefix", type=str, default="", help="Optional run slug prefix for generated filenames")
     parser.add_argument("--model", type=str, default=None, help="Model name (e.g. watercnn)")
     parser.add_argument("--resolution", type=str, default=None, help="Domain resolution (e.g. 1920x1080)")
@@ -1272,7 +1274,9 @@ def main():
     if args.p2p_timeline_dir and args.p2p_timeline_dir.exists():
         print(f"[*] Analyzing AIx P2P Timeline in: {args.p2p_timeline_dir}")
         p2p_df = parse_aix_p2p_timeline(args.p2p_timeline_dir)
-        if not p2p_df.empty and not args.no_plots:
+        # The per-rank Gantt draws one lane per rank (up to 1632 lanes on the
+        # scale runs); render it only when explicitly requested.
+        if not p2p_df.empty and args.p2p_gantt:
             plot_aix_pipeline_gantt(p2p_df, args.output_dir / f"{pfx}aix_pipeline_gantt.png")
 
     print("[✓] Analysis complete.")

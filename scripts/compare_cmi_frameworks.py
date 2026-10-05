@@ -23,6 +23,7 @@ import sys
 import os
 import json
 import argparse
+import re
 from pathlib import Path
 from typing import Dict, List, Tuple, Any, Optional
 import numpy as np
@@ -75,6 +76,34 @@ def load_run_metadata(result_dir: Path) -> Dict[str, Any]:
         "steady_steps": steps - 2 if steps > 2 else steps,
         "ranks": 25 if "aix" in dirname else 24,
     }
+
+
+def framework_label_from_dir(result_dir: Path, explicit: Optional[str] = None) -> str:
+    """Framework label for a results dir.
+
+    With --label, the given label is used verbatim. Otherwise the directory
+    name is matched against known layout/comm keywords so the Score-P suite
+    result dirs (e.g. `hh3_w8k_s6_aix_coll_default`) map to the framework
+    names the analysis expects ("AIx Collective", "AIx Pipelined", ...).
+    """
+    if explicit:
+        return explicit
+    name = result_dir.name.lower()
+    if "aix_coll" in name or "aix_collective" in name:
+        return "AIx Collective"
+    if "aix_p2p_fullcredits" in name or "aix_p2p_fc" in name:
+        return "AIx Pipelined (full credits)"
+    if "aix_p2p" in name or "pipelined" in name:
+        return "AIx Pipelined"
+    if "phydll_py" in name:
+        return "PhyDLL Python"
+    if "phydll" in name:
+        return "PhyDLL C++"
+    if "smartsim" in name:
+        # c0/c3 are sequential-put variants of the same client-server path
+        m = re.search(r"c(\d+)", name)
+        return f"SmartSim c={m.group(1)}" if m else "SmartSim"
+    return result_dir.name.replace("results_gpu_", "").replace("_", " ").title()
 
 
 def extract_framework_metrics(df: pd.DataFrame, framework_name: str, result_dir: Path) -> Dict[str, Any]:
@@ -589,7 +618,14 @@ def main():
     parser.add_argument("--batch-size", type=int, default=None, help="Batch size override (e.g. 50000)")
     parser.add_argument("--steps", type=int, default=None, help="Total steps override (e.g. 22)")
     parser.add_argument("--no-plots", action="store_true", help="Skip rendering timeline plot")
-    
+    parser.add_argument("--n-workgroups", type=int, default=None,
+                        help="Workgroup/chunk count N for the 5-stage pipelining formula. "
+                             "Default: inferred from the number of GPU workgroups in the run "
+                             "metadata (1 for single-GPU scenarios, else the controller count).")
+    parser.add_argument("--label", type=str, default=None,
+                        help="Explicit framework label for the single results dir "
+                             "(skips the directory-name detection).")
+
     args = parser.parse_args()
     args.output_dir.mkdir(parents=True, exist_ok=True)
     
@@ -611,9 +647,9 @@ def main():
         if not csv_file.exists():
             print(f"[WARN] Skipping {r_dir}: missing cmi_phase_summary.csv")
             continue
-        
+
         df = parse_summary_csv(csv_file)
-        fname = name_map.get(r_dir.name, r_dir.name.replace("results_gpu_", "").replace("_", " ").title())
+        fname = framework_label_from_dir(r_dir, args.label)
         metrics = extract_framework_metrics(df, fname, r_dir)
         framework_data.append(metrics)
         
@@ -632,7 +668,18 @@ def main():
     coll_data = next((d for d in framework_data if "AIx Collective" in d["framework"]), None)
     pipe_data = next((d for d in framework_data if "AIx Pipelined" in d["framework"]), None)
     if coll_data and pipe_data:
-        prediction = compute_aix_pipeline_prediction(coll_data, pipe_data, N=4)
+        n_workgroups = args.n_workgroups
+        if n_workgroups is None:
+            # Infer N from the run: the pipelining depth equals the number of
+            # distinct GPU workgroups (controllers) visible in the run
+            # metadata; fall back to 4 (the historical value).
+            n_workgroups = 4
+            for src in (coll_data, pipe_data):
+                meta = src.get("metadata", {})
+                if "workgroups" in meta:
+                    n_workgroups = int(meta["workgroups"])
+                    break
+        prediction = compute_aix_pipeline_prediction(coll_data, pipe_data, N=n_workgroups)
         write_aix_pipeline_prediction_markdown(prediction, args.output_dir / "aix_pipeline_prediction.md")
     
     # Render Timeline Graph

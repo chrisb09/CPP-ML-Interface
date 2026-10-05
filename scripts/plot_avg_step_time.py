@@ -21,6 +21,16 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
+import sys as _sys  # noqa: E402
+from pathlib import Path as _Path  # noqa: E402
+
+_sys.path.insert(0, str(_Path(__file__).resolve().parents[2] / "mini_app"))
+try:
+    from hh3_render import save_figure as _hh3_pgf_save  # noqa: E402  (optional --pgf hook)
+except Exception:  # pragma: no cover - --pgf is an optional feature
+    def _hh3_pgf_save(fig, path):  # type: ignore[misc]
+        raise SystemExit("--pgf requested but hh3_render could not be imported")
+
 METRIC_REGION = "solver_step_ml_steady"
 BAR_COLORS = {
     "smartsim": "#5B8FF9",
@@ -105,7 +115,10 @@ def render(configs, output_path: Path, meta: dict):
         axis.text(value + xmax * 0.012, yi, f"{value:.1f}",
                   va="center", fontsize=9)
     fig.tight_layout()
-    fig.savefig(output_path, dpi=150)
+    if "--pgf" in _sys.argv:
+        _hh3_pgf_save(fig, output_path)
+    else:
+        fig.savefig(output_path, dpi=150)
     plt.close(fig)
 
 
@@ -116,6 +129,8 @@ def main():
                              "each with a cmi_phase_summary.csv.")
     parser.add_argument("--output", type=Path, default=None,
                         help="Output PNG path (default: <results_dir>/avg_warm_step_time.png).")
+    parser.add_argument("--pgf", action="store_true",
+                        help="Write .pgf/.pdf via the thesis style instead of .png.")
     args = parser.parse_args()
 
     configs = []

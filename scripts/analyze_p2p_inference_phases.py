@@ -43,6 +43,14 @@ from pathlib import Path
 
 import matplotlib
 matplotlib.use("Agg")
+
+import sys as _sys
+from pathlib import Path as _Path
+_sys.path.insert(0, str(_Path(__file__).resolve().parents[2] / "mini_app"))
+try:
+    from hh3_render import save_figure as _hh3_pgf_save  # noqa: E402  (optional --pgf hook)
+except Exception:
+    _hh3_pgf_save = None
 import matplotlib.pyplot as plt
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -301,10 +309,18 @@ def render_phase_bars(coll_windows, p2p_windows, p2p_label, output_path):
     fig.suptitle(f"ML-step phase windows per workgroup: collective vs {p2p_label} "
                  f"(step 202, last steady ML step)", fontsize=10, y=0.99)
     fig.tight_layout(rect=(0, 0.05, 1, 0.96))
-    fig.savefig(output_path, dpi=170, bbox_inches="tight")
+    _hh3_pgf_render_save(fig, output_path)
     plt.close(fig)
     print(f"[+] Saved phase-window comparison to: {output_path}")
 
+
+def _hh3_pgf_render_save(fig, output_path):
+    output_path = _Path(output_path)
+    if "--pgf" in _sys.argv and _hh3_pgf_save is not None:
+        _hh3_pgf_save(fig, output_path)
+    else:
+        fig.savefig(output_path, dpi=170, bbox_inches="tight")
+    plt.close(fig)
 
 def render_phase_stack(rows, output_path):
     """rows: [(label, step_ms, (inf_start_ms, inf_end_ms))] -> stacked bars.
@@ -347,7 +363,7 @@ def render_phase_stack(rows, output_path):
     fig.suptitle("ML-step structure per workgroup: pre / inference / post "
                  "(step 202, last steady ML step)", fontsize=10, y=0.995)
     fig.tight_layout(rect=(0, 0, 1, 0.93))
-    fig.savefig(output_path, dpi=170, bbox_inches="tight")
+    _hh3_pgf_render_save(fig, output_path)
     plt.close(fig)
     print(f"[+] Saved phase stack to: {output_path}")
 
@@ -369,7 +385,7 @@ def render_device_busy(rows, output_path):
     fig.suptitle("Ready-range / device inference time per workgroup "
                  "(step 202, last steady ML step)", fontsize=10, y=0.99)
     fig.tight_layout(rect=(0, 0, 1, 0.93))
-    fig.savefig(output_path, dpi=170, bbox_inches="tight")
+    _hh3_pgf_render_save(fig, output_path)
     plt.close(fig)
     print(f"[+] Saved device-busy chart to: {output_path}")
 
@@ -407,6 +423,12 @@ def main():
                              "(phase_bars_*, ml_step_phase_stack, "
                              "ready_range_inference_time); per-config outputs "
                              "are unaffected.")
+    parser.add_argument("--max-render-ranks", type=int, default=200,
+                        help="Skip the per-step overlaid timeline render for "
+                             "runs with more ranks than this (one lane per rank "
+                             "per figure); the metrics CSV is still written.")
+    parser.add_argument("--pgf", action="store_true",
+                        help="Write .pgf/.pdf via the thesis style instead of .png.")
     args = parser.parse_args()
     pfx = f"{args.file_prefix}_" if args.file_prefix else ""
 
@@ -486,6 +508,11 @@ def main():
             overlays[c] = ov
         for name, job, events, wg_map, step, _ in timeline_runs:
             out_png = suite_dir / name / f"p2p_timeline_step_{step:03d}_vs_coll.png"
+            n_ranks = len({e["world_rank"] for e in events})
+            if n_ranks > args.max_render_ranks:
+                print(f"[SKIP] {name}: {n_ranks} ranks > {args.max_render_ranks}; "
+                      "skipping per-step timeline render")
+                continue
             render_step(events, step, suite_dir / name, "watercnn",
                         output_name=out_png.name, overlays=overlays)
             print(f"[+] Saved overlaid step timeline to: {out_png}")

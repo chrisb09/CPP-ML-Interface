@@ -34,6 +34,14 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "mini_app"))
+try:
+    from hh3_render import save_figure as _hh3_pgf_save  # noqa: E402  (optional --pgf hook)
+except Exception:  # pragma: no cover - --pgf is an optional feature
+    def _hh3_pgf_save(fig, path):  # type: ignore[misc]
+        fig.savefig(path, dpi=170, bbox_inches="tight")
+        raise SystemExit("--pgf requested but hh3_render could not be imported")
+
 from analyze_cmi_scorep_profiles import get_semantic_phase_score  # noqa: E402
 
 SCORE_TO_PHASE = {
@@ -183,7 +191,10 @@ def render(configs, output_path: Path, meta: dict):
     fig.suptitle(f"Steady ML-step phase decomposition per coupling-library configuration ({params})",
                  fontsize=10, y=0.99)
     fig.tight_layout(rect=(0, 0.04, 1, 0.96))
-    fig.savefig(output_path, dpi=170, bbox_inches="tight")
+    if "--pgf" in sys.argv:
+        _hh3_pgf_save(fig, output_path)
+    else:
+        fig.savefig(output_path, dpi=170, bbox_inches="tight")
     plt.close(fig)
     print(f"[+] Saved configuration comparison to: {output_path}")
 
@@ -205,6 +216,8 @@ def main():
                              "each with a cmi_phase_summary.csv.")
     parser.add_argument("--output", type=Path, default=None,
                         help="Output PNG path (default: <results_dir>/config_comparison.png).")
+    parser.add_argument("--pgf", action="store_true",
+                        help="Write .pgf/.pdf via the thesis style instead of .png.")
     args = parser.parse_args()
 
     configs = []

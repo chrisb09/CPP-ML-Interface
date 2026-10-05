@@ -331,6 +331,7 @@ def main():
         wg = resolve_num_workgroups(name, args.num_workgroups)
         per_step = parse_timeline_config(tdir, wg)
         wg_configs.append((name, per_step))
+        (suite_dir / name).mkdir(parents=True, exist_ok=True)
         write_workgroup_csv(suite_dir / name / "workgroup_makespan.csv",
                             name, per_step, warmup_idx=0)
     for name, job in parse_pairs(args.trace):
@@ -344,6 +345,7 @@ def main():
         wg = resolve_num_workgroups(name, args.num_workgroups)
         per_step = parse_trace_config(anchor, wg)
         wg_configs.append((name, per_step))
+        (suite_dir / name).mkdir(parents=True, exist_ok=True)
         write_workgroup_csv(suite_dir / name / "workgroup_makespan.csv",
                             name, per_step, warmup_idx=0)
 
