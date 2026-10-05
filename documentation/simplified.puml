@@ -1,0 +1,114 @@
+@startuml CPP_ML_Interface_Simplified
+
+' Simplified, thesis-oriented overview of the CPP-ML-Interface architecture.
+' Methods and backend options are omitted; see new.puml for the full class view.
+
+top to bottom direction
+skinparam classAttributeIconSize 0
+skinparam backgroundColor #FFFFFF
+skinparam packageStyle rectangle
+skinparam nodesep 20
+skinparam ranksep 34
+skinparam class {
+    BackgroundColor<<abstract>> #FFF3C4
+    BackgroundColor<<concrete>> #EAF3FB
+    BorderColor #333333
+    ArrowColor #333333
+    FontSize 14
+}
+skinparam note {
+    BackgroundColor #FFFDF0
+    BorderColor #999999
+    FontSize 12
+}
+
+package "Core" {
+    class "MLCoupling<CouplingInput, CouplingOutput,\nLibraryInput, LibraryOutput>" as Coupling <<concrete>> {
+        + step() : int
+        + train_step()
+        + ordered() / keyed()
+    }
+    class "TrainingTracker" as Tracker <<concrete>>
+}
+
+package "Extension points" {
+    abstract class "MLCouplingLibrary<LibraryInput, LibraryOutput>" as Library
+    abstract class "MLCouplingApplication<CouplingInput, CouplingOutput,\nLibraryInput, LibraryOutput>" as Application
+    abstract class "MLCouplingBehavior" as Behavior
+    abstract class "MLCouplingNormalization<In, Out>" as Normalization
+}
+
+package "Libraries (backends)" {
+    class "MLCouplingLibraryPhydll" as Phy <<concrete>>
+    class "MLCouplingLibraryAixelerator" as Aix <<concrete>>
+    class "MLCouplingLibrarySmartsim" as Ss <<concrete>>
+    class "MLCouplingLibraryGeneric" as LibGen <<concrete>>
+}
+
+package "Applications" {
+    class "FlowExtrapolator" as AppFlow <<concrete>>
+    class "Generic" as AppGen <<concrete>>
+}
+
+package "Behaviors" {
+    class "Default" as BehDefault <<concrete>>
+    class "Periodic" as BehPeriodic <<concrete>>
+    class "FlowExtrapolator" as BehFlow <<concrete>>
+}
+
+package "Normalizations" {
+    class "MinMax" as NormMinMax <<concrete>>
+    class "Generic" as NormGen <<concrete>>
+}
+
+package "Data" {
+    class "MLCouplingData<T>" as Data <<concrete>>
+    class "MLCouplingTensor<T>" as Tensor <<concrete>>
+}
+
+package "Entry points" {
+    class "Config factory\n(TOML -> registry)" as Factory <<concrete>>
+    class "C API" as CApi <<concrete>>
+    class "Fortran module cmi" as Fortran <<concrete>>
+}
+
+' --- Composition / ownership ---
+Coupling "1" *-- "1" Library : owns
+Coupling "1" *-- "1" Application : owns
+Coupling "1" *-- "1" Behavior : owns
+Coupling "1" *-- "1" Tracker : owns
+
+Application "1" *-- "0..1" Normalization : owns (optional)
+Application "1" o-- "4" Data : buffers
+
+' --- Inheritance ---
+Library <|-- Phy
+Library <|-- Aix
+Library <|-- Ss
+Library <|-- LibGen
+Application <|-- AppFlow
+Application <|-- AppGen
+Behavior <|-- BehDefault
+Behavior <|-- BehPeriodic
+Behavior <|-- BehFlow
+Normalization <|-- NormMinMax
+Normalization <|-- NormGen
+
+' --- Data ---
+Data "1" o-- "0..*" Tensor : contains
+
+' --- Wiring / construction ---
+Factory ..> Coupling : builds
+Factory ..> Library : instantiates
+Factory ..> Application : instantiates
+Factory ..> Behavior : instantiates
+Factory ..> Normalization : instantiates
+CApi ..> Coupling : facade
+Fortran ..> CApi : wraps
+
+legend bottom
+  Public architecture, simplified.
+  *-- composition   o-- aggregation   <|-- inheritance   ..> uses / builds
+endlegend
+
+@enduml

@@ -1,281 +1,482 @@
 @startuml CPP_NEW_ML_Interface
 
-' Layout hints to encourage a tree-like rendering
-top to bottom direction
+' Public architecture of CPP-ML-Interface, aligned with the current headers.
+' Class / component overview only: the readiness protocol is intentionally not expanded.
+left to right direction
 ' skinparam linetype ortho
 skinparam classAttributeIconSize 0
 skinparam backgroundColor #FFFFFF
+skinparam packageStyle rectangle
+skinparam nodesep 16
+skinparam ranksep 26
 skinparam class {
-    BackgroundColor<<abstract>> LightYellow
-    BorderColor Black
-    ArrowColor Black
+    BackgroundColor<<abstract>> #FFF3C4
+    BackgroundColor<<enum>> #E8F0FE
+    BorderColor #333333
+    ArrowColor #333333
+    FontSize 12
 }
 
-enum "CouplingType" {
-    STATIC
-    FLEXIBLE
+legend bottom
+  = Public architecture
+  * = pure virtual
+  <>-- = owns (composition)   o-- = contains
+  ..> = uses / facade / instantiates
+endlegend
+
+package "Orchestrator" {
+
+    class "MLCoupling<CouplingInput, CouplingOutput,\nLibraryInput=CI, LibraryOutput=CO>" as MLCoupling {
+        + step() : int
+        + train_step(step_id : long long)
+        + ordered() : OrderedProxy
+        + keyed() : KeyedProxy
+        + set_merge_strategy(strategy : MLCouplingMergeStrategy)
+        + get_application()
+        + track(field : string)
+        + get_history(field : string) : vector<double>
+        + get_history() : map<string, vector<double>>
+        + get_current(field : string) : double
+        + get_current() : map<string, double>
+        + create_from_config(...) : MLCoupling* {static}
+        + create_from_config_string(...) : MLCoupling* {static}
+        --
+        - library : unique_ptr<MLCouplingLibrary<LI,LO>>
+        - application : unique_ptr<MLCouplingApplication<CI,CO,LI,LO>>
+        - behavior : unique_ptr<MLCouplingBehavior>
+        - coupling_type : CouplingType
+        - library_input : MLCouplingData<LI>*
+        - library_output : MLCouplingData<LO>*
+        - training_tracker : TrainingTracker
+    }
+
+    class "MLCoupling::OrderedProxy" as OrderedProxy {
+        + set(data) / set_target(target)
+        + inference() / get(out)
+        + train(step_id) : map<string, double>
+    }
+
+    class "MLCoupling::KeyedProxy" as KeyedProxy {
+        + set(key, data) / set_target(key, target)
+        + inference(in_keys, out_keys) / get(key, out)
+        + train(step_id, in_keys, target_keys) : map<string, double>
+    }
+
+    class "TrainingTracker" as TrainingTracker {
+        + track(field : string)
+        + log(step_id : long long, metrics : map<string, double>)
+        + get_history(field) : vector<double>
+        + get_history() : map<string, vector<double>>
+        + get_current(field) : double
+        + get_current() : map<string, double>
+        + get_full_history() : vector<TrainingMetrics>&
+        --
+        - enabled_fields : set<string>
+        - history : vector<TrainingMetrics>
+    }
+
+    class "TrainingMetrics" as TrainingMetrics {
+        + step_id : long long
+        + values : map<string, double>
+    }
 }
 
-enum "ConfigCastMode" {
-    Relaxed
-    Strict
+package "Library (inference backends)" {
+
+    abstract class "MLCouplingLibrary<LibraryInput, LibraryOutput>" as MLCouplingLibrary {
+        + rank : int
+        + merge_strategy : MLCouplingMergeStrategy
+        + set_rank(rank) / set_merge_strategy(strategy)
+        + static_inference(input, output)*
+        + static_train(input, target) : map<string, double>
+        + get_synchronized_iterations(local) : size_t
+        + flex_ordered_set(data) / set_target(target)
+        + flex_ordered_inference(output) / get(output)
+        + flex_ordered_train(step_id) : map<string, double>
+        + flex_keyed_set(key, data) / set_target(key, target)
+        + flex_keyed_inference(in_keys, out_keys, output) / get(key, output)
+        + flex_keyed_train(step_id, in_keys, target_keys) : map<string, double>
+    }
+
+    class "MLCouplingLibraryPhydll" as Phydll
+    class "MLCouplingLibraryAixelerator" as Aixelerator
+    class "MLCouplingLibrarySmartsim" as Smartsim
+    class "MLCouplingLibraryDummy" as Dummy
+    class "MLCouplingLibraryGeneric" as LibraryGeneric {
+        + static_inference(input, output)
+        + static_train(input, target) : map<string, double>
+        + get_synchronized_iterations(local) : size_t
+        --
+        - inference_fn : function<void(MLCouplingData<In>*, MLCouplingData<Out>*)>
+        - train_fn : function<map<string,double>(...)>
+        - sync_iter_fn : function<size_t(size_t)>
+    }
 }
 
-class "MLCoupling<In,Out>" {
-    - parameters: std::vector<void*>
-    - provider: std::unique_ptr<MLCouplingProvider<In,Out>>
-    - application: std::unique_ptr<MLCouplingApplication<In,Out>>
-    - behavior: std::unique_ptr<MLCouplingBehavior>
-    - coupling_type: CouplingType
-    - input_after_preprocessing: MLCouplingData<In>*
-    - output_before_postprocessing: MLCouplingData<Out>*
-    + MLCoupling(MLCouplingProvider<In,Out>*,
-                 MLCouplingApplication<In,Out>*, MLCouplingBehavior* = nullptr)
-    + MLCoupling(MLCouplingProvider<In,Out>*, MLCouplingApplication<In,Out>*,
-                 MLCouplingBehavior*, CouplingType, MLCouplingData<In>*, MLCouplingData<Out>*)
-    + ~MLCoupling()
-    + ml_step()
-    + is_flexible(): bool
-    + create_from_config(...) <<static>>
-    + create_from_config_string(...) <<static>>
-    # set_parameters(std::vector<void*>)
+note bottom of MLCouplingLibrary
+  Three tiers: Tier 0 static_inference,
+  Tier 1 flex_ordered_*, Tier 2 flex_keyed_*.
+  Static libraries fall back to an automatic
+  merge (MLCouplingMergeStrategy).
+end note
+
+note right of Phydll
+  MPMD in-situ / in-transit inference over MPI.
+  Options: model_file, backend=TORCH,
+  device=GPU, batch_size=0,
+  transport_layout auto|packed|uniform_chunks,
+  solver_readiness_wait=false.
+end note
+
+note bottom of Aixelerator
+  Same-type float/double only; binds first tensor.
+  Options: batchsize, enable_hybrid,
+  host_fraction, communication_mode
+  collective|pipelined.
+end note
+
+note left of Smartsim
+  Redis / SmartRedis model endpoints.
+  Options: device, model_backend, model_path,
+  batch_size, min_batch_size, min_batch_timeout,
+  command/socket/model timeout,
+  db_layout shared|per-ml-node.
+end note
+
+note right of Dummy
+  Placeholder: static_inference()
+  intentionally fails. Registry name "Dummy".
+end note
+
+package "Application (simulation adapters)" {
+
+    class "MLCouplingApplication<CouplingInput, CouplingOutput,\nLibraryInput=CI, LibraryOutput=CO>" as MLCouplingApplication {
+        + coupling_input : MLCouplingData<CI>
+        + library_input : MLCouplingData<LI>
+        + library_output : MLCouplingData<LO>
+        + coupling_output : MLCouplingData<CO>
+        + ml_step(library, behavior) : int
+        + prepare_library_input()
+        + finalize_coupling_output()
+        + get_library_buffers() : pair<MLCouplingData<LI>*, MLCouplingData<LO>*>
+        # preprocess_coupling_input(input) : MLCouplingData<LI>
+        # postprocess_library_output(output) : MLCouplingData<CO>
+        # normalization : unique_ptr<MLCouplingNormalization<LI,CO>>
+    }
+
+    class "MLCouplingApplicationFlowExtrapolator" as AppFlowEx
+    class "MLCouplingApplicationGeneric" as AppGeneric {
+        + ml_step(library, behavior) : int
+        # preprocess_coupling_input(input) : MLCouplingData<LI>
+        # postprocess_library_output(output) : MLCouplingData<CO>
+        --
+        - preprocess_fn / postprocess_fn
+        - ml_step_fn
+    }
 }
 
-class "MLCouplingProvider<In,Out>" <<abstract>> {
-    + rank: int
-    + MLCouplingProvider()
-    + MLCouplingProvider(int)
-    + set_rank(int)
-    + inference(MLCouplingData<In>*, MLCouplingData<Out>*)
-    + set_io_buffers(MLCouplingData<In>*, MLCouplingData<Out>*)
+note top of MLCouplingApplication
+  Not abstract: same-type inputs/outputs use the
+  default preprocess/postprocess passthrough.
+  step -> application.ml_step -> behavior decision ->
+  prepare library input -> library.static_inference ->
+  finalize coupling output -> timestep delta.
+  Base / Generic do NOT auto-normalize.
+end note
+
+note right of AppFlowEx
+  Splits 3 raw flow fields into overlapping 3D cubes,
+  assembles temporal input, reconstructs predicted fields.
+  Normalizes explicitly and uses behavior.should_send_data().
+  Options: cube_dimension, cube_overlap,
+  input_sequence_length, forecast_window, n_ghost_layers.
+end note
+
+package "Behavior (step scheduling)" {
+
+    abstract class "MLCouplingBehavior" as MLCouplingBehavior {
+        + should_perform_inference() : bool*
+        + time_step_delta() : int*
+        + should_send_data() : bool*
+    }
+
+    class "MLCouplingBehaviorDefault" as BehaviorDefault
+    class "MLCouplingBehaviorPeriodic" as BehaviorPeriodic {
+        + should_perform_inference() : bool
+        + time_step_delta() : int
+        + should_send_data() : bool
+        --
+        - inference_interval
+        - coupled_steps_before_inference
+        - coupled_steps_stride
+        - step_increment_after_inference
+        - prohibit_inference : function<bool(int)>
+    }
+    class "MLCouplingBehaviorFlowExtrapolator" as BehaviorFlowEx
+    class "MLCouplingBehaviorGeneric" as BehaviorGeneric {
+        + should_perform_inference() : bool
+        + time_step_delta() : int
+        + should_send_data() : bool
+        --
+        - should_infer_fn / time_step_delta_fn
+        - should_send_data_fn
+    }
 }
 
-class "MLCouplingProviderFlexible<In,Out>" <<abstract>> {
-    + MLCouplingProviderFlexible()
-    + send_data(const std::vector<std::string>&, MLCouplingData<In>&)
-    + inference(std::vector<std::string>, std::vector<std::string>)
-    + receive_data(std::vector<std::string>, MLCouplingData<Out>&)
-    + is_flexible(): bool
+note bottom of BehaviorDefault
+  Default when no behavior is supplied:
+  infer every step, delta 0, send every step.
+end note
+
+note right of BehaviorFlowEx
+  History accumulation + forecast leap-frogging.
+  Options: inference_interval,
+  coupled_steps_before_inference,
+  step_increment_after_inference,
+  hdf_output_interval, total_timesteps,
+  scaling_factor, forecast_window,
+  input_step_distance, inference_start_step,
+  global_step_offset.
+end note
+
+note bottom of BehaviorGeneric
+  Three required callbacks
+  (should_infer, time_step_delta, should_send_data).
+end note
+
+package "Normalization" {
+
+    abstract class "MLCouplingNormalization<In, Out>" as MLCouplingNormalization {
+        + normalize_input(data)*
+        + denormalize_output(data)*
+        + print(os : ostream)*
+    }
+
+    class "MLCouplingMinMaxNormalization<In, Out>" as MinMax {
+        + normalize_input(data)
+        + denormalize_output(data)
+        + print(os)
+        --
+        - input_min / input_max : In
+        - output_min / output_max : Out
+    }
+
+    class "MLCouplingNormalizationGeneric<In, Out>" as NormGeneric {
+        + normalize_input(data)
+        + denormalize_output(data)
+        + print(os)
+        --
+        - normalize_fn / denormalize_fn / print_fn
+    }
 }
 
-class "MLCouplingApplication<In,Out>" <<abstract>> {
-    + input_data: MLCouplingData<In>
-    + input_data_after_preprocessing: MLCouplingData<In>
-    + output_data_before_postprocessing: MLCouplingData<Out>
-    + output_data: MLCouplingData<Out>
-    # normalization: std::unique_ptr<MLCouplingNormalization<In,Out>>
-    + MLCouplingApplication(...)
-    + step(bool, bool)
-    + prepare_input()
-    + finalize_output()
-    + get_pre_post_buffers(): std::pair<MLCouplingData<In>*, MLCouplingData<Out>*>
-    # preprocess(MLCouplingData<In>): MLCouplingData<In>
-    # coupling_step(MLCouplingData<In>)
-    # ml_step(MLCouplingData<In>): MLCouplingData<Out>
-    # postprocess(MLCouplingData<Out>): MLCouplingData<Out>
+package "Data model" {
+
+    class "MLCouplingData<T>" as MLCouplingData {
+        + add_tensor(tensor)
+        + size() : size_t
+        + empty() : bool
+        + operator[](index) : MLCouplingTensor<T>&
+        + flatten_all(layout) : MLCouplingData<T>
+        + deep_copy() : MLCouplingData<T>
+        + get_flat_data() : vector<T>
+        --
+        - tensors : vector<MLCouplingTensor<T>>
+    }
+
+    class "MLCouplingTensor<T>" as MLCouplingTensor {
+        + wrap_flat(...) / wrap_nested(...) {static}
+        + from_flat_copy(values, dims) {static}
+        + dimensions() : vector<int>&
+        + layout() : MLCouplingMemoryLayout
+        + ownership() : MLCouplingOwnership
+        + root() : void*
+        + numel() : size_t
+        + rank() : size_t
+        + empty() / is_contiguous() / is_nested()
+        + data_type() : MLCouplingDataType
+        + at(index) / set(index, value)
+        + at_linear(i) / set_linear(i, value)
+        + flatten(layout) / unflatten(layout) / deep_copy()
+        --
+        - root : void*
+        - dimensions : vector<int>
+        - layout : MLCouplingMemoryLayout
+        - ownership : MLCouplingOwnership
+    }
+
+    class "MLCouplingMatrix<T>" as Matrix
+    class "MLCouplingVector<T>" as Vector
+    class "MLCouplingScalar<T>" as Scalar
+
+    enum "CouplingType" as CouplingType {
+        STATIC
+        FLEXIBLE
+    }
+
+    enum "MLCouplingMergeStrategy" as MergeStrategy {
+        List
+        Stack
+        Auto
+        None
+    }
+
+    enum "MLCouplingOwnership" as Ownership {
+        External
+        Owned
+    }
+
+    enum "MLCouplingMemoryLayout" as MemoryLayout {
+        Invalid
+        Nested
+        Contiguous
+        FortranNested
+        FortranContiguous
+    }
+
+    enum "MLCouplingDataType" as DataType {
+        Invalid
+        Double
+        Float
+        Int8
+        Int16
+        Int32
+        Int64
+        Uint8
+        Uint16
+    }
 }
 
-class "MLCouplingNormalization<In,Out>" <<abstract>> {
-    + normalize_input(MLCouplingData<In>)
-    + denormalize_output(MLCouplingData<Out>)
-    + print(std::ostream&)
-    + ~MLCouplingNormalization()
+note bottom of MLCouplingData
+  Container ownership (owns its tensors) is distinct
+  from MLCouplingTensor backing-memory policy
+  (External borrow vs Owned free).
+end note
+
+package "Config / Factory" {
+
+    enum "ConfigCastMode" as ConfigCastMode {
+        Strict
+        Relaxed
+    }
+
+    enum "ConfigParameterMatchMode" as ParamMatchMode {
+        Strict
+        Lenient
+    }
+
+    class "ConfigOverrides" as ConfigOverrides {
+        + sections : ConfigSectionOverrides
+        + dotted : ConfigDottedOverrides
+        + empty() : bool
+    }
+
+    class "Config factory (config.hpp)" as ConfigFactory {
+        + create_mlcoupling_from_config(...) : MLCoupling* {static}
+        + create_mlcoupling_from_config_string(...) : MLCoupling* {static}
+        + create_from_config[_file] via MLCoupling
+    }
 }
 
-class "MLCouplingMinMaxNormalization<In,Out>" {
-    - input_min: In
-    - input_max: In
-    - output_min: Out
-    - output_max: Out
-    + MLCouplingMinMaxNormalization(...)
-    + normalize_input(MLCouplingData<In>)
-    + denormalize_output(MLCouplingData<Out>)
-    + print(std::ostream&)
+note bottom of ConfigFactory
+  TOML -> generated_registry.hpp
+  (build-time python + libclang)
+  -> concrete Library / Application /
+  Behavior / Normalization instances.
+end note
+
+package "Language APIs" {
+
+    class "C API (include/c_api.h)" as CAPIC {
+        + cmi_coupling_create / _create_from_config
+        + cmi_coupling_step / _train_step
+        + cmi_library_create_by_name / _generic
+        + cmi_library_inference / _train
+        + cmi_library_flex_ordered_* / flex_keyed_*
+        + cmi_application_ml_step
+        + cmi_behavior_create_default / periodic / generic
+        + cmi_normalization_create_minmax / generic
+        + opaque handles: cmi_coupling_t, cmi_library_t, ...
+        + callbacks: cmi_inference_fn, cmi_should_infer_fn, ...
+        + thread-local errors: cmi_get_last_error(), cmi_status_string()
+        + float/double dispatch via cmi_data_type
+    }
+
+    class "Fortran module cmi (cmi_fortran.f90)" as Fortran {
+        + iso_c_binding wrappers over the C API
+        + opaque types: cmi_coupling, cmi_library, ...
+        + cmi_tensor_wrap(1D/2D/3D float|double)
+        + cmi_get_error(msg)
+        + zero-copy Fortran column-major
+          (CMI_LAYOUT_FORTRAN_CONTIGUOUS)
+    }
 }
 
-class "MLCouplingApplicationTurbulenceClosure<In,Out>" {
-    # preprocess(MLCouplingData<In>): MLCouplingData<In>
-    # coupling_step(MLCouplingData<In>)
-    # ml_step(MLCouplingData<In>): MLCouplingData<Out>
-    # postprocess(MLCouplingData<Out>): MLCouplingData<Out>
-    - uniform_filtering()
-    - downsampling()
-    - compute_tau_ij()
-}
+' --- Relationships ---
 
-class "MLCouplingApplicationFlowExtrapolator<In,Out>" {
-    - cube_dimension: int
-    - cube_overlap: int
-    - input_sequence_length: int
-    - forecast_window: int
-    - n_ghost_layers: int
-    + MLCouplingApplicationFlowExtrapolator(...)
-    # preprocess(MLCouplingData<In>): MLCouplingData<In>
-    # coupling_step(MLCouplingData<In>)
-    # ml_step(MLCouplingData<In>): MLCouplingData<Out>
-    # postprocess(MLCouplingData<Out>): MLCouplingData<Out>
-}
+' Orchestrator composition
+MLCoupling "1" *-- "1" MLCouplingLibrary : owns
+MLCoupling "1" *-- "1" MLCouplingApplication : owns
+MLCoupling "1" *-- "0..1" MLCouplingBehavior : owns
+MLCoupling "1" *-- "1" TrainingTracker : owns
+MLCoupling ..> CouplingType : uses
+MLCoupling ..> OrderedProxy : exposes
+MLCoupling ..> KeyedProxy : exposes
+MLCoupling --> MLCouplingData : library_input / library_output (borrowed)
+TrainingTracker "1" o-- "0..*" TrainingMetrics : contains
 
-class "MLCouplingBehavior" <<abstract>> {
-    + should_perform_inference(): bool
-    + time_step_delta(): int
-    + should_send_data(): bool
-}
+' Library hierarchy and tiers
+MLCouplingLibrary <|-- Phydll
+MLCouplingLibrary <|-- Aixelerator
+MLCouplingLibrary <|-- Smartsim
+MLCouplingLibrary <|-- Dummy
+MLCouplingLibrary <|-- LibraryGeneric
+MLCouplingLibrary ..> MergeStrategy : uses
 
-class "MLCouplingBehaviorDefault" {
-    + should_perform_inference(): bool
-    + time_step_delta(): int
-    + should_send_data(): bool
-}
+' Application hierarchy
+MLCouplingApplication <|-- AppFlowEx
+MLCouplingApplication <|-- AppGeneric
+MLCouplingApplication "1" *-- "4" MLCouplingData : owns buffers
+MLCouplingApplication "1" *-- "0..1" MLCouplingNormalization : owns
+MLCouplingApplication ..> MLCouplingLibrary : ml_step()
+MLCouplingApplication ..> MLCouplingBehavior : ml_step()
 
-class "MLCouplingBehaviorPeriodic" {
-    - step_count: long long
-    - inference_interval: int
-    - coupled_steps_before_inference: int
-    - coupled_steps_stride: int
-    - step_increment_after_inference: int
-    - prohibit_inference: std::function<bool(int)>
-    + MLCouplingBehaviorPeriodic(...)
-    + should_perform_inference(): bool
-    + time_step_delta(): int
-    + should_send_data(): bool
-}
+' Behavior / Normalization hierarchies
+MLCouplingBehavior <|-- BehaviorDefault
+MLCouplingBehavior <|-- BehaviorPeriodic
+MLCouplingBehavior <|-- BehaviorFlowEx
+MLCouplingBehavior <|-- BehaviorGeneric
+MLCouplingNormalization <|-- MinMax
+MLCouplingNormalization <|-- NormGeneric
 
-class "MLCouplingProviderPhydll<In,Out>" {
-    - model_file: std::string
-    - backend: std::string
-    - device: std::string
-    + MLCouplingProviderPhydll(...)
-    + inference(MLCouplingData<In>*, MLCouplingData<Out>*)
-    + set_io_buffers(MLCouplingData<In>*, MLCouplingData<Out>*)
-}
+' Data model
+MLCouplingData "1" o-- "0..*" MLCouplingTensor : contains
+MLCouplingTensor <|-- Matrix
+MLCouplingTensor <|-- Vector
+MLCouplingTensor <|-- Scalar
+MLCouplingTensor ..> MemoryLayout : uses
+MLCouplingTensor ..> Ownership : uses
+MLCouplingTensor ..> DataType : uses
 
-class "MLCouplingProviderAixelerator<In,Out>" {
-    - model_file: std::string
-    - batchsize: int
-    - app_comm: MPI_Comm
-    - enable_hybrid: bool
-    - host_fraction: std::optional<float>
-    + MLCouplingProviderAixelerator(...)
-    + inference(MLCouplingData<In>*, MLCouplingData<Out>*)
-    + set_io_buffers(MLCouplingData<In>*, MLCouplingData<Out>*)
-}
+' Config / Factory
+ConfigFactory ..> ConfigCastMode : uses
+ConfigFactory ..> ParamMatchMode : uses
+ConfigFactory ..> ConfigOverrides : uses
+ConfigFactory ..> MLCouplingLibrary : instantiates
+ConfigFactory ..> MLCouplingApplication : instantiates
+ConfigFactory ..> MLCouplingBehavior : instantiates
+ConfigFactory ..> MLCouplingNormalization : instantiates
+ConfigFactory ..> MLCoupling : builds
 
-class "MLCouplingProviderSmartsim<In,Out>" {
-    - device: std::string
-    - model_backend: std::string
-    - model_name: std::string
-    - num_gpus: int
-    - first_gpu: int
-    - batch_size: int
-    - min_batch_size: int
-    - min_batch_timeout: int
-    + MLCouplingProviderSmartsim(...)
-    + inference(MLCouplingData<In>*, MLCouplingData<Out>*)
-    + set_io_buffers(MLCouplingData<In>*, MLCouplingData<Out>*)
-}
+' Language facades
+CAPIC ..> MLCoupling : facade
+Fortran ..> CAPIC : wraps
 
-class "MLCouplingTensor<T>" {
-    - root: void*
-    - dimensions: std::vector<int>
-    - layout: MLCouplingMemoryLayout
-    - ownership: MLCouplingOwnership
-    + MLCouplingTensor()
-    + MLCouplingTensor(...)
-    + wrap_flat(...)
-    + wrap_nested(...)
-    + from_flat_copy(...)
-    + dimensions(): const std::vector<int>&
-    + dimensions_as_int64(): std::vector<int64_t>
-    + layout(): MLCouplingMemoryLayout
-    + ownership(): MLCouplingOwnership
-    + root(): void*
-    + numel(): size_t
-    + rank(): size_t
-    + empty(): bool
-    + is_contiguous(): bool
-    + is_nested(): bool
-    + data_type(): MLCouplingDataType
-    + at(const std::vector<int>&): T
-    + set(const std::vector<int>&, const T&)
-    + at_linear(size_t): T
-    + set_linear(size_t, const T&)
-    + flatten(MLCouplingMemoryLayout): MLCouplingTensor<T>
-    + unflatten(MLCouplingMemoryLayout): MLCouplingTensor<T>
-}
-
-class "MLCouplingMatrix<T>" {
-    + MLCouplingMatrix(...)
-}
-
-class "MLCouplingVector<T>" {
-    + MLCouplingVector(...)
-}
-
-class "MLCouplingScalar<T>" {
-    + MLCouplingScalar(...)
-}
-
-class "MLCouplingData<T>" {
-    - tensors: std::vector<MLCouplingTensor<T>>
-    + MLCouplingData()
-    + MLCouplingData(std::vector<MLCouplingTensor<T>>)
-    + add_tensor(const MLCouplingTensor<T>&)
-    + size(): size_t
-    + empty(): bool
-    + operator[](size_t): MLCouplingTensor<T>&
-    + flatten_all(MLCouplingMemoryLayout = MLCouplingMemLayoutContiguous): MLCouplingData<T>
-    + deep_copy(): MLCouplingData<T>
-    + get_flat_data(): std::vector<T>
-}
-
-enum "MLCouplingOwnership" {
-    MLCouplingOwnershipExternal
-    MLCouplingOwnershipOwned
-}
-
-enum "MLCouplingMemoryLayout" {
-    MLCouplingMemLayoutInvalid
-    MLCouplingMemLayoutNested
-    MLCouplingMemLayoutContiguous
-    MLCouplingMemLayoutFortranNested
-    MLCouplingMemLayoutFortranContiguous
-}
-
-enum "MLCouplingDataType" {
-    MLCouplingDataTypeInvalid
-    MLCouplingDataTypeDouble
-    MLCouplingDataTypeFloat
-    MLCouplingDataTypeInt8
-    MLCouplingDataTypeInt16
-    MLCouplingDataTypeInt32
-    MLCouplingDataTypeInt64
-    MLCouplingDataTypeUint8
-    MLCouplingDataTypeUint16
-}
-
-' Relationships
-"MLCoupling<In,Out>" "1" ||--|| "1" "MLCouplingProvider<In,Out>" : owns
-"MLCoupling<In,Out>" "1" ||--|| "1" "MLCouplingApplication<In,Out>" : owns
-"MLCoupling<In,Out>" "1" ||--o| "0..1" "MLCouplingBehavior" : owns
-"MLCoupling<In,Out>" ..> "CouplingType" : uses
-"MLCouplingApplication<In,Out>" "1" ||--o| "0..1" "MLCouplingNormalization<In,Out>" : owns
-"MLCouplingApplication<In,Out>" "1" o--|| "4" "MLCouplingData<T>" : uses
-"MLCouplingNormalization<In,Out>" <|-- "MLCouplingMinMaxNormalization<In,Out>"
-
-"MLCouplingApplication<In,Out>" <|-- "MLCouplingApplicationTurbulenceClosure<In,Out>"
-"MLCouplingApplication<In,Out>" <|-- "MLCouplingApplicationFlowExtrapolator<In,Out>"
-"MLCouplingBehavior" <|-- "MLCouplingBehaviorDefault"
-"MLCouplingBehavior" <|-- "MLCouplingBehaviorPeriodic"
-
-"MLCouplingProvider<In,Out>" <|-- "MLCouplingProviderFlexible<In,Out>"
-"MLCouplingProviderFlexible<In,Out>" <|-- "MLCouplingProviderPhydll<In,Out>"
-"MLCouplingProvider<In,Out>" <|-- "MLCouplingProviderAixelerator<In,Out>"
-"MLCouplingProviderFlexible<In,Out>" <|-- "MLCouplingProviderSmartsim<In,Out>"
-
-"MLCouplingData<T>" "1" o--|| "0..*" "MLCouplingTensor<T>" : owns
-"MLCouplingTensor<T>" <|-- "MLCouplingMatrix<T>"
-"MLCouplingTensor<T>" <|-- "MLCouplingVector<T>"
-"MLCouplingTensor<T>" <|-- "MLCouplingScalar<T>"
+' Layout-only helpers (invisible edges): keep the satellite packages in a
+' single column so the rendered PNG stays within PlantUML's default size limit.
+MLCoupling -[hidden]-> ConfigFactory
+ConfigFactory -[hidden]-> CAPIC
+CAPIC -[hidden]-> Fortran
+MLCouplingApplication -[hidden]-> BehaviorDefault
 
 @enduml

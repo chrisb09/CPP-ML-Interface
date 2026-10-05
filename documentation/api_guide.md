@@ -19,10 +19,9 @@ auto coupling = MLCoupling<float, double>::create_from_config(
 If your workflow consists of exactly one input and one output tensor (or dataset) per step, you should use the high-level static API.
 
 ### Static Inference
-Calls the provider's inference method, automatically applying `prepare_input()` and `finalize_output()` from your Application class.
+Calls the provider's inference method, automatically applying `prepare_library_input()` and `finalize_coupling_output()` from your Application class.
 ```cpp
 coupling->step();
-// Note: coupling->ml_step() is also supported for backward compatibility.
 ```
 
 ### Static Training
@@ -84,7 +83,7 @@ auto metrics = coupling->keyed()
 
 The `MLCoupling` interface provides robust backward compatibility. You can use the flexible `.ordered()` and `.keyed()` proxy views **even if the backend provider is strictly static** (i.e., it only implements `static_inference`).
 
-If a static provider encounters multiple `.set()` calls (e.g., staging multiple features sequentially or under different keys), the `MLCouplingProvider` base class automatically executes a **Merge-by-Concatenation fallback**:
+If a static provider encounters multiple `.set()` calls (e.g., staging multiple features sequentially or under different keys), the `MLCouplingLibrary` base class automatically executes a **Merge-by-Concatenation fallback**:
 
 1. **Staging:** All staged data objects are held in memory buffers.
 2. **Merging:** When `.inference()` or `.train()` is invoked, the fallback concatenates the internal lists of tensors from all staged `MLCouplingData` objects into a single, unified `MLCouplingData` object. It maintains the canonical order defined by the sequential `.set()` calls or the list of keys provided to `.inference({"key1", "key2"}, ...)`.
