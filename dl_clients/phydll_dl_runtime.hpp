@@ -64,7 +64,7 @@ public:
     void free_control_comm();
     bool is_running() const;
 
-    Frame receive_frame();
+    void receive_frame(Frame& frame);
     void send_output(const std::vector<double>& output);
 
     int field_size() const { return field_size_; }

@@ -113,11 +113,13 @@ bool DlRuntime::is_running() const {
     return phydll_is_phy_signal();
 }
 
-Frame DlRuntime::receive_frame() {
+void DlRuntime::receive_frame(Frame& frame) {
     if (!initialized_) {
         initialize();
     }
 
+    // Reclaim the previous frame only after the serial caller has finished using it.
+    combined_data_.swap(frame.data);
     reset_buffers();
     receive_fields();
 
@@ -126,15 +128,13 @@ Frame DlRuntime::receive_frame() {
         SCOREP_USER_REGION_BEGIN(handle_dl_frame_copy, "dl_frame_copy", SCOREP_USER_REGION_TYPE_COMMON);
     }
 #endif
-    Frame frame;
-    frame.data = combined_data_;
+    frame.data.swap(combined_data_);
     frame.has_meta = false;
 #ifdef USE_SCOREP
     if (detailed_profile_enabled_) {
         SCOREP_USER_REGION_END(handle_dl_frame_copy);
     }
 #endif
-    return frame;
 }
 
 void DlRuntime::send_output(const std::vector<double>& output) {
@@ -205,16 +205,21 @@ void DlRuntime::receive_fields() {
     phydll_irecv();
     phydll_wait_irecv();
 
+    const size_t total = static_cast<size_t>(field_size_) * static_cast<size_t>(phy_count_);
     combined_data_.clear();
-    combined_data_.reserve(static_cast<size_t>(field_size_) * static_cast<size_t>(phy_count_));
+    combined_data_.resize(total);
 
-    double* buffer_ptr = nullptr;
+    // Borrow PhyDLL's receive buffer instead of malloc'ing and freeing a copy
+    // per field. The view is valid until the next irecv cycle, so copy it out
+    // into combined_data_ immediately (one copy, no allocation churn).
+    const double* buffer_ptr = nullptr;
     char label[64] = {0};
+    size_t write_offset = 0;
 
     for (int i = 0; i < phy_count_; ++i) {
-        buffer_ptr = nullptr; // phydll_get_field will allocate a new buffer via malloc
+        buffer_ptr = nullptr;
         std::memset(label, 0, sizeof(label));
-        phydll_get_field(&buffer_ptr, label);
+        phydll_get_field_view(&buffer_ptr, label);
 
         // Accept the packed-mode label ("PHY-DATA") and the uniform_chunks
         // labels ("PHY-IN-###"). Metadata travels out-of-band, so every
@@ -222,13 +227,12 @@ void DlRuntime::receive_fields() {
         const bool is_data_field = std::string(label) == "PHY-DATA" ||
                                    std::strncmp(label, "PHY-IN-", 7) == 0;
         if (buffer_ptr && is_data_field) {
-            combined_data_.insert(combined_data_.end(), buffer_ptr, buffer_ptr + field_size_);
+            std::copy(buffer_ptr, buffer_ptr + field_size_, combined_data_.begin() + write_offset);
+            write_offset += static_cast<size_t>(field_size_);
         }
-        
-        if (buffer_ptr) {
-            free(buffer_ptr);
-        }
+        // buffer_ptr is borrowed from PhyDLL; do not free it.
     }
+    combined_data_.resize(write_offset);
 #ifdef USE_SCOREP
     if (detailed_profile_enabled_) {
         SCOREP_USER_REGION_END(handle_dl_recv);

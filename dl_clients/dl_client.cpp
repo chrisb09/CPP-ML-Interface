@@ -319,11 +319,14 @@ int main(int argc, char **argv) {
         }
     }
     std::uint64_t frame_id = 0;
+    phydll_dl::Frame frame;
+    std::vector<double> output;
+    std::vector<float> input;
     while (runtime.is_running()) {
 #ifndef FORWARD_CPU_DIAGNOSTIC
         std::fprintf(stderr, "[PHYDLL:DL] Waiting for frame %llu\n", (unsigned long long)frame_id); std::fflush(stderr);
 #endif
-        const auto frame = runtime.receive_frame();
+        runtime.receive_frame(frame);
 #ifndef FORWARD_CPU_DIAGNOSTIC
         std::fprintf(stderr, "[PHYDLL:DL] Received frame %llu (has_meta=%d, data_size=%zu)\n", 
                      (unsigned long long)frame_id, frame.has_meta, frame.data.size()); 
@@ -412,7 +415,9 @@ int main(int argc, char **argv) {
 #ifdef USE_SCOREP
         if (profile_details) SCOREP_USER_REGION_BEGIN(handle_dl_output_allocate, "dl_output_allocate", SCOREP_USER_REGION_TYPE_COMMON);
 #endif
-        std::vector<double> output(static_cast<size_t>(runtime.field_size()) * static_cast<size_t>(runtime.dl_count()), 0.0);
+        output.resize(static_cast<size_t>(runtime.field_size()) * static_cast<size_t>(runtime.dl_count()));
+        // Packed transport padding and the no-model fallback must remain zero each frame.
+        std::fill(output.begin(), output.end(), 0.0);
 #ifdef USE_SCOREP
         if (profile_details) SCOREP_USER_REGION_END(handle_dl_output_allocate);
 #endif
@@ -423,7 +428,8 @@ int main(int argc, char **argv) {
             #ifdef USE_SCOREP
             if (profile_details) SCOREP_USER_REGION_BEGIN(handle_dl_input_allocate, "dl_input_allocate", SCOREP_USER_REGION_TYPE_COMMON);
             #endif
-            std::vector<float> input(static_cast<size_t>(total_input_size));
+            input.resize(static_cast<size_t>(total_input_size));
+            std::fill(input.begin(), input.end(), 0.0f);
             #ifdef USE_SCOREP
             if (profile_details) SCOREP_USER_REGION_END(handle_dl_input_allocate);
             #endif
@@ -512,7 +518,10 @@ int main(int argc, char **argv) {
             #ifdef USE_SCOREP
             if (profile_details) SCOREP_USER_REGION_BEGIN(handle_dl_h2d, "dl_h2d", SCOREP_USER_REGION_TYPE_COMMON);
             #endif
-            auto input_tensor = torch::from_blob(input.data(), {batch_size, input_per_rank_used}, options).clone();
+            // `input` is stable for the whole synchronous loop iteration, so the
+            // borrowed from_blob view stays valid through forward(). `.to` is a
+            // no-op on CPU and keeps this path correct on other devices.
+            auto input_tensor = torch::from_blob(input.data(), {batch_size, input_per_rank_used}, options);
             input_tensor = input_tensor.view(actual_shape);
             input_tensor = input_tensor.to(torch_device);
             #ifdef PHYDLL_HAS_CUDA_STREAM
@@ -544,7 +553,44 @@ int main(int argc, char **argv) {
                     outputs.push_back(model.forward({chunk_tensor}).toTensor());
 #endif
                 }
-                auto output_tensor = torch::cat(outputs, 0);
+                // Assemble multi-chunk outputs directly into one contiguous slice
+                // layout instead of torch::cat. Fall back to cat for scalar or
+                // otherwise mismatched chunk shapes so semantics stay identical.
+                auto trim_matches = [](const torch::Tensor& a, const torch::Tensor& b) {
+                    if (a.dim() != b.dim()) return false;
+                    for (int64_t d = 1; d < a.dim(); ++d) {
+                        if (a.size(d) != b.size(d)) return false;
+                    }
+                    return true;
+                };
+                bool assemblable = !outputs.empty() && outputs.front().dim() > 0;
+                for (const auto& chunk : outputs) {
+                    if (chunk.dim() != outputs.front().dim() ||
+                        chunk.scalar_type() != outputs.front().scalar_type() ||
+                        chunk.device() != outputs.front().device() ||
+                        !trim_matches(chunk, outputs.front())) {
+                        assemblable = false;
+                        break;
+                    }
+                }
+                torch::Tensor output_tensor;
+                if (outputs.size() == 1 && outputs.front().dim() > 0) {
+                    output_tensor = outputs.front();
+                } else if (assemblable) {
+                    long long total_rows = 0;
+                    for (const auto& chunk : outputs) total_rows += chunk.size(0);
+                    std::vector<int64_t> assembled_shape = outputs.front().sizes().vec();
+                    assembled_shape[0] = total_rows;
+                    output_tensor = torch::empty(assembled_shape, outputs.front().options());
+                    long long row_offset = 0;
+                    for (const auto& chunk : outputs) {
+                        const long long rows = chunk.size(0);
+                        output_tensor.slice(0, row_offset, row_offset + rows).copy_(chunk);
+                        row_offset += rows;
+                    }
+                } else {
+                    output_tensor = torch::cat(outputs, 0);
+                }
 #ifdef PHYDLL_HAS_CUDA_STREAM
                 if (torch_device.is_cuda()) {
                     c10::cuda::getCurrentCUDAStream(torch_device.index()).synchronize();
