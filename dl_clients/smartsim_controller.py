@@ -8,6 +8,12 @@ import socket
 from pathlib import Path
 
 from smartsim.experiment import Experiment
+from smartsim.database.orchestrator import Orchestrator
+
+
+class SingleNodeOrchestrator(Orchestrator):
+    def _get_db_hosts(self):
+        return list(dict.fromkeys(super()._get_db_hosts()))
 
 def find_free_port(start_port=6780, max_attempts=100):
     """Finds a free port starting from the given port."""
@@ -41,6 +47,7 @@ def main() -> int:
     parser.add_argument("--auto-port", action="store_true", help="Automatically find a free port")
     parser.add_argument("--interface", default="lo", help="Network interface (e.g., lo, ib0)")
     parser.add_argument("--db-nodes", type=int, default=1, help="Number of database nodes/shards")
+    parser.add_argument("--db-layout", default="shared", choices=["shared", "per-ml-node"], help="Database layout: 'shared' (clustered/single DB) or 'per-ml-node' (N independent standalone DBs)")
     
     # Threading & Performance
     parser.add_argument("--inter-op-threads", type=int, default=1, help="Parallelism between independent graph ops")
@@ -111,6 +118,7 @@ def main() -> int:
         print(f"Port: {port}")
         print(f"Interface: {args.interface}")
         print(f"DB Nodes: {args.db_nodes}")
+        print(f"DB Layout: {args.db_layout}")
         if args.use_default_cpu_settings:
             print("Using SmartSim's default CPU settings (no overrides).")
         else:
@@ -122,46 +130,76 @@ def main() -> int:
 
     exp = Experiment(name=exp_name, launcher=launcher, exp_path=str(exp_path))
     
-    if args.use_default_cpu_settings:
-        if not args.silent:
-            print("Using SmartSim's default CPU settings. No overrides will be applied for --cpu-cores-per-node, --intra-op-threads, --inter-op-threads, or --threads-per-queue.")
-        db = exp.create_database(
-            port=port, 
-            interface=args.interface, 
-            db_nodes=args.db_nodes, 
-            single_cmd=False, 
-            batch=False,
-            # Do not set intra_op_threads, inter_op_threads, or threads_per_queue to allow SmartSim to auto-configure
-        )
+    dbs = []
+    bind_cpus = args.cpu_cores_per_node if args.cpu_cores_per_node > 0 else intra_threads
+
+    if args.db_layout == "per-ml-node":
+        for i in range(args.db_nodes):
+            shard_port = port + i
+            db_kwargs = {
+                "port": shard_port,
+                "interface": args.interface,
+                "db_nodes": 1,
+                "single_cmd": False,
+                "batch": False,
+                "db_identifier": f"shard_{i}",
+            }
+            if not args.use_default_cpu_settings:
+                db_kwargs["intra_op_threads"] = intra_threads
+                db_kwargs["inter_op_threads"] = args.inter_op_threads
+                db_kwargs["threads_per_queue"] = args.threads_per_queue
+            db_i = exp.create_database(**db_kwargs)
+            if launcher == "slurm":
+                db_i.set_run_arg("export", "ALL")
+                db_i.set_run_arg("overlap", None)
+                db_i.set_run_arg("exact", None)
+                if args.het_group and ("SLURM_HET_SIZE" in os.environ or "SLURM_JOB_NUM_NODES_HET_GROUP_0" in os.environ):
+                    db_i.set_run_arg("het-group", args.het_group)
+            if not args.use_gpu and not args.use_default_cpu_settings and not args.no_cpu_bind:
+                db_i.set_cpus(bind_cpus)
+            dbs.append(db_i)
     else:
-        db = exp.create_database(
-            port=port, 
-            interface=args.interface, 
-            db_nodes=args.db_nodes, 
-            single_cmd=False, 
-            batch=False,
-            intra_op_threads=intra_threads,
-            inter_op_threads=args.inter_op_threads,
-            threads_per_queue=args.threads_per_queue
-        )
+        db_kwargs = {
+            "port": port,
+            "interface": args.interface,
+            "db_nodes": args.db_nodes,
+            "single_cmd": False,
+            "batch": False,
+        }
+        if not args.use_default_cpu_settings:
+            db_kwargs["intra_op_threads"] = intra_threads
+            db_kwargs["inter_op_threads"] = args.inter_op_threads
+            db_kwargs["threads_per_queue"] = args.threads_per_queue
 
-    if launcher == "slurm":
-        db.set_run_arg("export", "ALL")
-        db.set_run_arg("mem", "0")
-    
-    if launcher == "slurm" and args.het_group and ("SLURM_HET_SIZE" in os.environ or "SLURM_JOB_NUM_NODES_HET_GROUP_0" in os.environ):
-        db.set_run_arg("het-group", args.het_group)
-        
-    if not args.use_gpu and not args.use_default_cpu_settings and not args.no_cpu_bind:
-        bind_cpus = args.cpu_cores_per_node if args.cpu_cores_per_node > 0 else intra_threads
-        db.set_cpus(bind_cpus)
-        if not args.silent:
-            print(f"Binding database to {bind_cpus} CPU cores per node.")
+        db = exp.create_database(**db_kwargs)
+        if launcher == "slurm":
+            db.set_run_arg("export", "ALL")
+            db.set_run_arg("overlap", None)
+            db.set_run_arg("exact", None)
+            if args.het_group and ("SLURM_HET_SIZE" in os.environ or "SLURM_JOB_NUM_NODES_HET_GROUP_0" in os.environ):
+                db.set_run_arg("het-group", args.het_group)
 
-    exp.start(db, block=False, summary=not args.silent)
+        # For single node multi-shard cluster, offset ports to avoid conflict
+        if args.db_nodes > 1 and launcher == "slurm":
+            for i, entity in enumerate(db.entities):
+                shard_port = port + i
+                entity.ports = [shard_port]
+                entity.run_settings.exe_args = [
+                    f"+port={shard_port}" if arg.startswith("+port=") else arg
+                    for arg in entity.run_settings.exe_args
+                ]
+            db.ports = [port + i for i in range(args.db_nodes)]
+            # Deduplicate hostnames using picklable SingleNodeOrchestrator for create_cluster
+            db.__class__ = SingleNodeOrchestrator
+
+        if not args.use_gpu and not args.use_default_cpu_settings and not args.no_cpu_bind:
+            db.set_cpus(bind_cpus)
+        dbs.append(db)
+
+    exp.start(*dbs, block=False, summary=not args.silent)
 
     # Apply clustered Redis stability config if needed
-    if args.db_nodes > 1:
+    if args.db_layout == "shared" and args.db_nodes > 1:
         timeout_ms = os.environ.get("SMARTSIM_CLUSTER_NODE_TIMEOUT_MS", "120000")
         require_full_coverage = os.environ.get("SMARTSIM_CLUSTER_REQUIRE_FULL_COVERAGE", "no")
         conf_retries = int(os.environ.get("SMARTSIM_DB_CONF_RETRIES", "30"))
@@ -169,8 +207,8 @@ def main() -> int:
         config_applied = False
         for attempt in range(1, conf_retries + 1):
             try:
-                db.set_db_conf("cluster-node-timeout", timeout_ms)
-                db.set_db_conf("cluster-require-full-coverage", require_full_coverage)
+                dbs[0].set_db_conf("cluster-node-timeout", timeout_ms)
+                dbs[0].set_db_conf("cluster-require-full-coverage", require_full_coverage)
                 if not args.silent:
                     print(f"Applied clustered Redis stability config (attempt {attempt}).")
                 config_applied = True
@@ -184,18 +222,21 @@ def main() -> int:
 
     # Wait for readiness
     start = time.time()
-    addresses = None
+    addresses = []
     while time.time() - start < args.timeout_s:
         try:
-            addresses = db.get_address()
-            if addresses:
+            curr_addrs = []
+            for db_i in dbs:
+                curr_addrs.extend(db_i.get_address())
+            if curr_addrs:
+                addresses = curr_addrs
                 break
         except Exception:
             pass
         time.sleep(0.5)
 
     if not addresses:
-        exp.stop(db)
+        exp.stop(*dbs)
         raise RuntimeError("SmartSim database did not become ready in time.")
 
     endpoint = ",".join(addresses)
@@ -213,7 +254,7 @@ def main() -> int:
         print("Solver done signaled. Shutting down database.", flush=True)
     
     import threading
-    stop_thread = threading.Thread(target=exp.stop, args=(db,))
+    stop_thread = threading.Thread(target=exp.stop, args=dbs)
     stop_thread.start()
     stop_thread.join(timeout=15.0)
     
