@@ -3,6 +3,7 @@
 #include "scorep_profiling_state.hpp"
 
 #include <memory>
+#include <optional>
 #include <stdexcept>
 #include <type_traits>
 #include <utility>
@@ -97,6 +98,13 @@ public:
         }
     }
 
+    // Opt in to static-inference profiling; setting the count restarts warmup.
+    void set_scorep_warmup_inference_count(size_t count)
+    {
+        scorep_warmup_inference_count_ = count;
+        scorep_inference_count_ = 0;
+    }
+
     /**
      * @brief Executes a single ML step if scheduled by @p behavior.
      *
@@ -110,7 +118,11 @@ public:
     virtual int ml_step(MLCouplingLibrary<LibraryInput, LibraryOutput>& library,
                         MLCouplingBehavior& behavior)
     {
-        if (behavior.should_perform_inference())
+        const bool perform_inference = behavior.should_perform_inference();
+        ml_coupling_scorep::InferenceScope profiling(
+            scorep_warmup_inference_count_.has_value(),
+            perform_inference && scorep_inference_count_ >= scorep_warmup_inference_count_.value_or(0));
+        if (perform_inference)
         {
             prepare_library_input();
 #ifdef USE_SCOREP
@@ -119,6 +131,7 @@ public:
             SCOREP_USER_REGION_BEGIN(handle_app_provider_inference, "app_provider_inference", SCOREP_USER_REGION_TYPE_COMMON)
             }
 #endif
+            ++scorep_inference_count_;
             library.static_inference(&library_input, &library_output);
 #ifdef USE_SCOREP
             if (ml_coupling_scorep::detailed_regions_are_enabled()) {
@@ -171,6 +184,9 @@ public:
     virtual ~MLCouplingApplication() = default;
 
 protected:
+    std::optional<size_t> scorep_warmup_inference_count_;
+    size_t scorep_inference_count_ = 0;
+
     virtual MLCouplingData<LibraryInput>
     preprocess_coupling_input(MLCouplingData<CouplingInput> input)
     {

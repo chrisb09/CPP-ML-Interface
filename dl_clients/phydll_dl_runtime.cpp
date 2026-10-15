@@ -118,20 +118,21 @@ void DlRuntime::receive_frame(Frame& frame) {
         initialize();
     }
 
+    const bool profile_details = detailed_profile_enabled_;
     // Reclaim the previous frame only after the serial caller has finished using it.
     combined_data_.swap(frame.data);
     reset_buffers();
     receive_fields();
 
 #ifdef USE_SCOREP
-    if (detailed_profile_enabled_) {
+    if (profile_details) {
         SCOREP_USER_REGION_BEGIN(handle_dl_frame_copy, "dl_frame_copy", SCOREP_USER_REGION_TYPE_COMMON);
     }
 #endif
     frame.data.swap(combined_data_);
     frame.has_meta = false;
 #ifdef USE_SCOREP
-    if (detailed_profile_enabled_) {
+    if (profile_details) {
         SCOREP_USER_REGION_END(handle_dl_frame_copy);
     }
 #endif
@@ -182,8 +183,8 @@ void DlRuntime::send_output(const std::vector<double>& output) {
         MPI_Waitall(source_count_, readiness_requests.data(), MPI_STATUSES_IGNORE);
     ++frame_id_;
 
-    // The first response completes the initialization frame.
-    detailed_profile_enabled_ = true;
+    // Preserve the legacy first-response latch unless the client owns the frame gate.
+    if (!externally_gated_profile_) detailed_profile_enabled_ = true;
 
 #ifdef USE_SCOREP
     if (profile_details) {
@@ -197,8 +198,9 @@ void DlRuntime::free_control_comm() {
 }
 
 void DlRuntime::receive_fields() {
+    const bool profile_details = detailed_profile_enabled_;
 #ifdef USE_SCOREP
-    if (detailed_profile_enabled_) {
+    if (profile_details) {
         SCOREP_USER_REGION_BEGIN(handle_dl_recv, "dl_recv", SCOREP_USER_REGION_TYPE_COMMON);
     }
     #endif
@@ -234,7 +236,7 @@ void DlRuntime::receive_fields() {
     }
     combined_data_.resize(write_offset);
 #ifdef USE_SCOREP
-    if (detailed_profile_enabled_) {
+    if (profile_details) {
         SCOREP_USER_REGION_END(handle_dl_recv);
     }
     #endif

@@ -105,7 +105,11 @@ protected:
 
 #ifdef USE_SCOREP
         SCOREP_USER_REGION_DEFINE(handle_flowex_extract_cubes)
-        SCOREP_USER_REGION_BEGIN(handle_flowex_extract_cubes, "flowex_extract_cubes", SCOREP_USER_REGION_TYPE_COMMON)
+        const bool profile_extract = !this->scorep_warmup_inference_count_.has_value()
+            || ml_coupling_scorep::detailed_regions_are_enabled();
+        if (profile_extract) {
+            SCOREP_USER_REGION_BEGIN(handle_flowex_extract_cubes, "flowex_extract_cubes", SCOREP_USER_REGION_TYPE_COMMON)
+        }
 #endif
         std::vector<std::vector<CouplingInput>> current_step(static_cast<size_t>(kFieldCount));
         for (int field = 0; field < kFieldCount; ++field)
@@ -141,7 +145,9 @@ protected:
             }
         }
 #ifdef USE_SCOREP
-        SCOREP_USER_REGION_END(handle_flowex_extract_cubes)
+        if (profile_extract) {
+            SCOREP_USER_REGION_END(handle_flowex_extract_cubes)
+        }
 #endif
 
         if (debug_enabled())
@@ -158,11 +164,18 @@ protected:
 
     int ml_step(MLCouplingLibrary<LibraryInput, LibraryOutput>& library, MLCouplingBehavior& behavior) override
     {
-        if (behavior.should_send_data())
+        // Sending projects the old counter forward; inference advances it and
+        // reschedules the next cycle. Cache both before preparing history.
+        const bool send_data = behavior.should_send_data();
+        const bool perform_inference = behavior.should_perform_inference();
+        ml_coupling_scorep::InferenceScope profiling(
+            this->scorep_warmup_inference_count_.has_value(),
+            perform_inference && this->scorep_inference_count_ >= this->scorep_warmup_inference_count_.value_or(0));
+        if (send_data)
         {
             this->prepare_library_input();
         }
-        if (behavior.should_perform_inference())
+        if (perform_inference)
         {
             debug_active_ = debug_begin_inference();
             if (debug_active_)
@@ -178,6 +191,7 @@ protected:
                 SCOREP_USER_REGION_BEGIN(handle_app_provider_inference, "app_provider_inference", SCOREP_USER_REGION_TYPE_COMMON)
             }
 #endif
+            ++this->scorep_inference_count_;
             library.static_inference(&this->library_input, &this->library_output);
 #ifdef USE_SCOREP
             if (ml_coupling_scorep::detailed_regions_are_enabled()) {
@@ -221,7 +235,11 @@ protected:
 
 #ifdef USE_SCOREP
         SCOREP_USER_REGION_DEFINE(handle_flowex_reconstruct_output)
-        SCOREP_USER_REGION_BEGIN(handle_flowex_reconstruct_output, "flowex_reconstruct_output", SCOREP_USER_REGION_TYPE_COMMON)
+        const bool profile_reconstruct = !this->scorep_warmup_inference_count_.has_value()
+            || ml_coupling_scorep::detailed_regions_are_enabled();
+        if (profile_reconstruct) {
+            SCOREP_USER_REGION_BEGIN(handle_flowex_reconstruct_output, "flowex_reconstruct_output", SCOREP_USER_REGION_TYPE_COMMON)
+        }
 #endif
         const CouplingOutput *buffer = static_cast<const CouplingOutput *>(working_tensor.root());
 
@@ -267,7 +285,9 @@ protected:
             debug_dump_fields("reconstructed_fields", this->coupling_output);
         }
 #ifdef USE_SCOREP
-        SCOREP_USER_REGION_END(handle_flowex_reconstruct_output)
+        if (profile_reconstruct) {
+            SCOREP_USER_REGION_END(handle_flowex_reconstruct_output)
+        }
 #endif
 
         return this->coupling_output;

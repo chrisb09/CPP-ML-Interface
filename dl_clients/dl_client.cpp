@@ -2,6 +2,8 @@
 #include <cstring>
 #include <string>
 #include <vector>
+#include <cerrno>
+#include <cstdlib>
 
 #include <mpi.h>
 
@@ -34,6 +36,7 @@ SCOREP_USER_REGION_DEFINE(handle_dl_torch_forward);
 SCOREP_USER_REGION_DEFINE(handle_dl_d2h);
 SCOREP_USER_REGION_DEFINE(handle_dl_output_reorder);
 SCOREP_USER_REGION_DEFINE(handle_dl_send_output);
+SCOREP_USER_REGION_DEFINE(handle_dl_inference_steady);
 #endif
 
 namespace {
@@ -195,6 +198,19 @@ int main(int argc, char **argv) {
     int local_dl_rank = 0;
 
     const int dl_count = get_env_int("PHYDLL_DL_FIELD_COUNT", get_env_int("PHYDLL_DL_COUNT", 1));
+    const char* warmup_env = std::getenv("CMI_SCOREP_WARMUP_CALLS");
+    std::uint64_t profile_warmup_calls = 1;
+    if (warmup_env != nullptr) {
+        char* end = nullptr;
+        errno = 0;
+        const long calls = std::strtol(warmup_env, &end, 10);
+        if (errno == ERANGE || end == warmup_env || *end != '\0' || calls < 0) {
+            std::fprintf(stderr, "[PHYDLL:DL] ERROR: CMI_SCOREP_WARMUP_CALLS must be a nonnegative integer\n");
+            MPI_Abort(MPI_COMM_WORLD, 1);
+            return 1;
+        }
+        profile_warmup_calls = static_cast<std::uint64_t>(calls);
+    }
 
 #ifdef PHYDLL_DL_USE_TORCH
     const int intra_threads = get_env_int("MLCOUPLING_INTRA_OP_THREADS", get_env_int("SLURM_CPUS_PER_TASK", 4));
@@ -323,6 +339,13 @@ int main(int argc, char **argv) {
     std::vector<double> output;
     std::vector<float> input;
     while (runtime.is_running()) {
+        const bool profile_details = frame_id >= profile_warmup_calls;
+        if (warmup_env != nullptr) runtime.set_detailed_profile_enabled(profile_details);
+#ifdef USE_SCOREP
+        // is_running() consumes the control signal, including shutdown, before this region.
+        const bool profile_steady = warmup_env != nullptr && profile_details;
+        if (profile_steady) SCOREP_USER_REGION_BEGIN(handle_dl_inference_steady, "dl_inference_steady", SCOREP_USER_REGION_TYPE_COMMON);
+#endif
 #ifndef FORWARD_CPU_DIAGNOSTIC
         std::fprintf(stderr, "[PHYDLL:DL] Waiting for frame %llu\n", (unsigned long long)frame_id); std::fflush(stderr);
 #endif
@@ -408,10 +431,12 @@ int main(int argc, char **argv) {
         }
 
         if (!meta_initialized) {
+#ifdef USE_SCOREP
+            if (profile_steady) SCOREP_USER_REGION_END(handle_dl_inference_steady);
+#endif
             continue;
         }
 
-        const bool profile_details = frame_id > 0;
 #ifdef USE_SCOREP
         if (profile_details) SCOREP_USER_REGION_BEGIN(handle_dl_output_allocate, "dl_output_allocate", SCOREP_USER_REGION_TYPE_COMMON);
 #endif
@@ -679,11 +704,12 @@ int main(int argc, char **argv) {
         }
 
         #ifdef USE_SCOREP
-        if (frame_id > 0) SCOREP_USER_REGION_BEGIN(handle_dl_send_output, "dl_send_output", SCOREP_USER_REGION_TYPE_COMMON);
+        if (profile_details) SCOREP_USER_REGION_BEGIN(handle_dl_send_output, "dl_send_output", SCOREP_USER_REGION_TYPE_COMMON);
         #endif
         runtime.send_output(output);
         #ifdef USE_SCOREP
-        if (frame_id > 0) SCOREP_USER_REGION_END(handle_dl_send_output);
+        if (profile_details) SCOREP_USER_REGION_END(handle_dl_send_output);
+        if (profile_steady) SCOREP_USER_REGION_END(handle_dl_inference_steady);
         #endif
 #ifndef FORWARD_CPU_DIAGNOSTIC
         std::fprintf(stderr, "[PHYDLL:DL] sent output for frame %llu\n", (unsigned long long)frame_id); std::fflush(stderr);

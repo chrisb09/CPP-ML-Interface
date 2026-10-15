@@ -351,6 +351,11 @@ class MLCoupling
         ml_coupling_scorep::set_detailed_regions_enabled(enabled);
     }
 
+    void set_scorep_warmup_inference_count(size_t count)
+    {
+        application->set_scorep_warmup_inference_count(count);
+    }
+
     /**
      * @brief Configures the fallback merge strategy for flexible execution.
      * @param strategy The strategy to use (List or Stack).
