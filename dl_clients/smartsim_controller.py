@@ -66,6 +66,7 @@ def main() -> int:
     parser.add_argument("--cpu-cores-per-node", type=int, default=0, help="Explicit CPU cores to bind DB to (overrides auto-detect for db.set_cpus)")
     parser.add_argument("--no-cpu-bind", action="store_true", help="Skip db.set_cpus() completely (do not explicitly bind DB step)")
     parser.add_argument("--het-group", default=None, type=str, help="Heterogeneous group to run the database on (Slurm only)")
+    parser.add_argument("--db-step-mem", default=None, help="Slurm database-step memory per node (e.g., 32G; 0 uses allocation memory)")
     parser.add_argument("--exp-dir", default=None, help="Base experiment directory")
     parser.add_argument("--silent", action="store_true", help="Suppress output")
     
@@ -195,6 +196,11 @@ def main() -> int:
         if not args.use_gpu and not args.use_default_cpu_settings and not args.no_cpu_bind:
             db.set_cpus(bind_cpus)
         dbs.append(db)
+
+    if launcher == "slurm" and args.db_step_mem is not None:
+        # Keep DB memory independent of its one-task CPU allocation.
+        for db_i in dbs:
+            db_i.set_run_arg("mem", args.db_step_mem)
 
     exp.start(*dbs, block=False, summary=not args.silent)
 
