@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 import argparse
+import json
 import os
 import shutil
 import sys
@@ -39,6 +40,34 @@ def detect_available_cores():
     # Fallback to raw machine cores
     return os.cpu_count() or 1
 
+def database_gpu_ids(db_count, launcher, het_group):
+    """Use only runner-validated IDs or visibility from a provably local step."""
+    raw = os.environ.get("SMARTSIM_DB_GPU_IDS")
+    if raw is None:
+        # A CPU-side heterogeneous controller's visibility says nothing about
+        # the GPU step. A single-node, non-heterogeneous allocation is local.
+        same_node = (
+            os.environ.get("SLURM_JOB_NUM_NODES") == "1"
+            and os.environ.get("SLURMD_NODENAME", "").split(".")[0]
+            == socket.gethostname().split(".")[0]
+            and "SLURM_HET_SIZE" not in os.environ
+            and "SLURM_JOB_NUM_NODES_HET_GROUP_0" not in os.environ
+        )
+        if het_group is not None or (launcher != "local" and not same_node):
+            raise ValueError("SMARTSIM_DB_GPU_IDS is required for remote/heterogeneous DB steps")
+        raw = os.environ.get("CUDA_VISIBLE_DEVICES", "")
+    ids = [value.strip() for value in raw.split(",")]
+    if any(not value or value == "-1" or any(c.isspace() for c in value) for value in ids):
+        raise ValueError("GPU IDs must be nonempty CUDA_VISIBLE_DEVICES tokens")
+    if len(set(ids)) != len(ids):
+        raise ValueError("GPU IDs must be unique")
+    if len(ids) < db_count:
+        raise ValueError(f"Need at least {db_count} allocated GPU IDs, got {len(ids)}")
+    count = os.environ.get("SMARTSIM_DB_GPU_COUNT")
+    if count is not None and (int(count) < 1 or int(count) != len(ids)):
+        raise ValueError("SMARTSIM_DB_GPU_COUNT must match the number of allocated GPU IDs")
+    return ids
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Start SmartSim DB Orchestrator.")
     
@@ -76,6 +105,12 @@ def main() -> int:
     launcher = args.launcher
     if not launcher:
         launcher = "slurm" if "SLURM_JOB_ID" in os.environ else "local"
+
+    if args.db_nodes < 1:
+        parser.error("--db-nodes must be positive")
+    gpu_ids = None
+    if args.db_layout == "per-ml-node" and args.use_gpu:
+        gpu_ids = database_gpu_ids(args.db_nodes, launcher, args.het_group)
 
     # Determine port
     port = args.port
@@ -150,6 +185,21 @@ def main() -> int:
                 db_kwargs["inter_op_threads"] = args.inter_op_threads
                 db_kwargs["threads_per_queue"] = args.threads_per_queue
             db_i = exp.create_database(**db_kwargs)
+            if gpu_ids is not None:
+                mask = gpu_ids[i]
+                for entity in db_i.entities:
+                    settings = entity.run_settings
+                    settings.env_vars["CUDA_VISIBLE_DEVICES"] = mask
+                    if launcher == "slurm":
+                        # --export=ALL and Slurm's GPU setup can override exported
+                        # values. Apply the mask inside the step, just before exec.
+                        settings.exe = [shutil.which("env") or "/usr/bin/env",
+                                        f"CUDA_VISIBLE_DEVICES={mask}"] + settings.exe
+                    print("SMARTSIM_DB_GPU_MAP " + json.dumps({
+                        "shard": i, "port": shard_port, "mask": mask,
+                        "logical_device": 0,
+                        "launch_command": settings.exe + settings.exe_args,
+                    }, sort_keys=True), flush=True)
             if launcher == "slurm":
                 db_i.set_run_arg("export", "ALL")
                 db_i.set_run_arg("overlap", None)
@@ -233,10 +283,14 @@ def main() -> int:
         try:
             curr_addrs = []
             for db_i in dbs:
-                curr_addrs.extend(db_i.get_address())
-            if curr_addrs:
-                addresses = curr_addrs
-                break
+                db_addrs = db_i.get_address()
+                if args.db_layout == "per-ml-node" and (len(db_addrs) != 1 or not all(db_addrs)):
+                    break
+                curr_addrs.extend(db_addrs)
+            else:
+                if curr_addrs:
+                    addresses = curr_addrs
+                    break
         except Exception:
             pass
         time.sleep(0.5)
