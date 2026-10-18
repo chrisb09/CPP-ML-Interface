@@ -562,6 +562,20 @@ class MLCoupling
     void track(const std::string &field) { training_tracker.track(field); }
 
     /**
+     * @brief Logs externally computed training metrics at a given step.
+     *
+     * Useful for language bindings or drivers that compute metrics outside the
+     * provider and still want to use the built-in tracking/history facilities.
+     *
+     * @param step_id Simulation step identifier.
+     * @param metrics Map of metric names to values.
+     */
+    void log_training_metrics(long long step_id, const std::map<std::string, double> &metrics)
+    {
+        training_tracker.log(step_id, metrics);
+    }
+
+    /**
      * @brief Retrieves the history of a specific tracked field.
      * @param field The name of the field.
      * @return A vector of historical values for the given field.

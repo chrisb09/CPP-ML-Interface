@@ -156,11 +156,17 @@ struct cmi_library_s {
     virtual void flex_ordered_set(cmi_data_s* in) = 0;
     virtual void flex_ordered_set_target(cmi_data_s* target) = 0;
     virtual void flex_ordered_inference(cmi_data_s* fallback_output) = 0;
+    virtual void flex_ordered_get(cmi_data_s* output) = 0;
+    virtual void flex_ordered_train(int64_t step_id) = 0;
     virtual void flex_keyed_set(const std::string& key, cmi_data_s* in) = 0;
     virtual void flex_keyed_set_target(const std::string& key, cmi_data_s* target) = 0;
     virtual void flex_keyed_inference(const std::vector<std::string>& in_keys,
                                       const std::vector<std::string>& out_keys,
                                       cmi_data_s* fallback_output) = 0;
+    virtual void flex_keyed_get(const std::string& key, cmi_data_s* output) = 0;
+    virtual void flex_keyed_train(int64_t step_id,
+                                  const std::vector<std::string>& in_keys,
+                                  const std::vector<std::string>& target_keys) = 0;
     virtual void set_rank(int r) = 0;
     virtual void set_merge_strategy(int s) = 0;
     virtual void* get_raw() = 0;
@@ -211,6 +217,18 @@ struct cmi_library_impl : public cmi_library_s {
         }
     }
 
+    void flex_ordered_get(cmi_data_s* output) override {
+        if (!obj) throw std::runtime_error("Library object already released or destroyed.");
+        if (!output) throw std::invalid_argument("output data is null");
+        auto& out = std::get<MLCouplingData<Out>>(output->data);
+        obj->flex_ordered_get(&out);
+    }
+
+    void flex_ordered_train(int64_t step_id) override {
+        if (!obj) throw std::runtime_error("Library object already released or destroyed.");
+        obj->flex_ordered_train(static_cast<long long>(step_id));
+    }
+
     void flex_keyed_set(const std::string& key, cmi_data_s* in) override {
         if (!obj) throw std::runtime_error("Library object already released or destroyed.");
         obj->flex_keyed_set(key, std::get<MLCouplingData<In>>(in->data));
@@ -231,6 +249,20 @@ struct cmi_library_impl : public cmi_library_s {
         } else {
             obj->flex_keyed_inference(in_keys, out_keys, nullptr);
         }
+    }
+
+    void flex_keyed_get(const std::string& key, cmi_data_s* output) override {
+        if (!obj) throw std::runtime_error("Library object already released or destroyed.");
+        if (!output) throw std::invalid_argument("output data is null");
+        auto& out = std::get<MLCouplingData<Out>>(output->data);
+        obj->flex_keyed_get(key, &out);
+    }
+
+    void flex_keyed_train(int64_t step_id,
+                          const std::vector<std::string>& in_keys,
+                          const std::vector<std::string>& target_keys) override {
+        if (!obj) throw std::runtime_error("Library object already released or destroyed.");
+        obj->flex_keyed_train(static_cast<long long>(step_id), in_keys, target_keys);
     }
 
     void set_rank(int r) override {
@@ -291,6 +323,12 @@ struct cmi_coupling_s {
     virtual ~cmi_coupling_s() = default;
     virtual int step() = 0;
     virtual void train_step(int64_t step_id) = 0;
+    virtual void set_merge_strategy(int strategy) = 0;
+    virtual void track(const std::string& field) = 0;
+    virtual double get_current(const std::string& field) = 0;
+    virtual std::vector<double> get_history(const std::string& field) = 0;
+    virtual void log_training_metrics(int64_t step_id,
+                                      const std::map<std::string, double>& metrics) = 0;
 };
 
 template <typename CI, typename CO, typename LI, typename LO>
@@ -314,6 +352,36 @@ struct cmi_coupling_impl : public cmi_coupling_s {
         if (!obj) throw std::runtime_error("Coupling object is null.");
         obj->train_step(static_cast<long long>(step_id));
     }
+
+    void set_merge_strategy(int strategy) override {
+        if (!obj) throw std::runtime_error("Coupling object is null.");
+        obj->set_merge_strategy(static_cast<MLCouplingMergeStrategy>(strategy));
+    }
+
+    void track(const std::string& field) override {
+        if (!obj) throw std::runtime_error("Coupling object is null.");
+        obj->track(field);
+    }
+
+    double get_current(const std::string& field) override {
+        if (!obj) throw std::runtime_error("Coupling object is null.");
+        return obj->get_current(field);
+    }
+
+    std::vector<double> get_history(const std::string& field) override {
+        if (!obj) throw std::runtime_error("Coupling object is null.");
+        return obj->get_history(field);
+    }
+
+    void log_training_metrics(int64_t step_id,
+                              const std::map<std::string, double>& metrics) override {
+        if (!obj) throw std::runtime_error("Coupling object is null.");
+        obj->log_training_metrics(static_cast<long long>(step_id), metrics);
+    }
+};
+
+struct cmi_config_overrides_s {
+    ConfigOverrides overrides;
 };
 
 // Map of legacy pointers to deleters
@@ -333,6 +401,164 @@ static std::unordered_map<std::string, std::pair<int, void*>> pack_c_params(
         params_map[std::string(param_names[i])] = std::make_pair(type_tag, const_cast<void*>(param_values[i]));
     }
     return params_map;
+}
+
+// ============================================================================
+// Configuration Overrides Implementation
+// ============================================================================
+
+static bool make_config_override_value(int value_type, const void* value, ConfigOverrideValue& out) {
+    switch (value_type) {
+        case CMI_PARAM_RAW:
+            out = const_cast<void*>(value);
+            return true;
+        case CMI_PARAM_INT64:
+            if (!value) return false;
+            out = *static_cast<const int64_t*>(value);
+            return true;
+        case CMI_PARAM_DOUBLE:
+            if (!value) return false;
+            out = *static_cast<const double*>(value);
+            return true;
+        case CMI_PARAM_STRING:
+            if (!value) return false;
+            out = std::string(static_cast<const char*>(value));
+            return true;
+        case CMI_PARAM_BOOL:
+            if (!value) return false;
+            out = (*static_cast<const bool*>(value) != false);
+            return true;
+        default:
+            return false;
+    }
+}
+
+static bool make_config_override_string_array(const char* const* values,
+                                              int count,
+                                              ConfigOverrideValue& out) {
+    if (count < 0 || (count > 0 && !values)) return false;
+    std::vector<std::string> array;
+    array.reserve(static_cast<size_t>(count));
+    for (int i = 0; i < count; ++i) {
+        if (!values[i]) return false;
+        array.emplace_back(values[i]);
+    }
+    out = std::move(array);
+    return true;
+}
+
+extern "C" int cmi_config_overrides_create(cmi_config_overrides_t* out) {
+    if (!out) { set_error(CMI_ERROR_NULL_POINTER, "out is null"); return CMI_ERROR_NULL_POINTER; }
+    try {
+        *out = new cmi_config_overrides_s();
+        clear_error();
+        return CMI_SUCCESS;
+    } catch (const std::exception& e) {
+        set_error(CMI_ERROR_RUNTIME, e.what());
+        return CMI_ERROR_RUNTIME;
+    }
+}
+
+extern "C" int cmi_config_overrides_destroy(cmi_config_overrides_t overrides) {
+    if (!overrides) return CMI_SUCCESS;
+    delete overrides;
+    return CMI_SUCCESS;
+}
+
+extern "C" int cmi_config_overrides_set(cmi_config_overrides_t overrides,
+                                        const char* section,
+                                        const char* key,
+                                        int value_type,
+                                        const void* value) {
+    if (!overrides) { set_error(CMI_ERROR_NULL_POINTER, "overrides is null"); return CMI_ERROR_NULL_POINTER; }
+    if (!section) { set_error(CMI_ERROR_NULL_POINTER, "section is null"); return CMI_ERROR_NULL_POINTER; }
+    if (!key) { set_error(CMI_ERROR_NULL_POINTER, "key is null"); return CMI_ERROR_NULL_POINTER; }
+
+    ConfigOverrideValue override_value;
+    if (!make_config_override_value(value_type, value, override_value)) {
+        set_error(CMI_ERROR_INVALID_ARGUMENT, "Invalid override value or value_type");
+        return CMI_ERROR_INVALID_ARGUMENT;
+    }
+
+    try {
+        overrides->overrides.sections[section][key] = std::move(override_value);
+        clear_error();
+        return CMI_SUCCESS;
+    } catch (const std::exception& e) {
+        set_error(CMI_ERROR_RUNTIME, e.what());
+        return CMI_ERROR_RUNTIME;
+    }
+}
+
+extern "C" int cmi_config_overrides_set_dotted(cmi_config_overrides_t overrides,
+                                               const char* dotted_key,
+                                               int value_type,
+                                               const void* value) {
+    if (!overrides) { set_error(CMI_ERROR_NULL_POINTER, "overrides is null"); return CMI_ERROR_NULL_POINTER; }
+    if (!dotted_key) { set_error(CMI_ERROR_NULL_POINTER, "dotted_key is null"); return CMI_ERROR_NULL_POINTER; }
+
+    ConfigOverrideValue override_value;
+    if (!make_config_override_value(value_type, value, override_value)) {
+        set_error(CMI_ERROR_INVALID_ARGUMENT, "Invalid override value or value_type");
+        return CMI_ERROR_INVALID_ARGUMENT;
+    }
+
+    try {
+        overrides->overrides.dotted[dotted_key] = std::move(override_value);
+        clear_error();
+        return CMI_SUCCESS;
+    } catch (const std::exception& e) {
+        set_error(CMI_ERROR_RUNTIME, e.what());
+        return CMI_ERROR_RUNTIME;
+    }
+}
+
+extern "C" int cmi_config_overrides_set_string_array(cmi_config_overrides_t overrides,
+                                                     const char* section,
+                                                     const char* key,
+                                                     const char* const* values,
+                                                     int count) {
+    if (!overrides) { set_error(CMI_ERROR_NULL_POINTER, "overrides is null"); return CMI_ERROR_NULL_POINTER; }
+    if (!section) { set_error(CMI_ERROR_NULL_POINTER, "section is null"); return CMI_ERROR_NULL_POINTER; }
+    if (!key) { set_error(CMI_ERROR_NULL_POINTER, "key is null"); return CMI_ERROR_NULL_POINTER; }
+
+    ConfigOverrideValue override_value;
+    if (!make_config_override_string_array(values, count, override_value)) {
+        set_error(CMI_ERROR_INVALID_ARGUMENT, "Invalid string array override");
+        return CMI_ERROR_INVALID_ARGUMENT;
+    }
+
+    try {
+        overrides->overrides.sections[section][key] = std::move(override_value);
+        clear_error();
+        return CMI_SUCCESS;
+    } catch (const std::exception& e) {
+        set_error(CMI_ERROR_RUNTIME, e.what());
+        return CMI_ERROR_RUNTIME;
+    }
+}
+
+extern "C" int cmi_config_overrides_set_dotted_string_array(cmi_config_overrides_t overrides,
+                                                            const char* dotted_key,
+                                                            const char* const* values,
+                                                            int count) {
+    if (!overrides) { set_error(CMI_ERROR_NULL_POINTER, "overrides is null"); return CMI_ERROR_NULL_POINTER; }
+    if (!dotted_key) { set_error(CMI_ERROR_NULL_POINTER, "dotted_key is null"); return CMI_ERROR_NULL_POINTER; }
+
+    ConfigOverrideValue override_value;
+    if (!make_config_override_string_array(values, count, override_value)) {
+        set_error(CMI_ERROR_INVALID_ARGUMENT, "Invalid string array override");
+        return CMI_ERROR_INVALID_ARGUMENT;
+    }
+
+    try {
+        overrides->overrides.dotted[dotted_key] = std::move(override_value);
+        clear_error();
+        return CMI_SUCCESS;
+    } catch (const std::exception& e) {
+        set_error(CMI_ERROR_RUNTIME, e.what());
+        return CMI_ERROR_RUNTIME;
+    }
 }
 
 // ============================================================================
@@ -1076,8 +1302,67 @@ extern "C" int cmi_library_create_generic(cmi_library_t* out,
                     out_w.data = *out;
 
                     inference_fn(&in_w, &out_w, user_data);
+                    *out = std::get<MLCouplingData<OutType>>(out_w.data);
                 }
             );
+            *out = new cmi_library_impl<InType, OutType>(std::move(lib));
+            clear_error();
+            return CMI_SUCCESS;
+        })
+    } catch (const std::exception& e) {
+        set_error(CMI_ERROR_RUNTIME, e.what());
+        return CMI_ERROR_RUNTIME;
+    }
+}
+
+extern "C" int cmi_library_create_generic_with_training(cmi_library_t* out,
+                                                       int in_type,
+                                                       int out_type,
+                                                       cmi_inference_fn inference_fn,
+                                                       cmi_train_fn train_fn,
+                                                       void* user_data)
+{
+    if (!out) { set_error(CMI_ERROR_NULL_POINTER, "out is null"); return CMI_ERROR_NULL_POINTER; }
+    if (!inference_fn) { set_error(CMI_ERROR_NULL_POINTER, "inference_fn is null"); return CMI_ERROR_NULL_POINTER; }
+
+    try {
+        DISPATCH_IN_OUT_TYPES(in_type, out_type, {
+            auto inference_adapter = [inference_fn, user_data, in_type, out_type](
+                                         MLCouplingData<InType>* in,
+                                         MLCouplingData<OutType>* out) {
+                cmi_data_s in_w;
+                in_w.data_type = in_type;
+                in_w.data = *in;
+
+                cmi_data_s out_w;
+                out_w.data_type = out_type;
+                out_w.data = *out;
+
+                inference_fn(&in_w, &out_w, user_data);
+                *out = std::get<MLCouplingData<OutType>>(out_w.data);
+            };
+
+            MLCouplingLibraryGeneric<InType, OutType>::TrainFn train_adapter = nullptr;
+            if (train_fn) {
+                train_adapter = [train_fn, user_data, in_type, out_type](
+                                    MLCouplingData<InType>* in,
+                                    MLCouplingData<OutType>* target) {
+                    cmi_data_s in_w;
+                    in_w.data_type = in_type;
+                    in_w.data = *in;
+
+                    cmi_data_s target_w;
+                    target_w.data_type = out_type;
+                    target_w.data = *target;
+
+                    train_fn(&in_w, &target_w, user_data);
+                    *target = std::get<MLCouplingData<OutType>>(target_w.data);
+                    return std::map<std::string, double>();
+                };
+            }
+
+            auto lib = std::make_unique<MLCouplingLibraryGeneric<InType, OutType>>(
+                std::move(inference_adapter), std::move(train_adapter));
             *out = new cmi_library_impl<InType, OutType>(std::move(lib));
             clear_error();
             return CMI_SUCCESS;
@@ -1210,6 +1495,35 @@ extern "C" int cmi_library_flex_ordered_inference(cmi_library_t lib, cmi_data_t 
     }
 }
 
+extern "C" int cmi_library_flex_ordered_get(cmi_library_t lib, cmi_data_t output) {
+    if (!lib) { set_error(CMI_ERROR_NULL_POINTER, "lib is null"); return CMI_ERROR_NULL_POINTER; }
+    if (!output) { set_error(CMI_ERROR_NULL_POINTER, "output is null"); return CMI_ERROR_NULL_POINTER; }
+    if (output->data_type != lib->out_type) {
+        set_error(CMI_ERROR_TYPE_MISMATCH, "output data type does not match library output type");
+        return CMI_ERROR_TYPE_MISMATCH;
+    }
+    try {
+        lib->flex_ordered_get(output);
+        clear_error();
+        return CMI_SUCCESS;
+    } catch (const std::exception& e) {
+        set_error(CMI_ERROR_RUNTIME, e.what());
+        return CMI_ERROR_RUNTIME;
+    }
+}
+
+extern "C" int cmi_library_flex_ordered_train(cmi_library_t lib, int64_t step_id) {
+    if (!lib) { set_error(CMI_ERROR_NULL_POINTER, "lib is null"); return CMI_ERROR_NULL_POINTER; }
+    try {
+        lib->flex_ordered_train(step_id);
+        clear_error();
+        return CMI_SUCCESS;
+    } catch (const std::exception& e) {
+        set_error(CMI_ERROR_RUNTIME, e.what());
+        return CMI_ERROR_RUNTIME;
+    }
+}
+
 extern "C" int cmi_library_flex_keyed_set(cmi_library_t lib, const char* key, cmi_data_t data) {
     if (!lib) { set_error(CMI_ERROR_NULL_POINTER, "lib is null"); return CMI_ERROR_NULL_POINTER; }
     if (!key) { set_error(CMI_ERROR_NULL_POINTER, "key is null"); return CMI_ERROR_NULL_POINTER; }
@@ -1263,6 +1577,49 @@ extern "C" int cmi_library_flex_keyed_inference(cmi_library_t lib,
     }
 }
 
+extern "C" int cmi_library_flex_keyed_get(cmi_library_t lib, const char* key, cmi_data_t output) {
+    if (!lib) { set_error(CMI_ERROR_NULL_POINTER, "lib is null"); return CMI_ERROR_NULL_POINTER; }
+    if (!key) { set_error(CMI_ERROR_NULL_POINTER, "key is null"); return CMI_ERROR_NULL_POINTER; }
+    if (!output) { set_error(CMI_ERROR_NULL_POINTER, "output is null"); return CMI_ERROR_NULL_POINTER; }
+    if (output->data_type != lib->out_type) {
+        set_error(CMI_ERROR_TYPE_MISMATCH, "output data type does not match library output type");
+        return CMI_ERROR_TYPE_MISMATCH;
+    }
+    try {
+        lib->flex_keyed_get(key, output);
+        clear_error();
+        return CMI_SUCCESS;
+    } catch (const std::exception& e) {
+        set_error(CMI_ERROR_RUNTIME, e.what());
+        return CMI_ERROR_RUNTIME;
+    }
+}
+
+extern "C" int cmi_library_flex_keyed_train(cmi_library_t lib,
+                                            int64_t step_id,
+                                            const char** in_keys,
+                                            int in_key_count,
+                                            const char** target_keys,
+                                            int target_key_count)
+{
+    if (!lib) { set_error(CMI_ERROR_NULL_POINTER, "lib is null"); return CMI_ERROR_NULL_POINTER; }
+    try {
+        std::vector<std::string> ik, tk;
+        if (in_keys && in_key_count > 0) {
+            for (int i = 0; i < in_key_count; ++i) ik.push_back(in_keys[i]);
+        }
+        if (target_keys && target_key_count > 0) {
+            for (int i = 0; i < target_key_count; ++i) tk.push_back(target_keys[i]);
+        }
+        lib->flex_keyed_train(step_id, ik, tk);
+        clear_error();
+        return CMI_SUCCESS;
+    } catch (const std::exception& e) {
+        set_error(CMI_ERROR_RUNTIME, e.what());
+        return CMI_ERROR_RUNTIME;
+    }
+}
+
 extern "C" int cmi_library_destroy(cmi_library_t lib) {
     if (!lib) return CMI_SUCCESS;
     delete lib;
@@ -1276,30 +1633,65 @@ extern "C" int cmi_library_destroy(cmi_library_t lib) {
 #define DISPATCH_4_TYPES(ci, co, li, lo, ...) \
     if (ci == CMI_DTYPE_FLOAT && co == CMI_DTYPE_FLOAT && li == CMI_DTYPE_FLOAT && lo == CMI_DTYPE_FLOAT) { \
         using CIType = float; using COType = float; using LIType = float; using LOType = float; __VA_ARGS__ \
-    } else if (ci == CMI_DTYPE_DOUBLE && co == CMI_DTYPE_DOUBLE && li == CMI_DTYPE_DOUBLE && lo == CMI_DTYPE_DOUBLE) { \
-        using CIType = double; using COType = double; using LIType = double; using LOType = double; __VA_ARGS__ \
+    } else if (ci == CMI_DTYPE_FLOAT && co == CMI_DTYPE_FLOAT && li == CMI_DTYPE_FLOAT && lo == CMI_DTYPE_DOUBLE) { \
+        using CIType = float; using COType = float; using LIType = float; using LOType = double; __VA_ARGS__ \
+    } else if (ci == CMI_DTYPE_FLOAT && co == CMI_DTYPE_FLOAT && li == CMI_DTYPE_DOUBLE && lo == CMI_DTYPE_FLOAT) { \
+        using CIType = float; using COType = float; using LIType = double; using LOType = float; __VA_ARGS__ \
     } else if (ci == CMI_DTYPE_FLOAT && co == CMI_DTYPE_FLOAT && li == CMI_DTYPE_DOUBLE && lo == CMI_DTYPE_DOUBLE) { \
         using CIType = float; using COType = float; using LIType = double; using LOType = double; __VA_ARGS__ \
+    } else if (ci == CMI_DTYPE_FLOAT && co == CMI_DTYPE_DOUBLE && li == CMI_DTYPE_FLOAT && lo == CMI_DTYPE_FLOAT) { \
+        using CIType = float; using COType = double; using LIType = float; using LOType = float; __VA_ARGS__ \
+    } else if (ci == CMI_DTYPE_FLOAT && co == CMI_DTYPE_DOUBLE && li == CMI_DTYPE_FLOAT && lo == CMI_DTYPE_DOUBLE) { \
+        using CIType = float; using COType = double; using LIType = float; using LOType = double; __VA_ARGS__ \
+    } else if (ci == CMI_DTYPE_FLOAT && co == CMI_DTYPE_DOUBLE && li == CMI_DTYPE_DOUBLE && lo == CMI_DTYPE_FLOAT) { \
+        using CIType = float; using COType = double; using LIType = double; using LOType = float; __VA_ARGS__ \
+    } else if (ci == CMI_DTYPE_FLOAT && co == CMI_DTYPE_DOUBLE && li == CMI_DTYPE_DOUBLE && lo == CMI_DTYPE_DOUBLE) { \
+        using CIType = float; using COType = double; using LIType = double; using LOType = double; __VA_ARGS__ \
+    } else if (ci == CMI_DTYPE_DOUBLE && co == CMI_DTYPE_FLOAT && li == CMI_DTYPE_FLOAT && lo == CMI_DTYPE_FLOAT) { \
+        using CIType = double; using COType = float; using LIType = float; using LOType = float; __VA_ARGS__ \
+    } else if (ci == CMI_DTYPE_DOUBLE && co == CMI_DTYPE_FLOAT && li == CMI_DTYPE_FLOAT && lo == CMI_DTYPE_DOUBLE) { \
+        using CIType = double; using COType = float; using LIType = float; using LOType = double; __VA_ARGS__ \
+    } else if (ci == CMI_DTYPE_DOUBLE && co == CMI_DTYPE_FLOAT && li == CMI_DTYPE_DOUBLE && lo == CMI_DTYPE_FLOAT) { \
+        using CIType = double; using COType = float; using LIType = double; using LOType = float; __VA_ARGS__ \
+    } else if (ci == CMI_DTYPE_DOUBLE && co == CMI_DTYPE_FLOAT && li == CMI_DTYPE_DOUBLE && lo == CMI_DTYPE_DOUBLE) { \
+        using CIType = double; using COType = float; using LIType = double; using LOType = double; __VA_ARGS__ \
     } else if (ci == CMI_DTYPE_DOUBLE && co == CMI_DTYPE_DOUBLE && li == CMI_DTYPE_FLOAT && lo == CMI_DTYPE_FLOAT) { \
         using CIType = double; using COType = double; using LIType = float; using LOType = float; __VA_ARGS__ \
+    } else if (ci == CMI_DTYPE_DOUBLE && co == CMI_DTYPE_DOUBLE && li == CMI_DTYPE_FLOAT && lo == CMI_DTYPE_DOUBLE) { \
+        using CIType = double; using COType = double; using LIType = float; using LOType = double; __VA_ARGS__ \
+    } else if (ci == CMI_DTYPE_DOUBLE && co == CMI_DTYPE_DOUBLE && li == CMI_DTYPE_DOUBLE && lo == CMI_DTYPE_FLOAT) { \
+        using CIType = double; using COType = double; using LIType = double; using LOType = float; __VA_ARGS__ \
+    } else if (ci == CMI_DTYPE_DOUBLE && co == CMI_DTYPE_DOUBLE && li == CMI_DTYPE_DOUBLE && lo == CMI_DTYPE_DOUBLE) { \
+        using CIType = double; using COType = double; using LIType = double; using LOType = double; __VA_ARGS__ \
     } else { \
         set_error(CMI_ERROR_TYPE_MISMATCH, "Unsupported 4-type combination (must be float/double combinations)."); \
         return CMI_ERROR_TYPE_MISMATCH; \
     }
 
-extern "C" int cmi_application_create_generic(cmi_application_t* out,
-                                            int coupling_in_type,
-                                            int coupling_out_type,
-                                            int library_in_type,
-                                            int library_out_type,
-                                            cmi_data_t coupling_input,
-                                            cmi_data_t coupling_output,
-                                            cmi_normalization_t normalization)
+extern "C" int cmi_application_create_generic_with_callbacks(cmi_application_t* out,
+                                                             int coupling_in_type,
+                                                             int coupling_out_type,
+                                                             int library_in_type,
+                                                             int library_out_type,
+                                                             cmi_data_t coupling_input,
+                                                             cmi_data_t coupling_output,
+                                                             cmi_preprocess_fn preprocess_fn,
+                                                             cmi_postprocess_fn postprocess_fn,
+                                                             cmi_normalization_t normalization,
+                                                             void* user_data)
 {
     if (!out) { set_error(CMI_ERROR_NULL_POINTER, "out is null"); return CMI_ERROR_NULL_POINTER; }
     if (!coupling_input || !coupling_output) {
         set_error(CMI_ERROR_NULL_POINTER, "coupling_input and coupling_output must not be null");
         return CMI_ERROR_NULL_POINTER;
+    }
+    if (coupling_input->data_type != coupling_in_type) {
+        set_error(CMI_ERROR_TYPE_MISMATCH, "coupling_input data type does not match coupling_in_type");
+        return CMI_ERROR_TYPE_MISMATCH;
+    }
+    if (coupling_output->data_type != coupling_out_type) {
+        set_error(CMI_ERROR_TYPE_MISMATCH, "coupling_output data type does not match coupling_out_type");
+        return CMI_ERROR_TYPE_MISMATCH;
     }
 
     try {
@@ -1312,8 +1704,42 @@ extern "C" int cmi_application_create_generic(cmi_application_t* out,
                 raw_norm = static_cast<MLCouplingNormalization<LIType, COType>*>(normalization->release_raw());
             }
 
+            MLCouplingApplicationGeneric<CIType, COType, LIType, LOType>::PreprocessFn pre_adapter = nullptr;
+            if (preprocess_fn) {
+                pre_adapter = [preprocess_fn, user_data, coupling_in_type, library_in_type](
+                                  MLCouplingData<CIType> input) {
+                    cmi_data_s in_w;
+                    in_w.data_type = coupling_in_type;
+                    in_w.data = std::move(input);
+
+                    cmi_data_s out_w;
+                    out_w.data_type = library_in_type;
+                    out_w.data = MLCouplingData<LIType>();
+
+                    preprocess_fn(&in_w, &out_w, user_data);
+                    return std::get<MLCouplingData<LIType>>(out_w.data);
+                };
+            }
+
+            MLCouplingApplicationGeneric<CIType, COType, LIType, LOType>::PostprocessFn post_adapter = nullptr;
+            if (postprocess_fn) {
+                post_adapter = [postprocess_fn, user_data, coupling_out_type, library_out_type](
+                                   MLCouplingData<LOType> output) {
+                    cmi_data_s in_w;
+                    in_w.data_type = library_out_type;
+                    in_w.data = std::move(output);
+
+                    cmi_data_s out_w;
+                    out_w.data_type = coupling_out_type;
+                    out_w.data = MLCouplingData<COType>();
+
+                    postprocess_fn(&in_w, &out_w, user_data);
+                    return std::get<MLCouplingData<COType>>(out_w.data);
+                };
+            }
+
             auto app = std::make_unique<MLCouplingApplicationGeneric<CIType, COType, LIType, LOType>>(
-                cin, cout, nullptr, nullptr, nullptr, raw_norm
+                cin, cout, std::move(pre_adapter), std::move(post_adapter), nullptr, raw_norm
             );
 
             *out = new cmi_application_impl<CIType, COType, LIType, LOType>(std::move(app));
@@ -1324,6 +1750,20 @@ extern "C" int cmi_application_create_generic(cmi_application_t* out,
         set_error(CMI_ERROR_RUNTIME, e.what());
         return CMI_ERROR_RUNTIME;
     }
+}
+
+extern "C" int cmi_application_create_generic(cmi_application_t* out,
+                                            int coupling_in_type,
+                                            int coupling_out_type,
+                                            int library_in_type,
+                                            int library_out_type,
+                                            cmi_data_t coupling_input,
+                                            cmi_data_t coupling_output,
+                                            cmi_normalization_t normalization)
+{
+    return cmi_application_create_generic_with_callbacks(
+        out, coupling_in_type, coupling_out_type, library_in_type, library_out_type,
+        coupling_input, coupling_output, nullptr, nullptr, normalization, nullptr);
 }
 
 extern "C" int cmi_application_create_by_name(cmi_application_t* out,
@@ -1423,34 +1863,52 @@ extern "C" int cmi_coupling_create(cmi_coupling_t* out,
     }
 }
 
-extern "C" int cmi_coupling_create_from_config(cmi_coupling_t* out,
-                                             const char* config_path,
-                                             int coupling_in_type,
-                                             int coupling_out_type,
-                                             int library_in_type,
-                                             int library_out_type)
+static int read_config_file(const char* config_path, std::string& content) {
+    std::ifstream file(config_path);
+    if (!file.is_open()) {
+        set_error(CMI_ERROR_RUNTIME, "Could not open configuration file: " + std::string(config_path));
+        return CMI_ERROR_RUNTIME;
+    }
+    content.assign(std::istreambuf_iterator<char>(file), std::istreambuf_iterator<char>());
+    return CMI_SUCCESS;
+}
+
+static int create_coupling_from_config_content(cmi_coupling_t* out,
+                                               const std::string& content,
+                                               int coupling_in_type,
+                                               int coupling_out_type,
+                                               int library_in_type,
+                                               int library_out_type,
+                                               cmi_data_t coupling_input,
+                                               cmi_data_t coupling_output,
+                                               const ConfigOverrides& overrides)
 {
-    if (!out) { set_error(CMI_ERROR_NULL_POINTER, "out is null"); return CMI_ERROR_NULL_POINTER; }
-    if (!config_path) { set_error(CMI_ERROR_NULL_POINTER, "config_path is null"); return CMI_ERROR_NULL_POINTER; }
+    if (coupling_input && coupling_input->data_type != coupling_in_type) {
+        set_error(CMI_ERROR_TYPE_MISMATCH, "coupling_input data type does not match coupling_in_type");
+        return CMI_ERROR_TYPE_MISMATCH;
+    }
+    if (coupling_output && coupling_output->data_type != coupling_out_type) {
+        set_error(CMI_ERROR_TYPE_MISMATCH, "coupling_output data type does not match coupling_out_type");
+        return CMI_ERROR_TYPE_MISMATCH;
+    }
 
     try {
         DISPATCH_4_TYPES(coupling_in_type, coupling_out_type, library_in_type, library_out_type, {
-            std::ifstream file(config_path);
-            if (!file.is_open()) {
-                set_error(CMI_ERROR_RUNTIME, "Could not open configuration file: " + std::string(config_path));
-                return CMI_ERROR_RUNTIME;
-            }
-            std::string content((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
-
             MLCouplingData<CIType> cin;
             MLCouplingData<COType> cout;
+            if (coupling_input) {
+                cin = std::get<MLCouplingData<CIType>>(coupling_input->data);
+            }
+            if (coupling_output) {
+                cout = std::get<MLCouplingData<COType>>(coupling_output->data);
+            }
 
             auto* coupling_ptr = create_mlcoupling_from_config_with_library_types<CIType, COType, LIType, LOType>(
-                content, cin, cout, ConfigOverrides()
+                content, std::move(cin), std::move(cout), overrides
             );
 
             if (!coupling_ptr) {
-                set_error(CMI_ERROR_RUNTIME, "Failed to create coupling from config file");
+                set_error(CMI_ERROR_RUNTIME, "Failed to create coupling from configuration");
                 return CMI_ERROR_RUNTIME;
             }
 
@@ -1466,11 +1924,242 @@ extern "C" int cmi_coupling_create_from_config(cmi_coupling_t* out,
     }
 }
 
+extern "C" int cmi_coupling_create_from_config(cmi_coupling_t* out,
+                                             const char* config_path,
+                                             int coupling_in_type,
+                                             int coupling_out_type,
+                                             int library_in_type,
+                                             int library_out_type)
+{
+    if (!out) { set_error(CMI_ERROR_NULL_POINTER, "out is null"); return CMI_ERROR_NULL_POINTER; }
+    if (!config_path) { set_error(CMI_ERROR_NULL_POINTER, "config_path is null"); return CMI_ERROR_NULL_POINTER; }
+
+    std::string content;
+    int status = read_config_file(config_path, content);
+    if (status != CMI_SUCCESS) return status;
+
+    return create_coupling_from_config_content(out, content,
+                                               coupling_in_type, coupling_out_type,
+                                               library_in_type, library_out_type,
+                                               nullptr, nullptr, ConfigOverrides());
+}
+
+extern "C" int cmi_coupling_create_from_config_with_data(cmi_coupling_t* out,
+                                                         const char* config_path,
+                                                         int coupling_in_type,
+                                                         int coupling_out_type,
+                                                         int library_in_type,
+                                                         int library_out_type,
+                                                         cmi_data_t coupling_input,
+                                                         cmi_data_t coupling_output)
+{
+    if (!out) { set_error(CMI_ERROR_NULL_POINTER, "out is null"); return CMI_ERROR_NULL_POINTER; }
+    if (!config_path) { set_error(CMI_ERROR_NULL_POINTER, "config_path is null"); return CMI_ERROR_NULL_POINTER; }
+    if (!coupling_input || !coupling_output) {
+        set_error(CMI_ERROR_NULL_POINTER, "coupling_input and coupling_output must not be null");
+        return CMI_ERROR_NULL_POINTER;
+    }
+    if (coupling_input->data_type != coupling_in_type) {
+        set_error(CMI_ERROR_TYPE_MISMATCH, "coupling_input data type does not match coupling_in_type");
+        return CMI_ERROR_TYPE_MISMATCH;
+    }
+    if (coupling_output->data_type != coupling_out_type) {
+        set_error(CMI_ERROR_TYPE_MISMATCH, "coupling_output data type does not match coupling_out_type");
+        return CMI_ERROR_TYPE_MISMATCH;
+    }
+
+    std::string content;
+    int status = read_config_file(config_path, content);
+    if (status != CMI_SUCCESS) return status;
+
+    return create_coupling_from_config_content(out, content,
+                                               coupling_in_type, coupling_out_type,
+                                               library_in_type, library_out_type,
+                                               coupling_input, coupling_output,
+                                               ConfigOverrides());
+}
+
+extern "C" int cmi_coupling_create_from_config_string_with_data(cmi_coupling_t* out,
+                                                                const char* config_str,
+                                                                int coupling_in_type,
+                                                                int coupling_out_type,
+                                                                int library_in_type,
+                                                                int library_out_type,
+                                                                cmi_data_t coupling_input,
+                                                                cmi_data_t coupling_output)
+{
+    if (!out) { set_error(CMI_ERROR_NULL_POINTER, "out is null"); return CMI_ERROR_NULL_POINTER; }
+    if (!config_str) { set_error(CMI_ERROR_NULL_POINTER, "config_str is null"); return CMI_ERROR_NULL_POINTER; }
+    if (!coupling_input || !coupling_output) {
+        set_error(CMI_ERROR_NULL_POINTER, "coupling_input and coupling_output must not be null");
+        return CMI_ERROR_NULL_POINTER;
+    }
+
+    return create_coupling_from_config_content(out, std::string(config_str),
+                                               coupling_in_type, coupling_out_type,
+                                               library_in_type, library_out_type,
+                                               coupling_input, coupling_output,
+                                               ConfigOverrides());
+}
+
+extern "C" int cmi_coupling_create_from_config_with_data_and_overrides(cmi_coupling_t* out,
+                                                                       const char* config_path,
+                                                                       int coupling_in_type,
+                                                                       int coupling_out_type,
+                                                                       int library_in_type,
+                                                                       int library_out_type,
+                                                                       cmi_data_t coupling_input,
+                                                                       cmi_data_t coupling_output,
+                                                                       cmi_config_overrides_t overrides)
+{
+    if (!out) { set_error(CMI_ERROR_NULL_POINTER, "out is null"); return CMI_ERROR_NULL_POINTER; }
+    if (!config_path) { set_error(CMI_ERROR_NULL_POINTER, "config_path is null"); return CMI_ERROR_NULL_POINTER; }
+    if (!coupling_input || !coupling_output) {
+        set_error(CMI_ERROR_NULL_POINTER, "coupling_input and coupling_output must not be null");
+        return CMI_ERROR_NULL_POINTER;
+    }
+
+    std::string content;
+    int status = read_config_file(config_path, content);
+    if (status != CMI_SUCCESS) return status;
+
+    const ConfigOverrides override_values = overrides ? overrides->overrides : ConfigOverrides();
+
+    return create_coupling_from_config_content(out, content,
+                                               coupling_in_type, coupling_out_type,
+                                               library_in_type, library_out_type,
+                                               coupling_input, coupling_output,
+                                               override_values);
+}
+
+extern "C" int cmi_coupling_create_from_config_string_with_data_and_overrides(cmi_coupling_t* out,
+                                                                              const char* config_str,
+                                                                              int coupling_in_type,
+                                                                              int coupling_out_type,
+                                                                              int library_in_type,
+                                                                              int library_out_type,
+                                                                              cmi_data_t coupling_input,
+                                                                              cmi_data_t coupling_output,
+                                                                              cmi_config_overrides_t overrides)
+{
+    if (!out) { set_error(CMI_ERROR_NULL_POINTER, "out is null"); return CMI_ERROR_NULL_POINTER; }
+    if (!config_str) { set_error(CMI_ERROR_NULL_POINTER, "config_str is null"); return CMI_ERROR_NULL_POINTER; }
+    if (!coupling_input || !coupling_output) {
+        set_error(CMI_ERROR_NULL_POINTER, "coupling_input and coupling_output must not be null");
+        return CMI_ERROR_NULL_POINTER;
+    }
+
+    const ConfigOverrides override_values = overrides ? overrides->overrides : ConfigOverrides();
+
+    return create_coupling_from_config_content(out, std::string(config_str),
+                                               coupling_in_type, coupling_out_type,
+                                               library_in_type, library_out_type,
+                                               coupling_input, coupling_output,
+                                               override_values);
+}
+
 extern "C" int cmi_coupling_step(cmi_coupling_t coupling, int* out_delta) {
     if (!coupling) { set_error(CMI_ERROR_NULL_POINTER, "coupling is null"); return CMI_ERROR_NULL_POINTER; }
     try {
         int delta = coupling->step();
         if (out_delta) *out_delta = delta;
+        clear_error();
+        return CMI_SUCCESS;
+    } catch (const std::exception& e) {
+        set_error(CMI_ERROR_RUNTIME, e.what());
+        return CMI_ERROR_RUNTIME;
+    }
+}
+
+extern "C" int cmi_coupling_set_merge_strategy(cmi_coupling_t coupling, int strategy) {
+    if (!coupling) { set_error(CMI_ERROR_NULL_POINTER, "coupling is null"); return CMI_ERROR_NULL_POINTER; }
+    try {
+        coupling->set_merge_strategy(strategy);
+        clear_error();
+        return CMI_SUCCESS;
+    } catch (const std::exception& e) {
+        set_error(CMI_ERROR_RUNTIME, e.what());
+        return CMI_ERROR_RUNTIME;
+    }
+}
+
+extern "C" int cmi_coupling_track(cmi_coupling_t coupling, const char* field) {
+    if (!coupling) { set_error(CMI_ERROR_NULL_POINTER, "coupling is null"); return CMI_ERROR_NULL_POINTER; }
+    if (!field) { set_error(CMI_ERROR_NULL_POINTER, "field is null"); return CMI_ERROR_NULL_POINTER; }
+    try {
+        coupling->track(field);
+        clear_error();
+        return CMI_SUCCESS;
+    } catch (const std::exception& e) {
+        set_error(CMI_ERROR_RUNTIME, e.what());
+        return CMI_ERROR_RUNTIME;
+    }
+}
+
+extern "C" int cmi_coupling_get_current(cmi_coupling_t coupling, const char* field, double* out_value) {
+    if (!coupling) { set_error(CMI_ERROR_NULL_POINTER, "coupling is null"); return CMI_ERROR_NULL_POINTER; }
+    if (!field) { set_error(CMI_ERROR_NULL_POINTER, "field is null"); return CMI_ERROR_NULL_POINTER; }
+    if (!out_value) { set_error(CMI_ERROR_NULL_POINTER, "out_value is null"); return CMI_ERROR_NULL_POINTER; }
+    try {
+        *out_value = coupling->get_current(field);
+        clear_error();
+        return CMI_SUCCESS;
+    } catch (const std::exception& e) {
+        set_error(CMI_ERROR_RUNTIME, e.what());
+        return CMI_ERROR_RUNTIME;
+    }
+}
+
+extern "C" int cmi_coupling_get_history(cmi_coupling_t coupling,
+                                        const char* field,
+                                        double* out_values,
+                                        int capacity,
+                                        int* out_count) {
+    if (!coupling) { set_error(CMI_ERROR_NULL_POINTER, "coupling is null"); return CMI_ERROR_NULL_POINTER; }
+    if (!field) { set_error(CMI_ERROR_NULL_POINTER, "field is null"); return CMI_ERROR_NULL_POINTER; }
+    if (!out_count) { set_error(CMI_ERROR_NULL_POINTER, "out_count is null"); return CMI_ERROR_NULL_POINTER; }
+    if (capacity < 0) { set_error(CMI_ERROR_INVALID_ARGUMENT, "capacity must be non-negative"); return CMI_ERROR_INVALID_ARGUMENT; }
+    if (capacity > 0 && !out_values) {
+        set_error(CMI_ERROR_NULL_POINTER, "out_values is null");
+        return CMI_ERROR_NULL_POINTER;
+    }
+    try {
+        std::vector<double> history = coupling->get_history(field);
+        const int total = static_cast<int>(history.size());
+        const int to_copy = std::min(capacity, total);
+        for (int i = 0; i < to_copy; ++i) {
+            out_values[i] = history[static_cast<size_t>(i)];
+        }
+        *out_count = total;
+        clear_error();
+        return CMI_SUCCESS;
+    } catch (const std::exception& e) {
+        set_error(CMI_ERROR_RUNTIME, e.what());
+        return CMI_ERROR_RUNTIME;
+    }
+}
+
+extern "C" int cmi_coupling_log_training_metrics(cmi_coupling_t coupling,
+                                                 int64_t step_id,
+                                                 const char** fields,
+                                                 const double* values,
+                                                 int count) {
+    if (!coupling) { set_error(CMI_ERROR_NULL_POINTER, "coupling is null"); return CMI_ERROR_NULL_POINTER; }
+    if (count < 0) { set_error(CMI_ERROR_INVALID_ARGUMENT, "count must be non-negative"); return CMI_ERROR_INVALID_ARGUMENT; }
+    if (count > 0 && (!fields || !values)) {
+        set_error(CMI_ERROR_NULL_POINTER, "fields and values must not be null when count > 0");
+        return CMI_ERROR_NULL_POINTER;
+    }
+    try {
+        std::map<std::string, double> metrics;
+        for (int i = 0; i < count; ++i) {
+            if (!fields[i]) {
+                set_error(CMI_ERROR_NULL_POINTER, "fields contains a null entry");
+                return CMI_ERROR_NULL_POINTER;
+            }
+            metrics[fields[i]] = values[i];
+        }
+        coupling->log_training_metrics(step_id, metrics);
         clear_error();
         return CMI_SUCCESS;
     } catch (const std::exception& e) {

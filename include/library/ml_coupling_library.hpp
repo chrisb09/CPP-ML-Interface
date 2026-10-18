@@ -274,6 +274,12 @@ protected:
     // (the anomaly we fixed). We throw loudly instead. Owned buffers (from a
     // previous merge) may always be replaced.
     template <typename T>
+    static bool is_row_major_contiguous(const MLCouplingTensor<T> &tensor)
+    {
+        return tensor.layout() == MLCouplingMemLayoutContiguous;
+    }
+
+    template <typename T>
     static void guarantee_fallback_buffer_fit(const MLCouplingData<T> &existing_data,
                                               size_t t_idx,
                                               const std::vector<int> &new_dims)
@@ -283,8 +289,17 @@ protected:
         const auto &existing_tensor = existing_data[t_idx];
         if (existing_tensor.ownership() != MLCouplingOwnershipExternal)
             return; // merge-allocated buffer from a previous step: may be replaced
-        if (existing_tensor.dimensions() == new_dims && existing_tensor.is_contiguous())
+        if (existing_tensor.dimensions() == new_dims && is_row_major_contiguous(existing_tensor))
             return; // fits -> will be reused by the merge
+        if (existing_tensor.dimensions() == new_dims)
+        {
+            throw std::runtime_error(
+                "MLCoupling flex-fallback merge: the user-provided (static-coupling) "
+                "output buffer has the expected shape but a non-row-major layout "
+                "(Fortran-contiguous or nested). Merging produces row-major contiguous "
+                "output. Provide a row-major contiguous buffer, or use "
+                "coupling_type=FLEXIBLE so the merge can allocate its own buffer.");
+        }
 
         std::ostringstream existing_shape, expected_shape;
         for (size_t i = 0; i < existing_tensor.dimensions().size(); ++i)
@@ -357,7 +372,7 @@ protected:
             SCOREP_USER_REGION_DEFINE(handle_flex_merge_allocate_stack)
             SCOREP_USER_REGION_BEGIN(handle_flex_merge_allocate_stack, "flex_merge_allocate_or_reuse", SCOREP_USER_REGION_TYPE_COMMON)
 #endif
-            if (existing_data.size() > t_idx && existing_data[t_idx].dimensions() == new_dims && existing_data[t_idx].is_contiguous()) {
+            if (existing_data.size() > t_idx && existing_data[t_idx].dimensions() == new_dims && is_row_major_contiguous(existing_data[t_idx])) {
                 buffer = static_cast<T*>(existing_data[t_idx].root());
                 reuse_buffer = true;
             } else {
@@ -369,7 +384,7 @@ protected:
             
             for (size_t i = 0; i < m; ++i) {
                 const auto& tensor = data_list[i][t_idx];
-                if (tensor.is_contiguous()) {
+                if (is_row_major_contiguous(tensor)) {
 #ifdef USE_SCOREP
                     SCOREP_USER_REGION_DEFINE(handle_flex_merge_copy_stack)
                     SCOREP_USER_REGION_BEGIN(handle_flex_merge_copy_stack, "flex_merge_copy", SCOREP_USER_REGION_TYPE_COMMON)
@@ -440,14 +455,14 @@ protected:
                 T* buffer = nullptr;
                 bool reuse_buffer = false;
                 guarantee_fallback_buffer_fit(existing_data, t_idx, dims);
-                if (existing_data.size() > t_idx && existing_data[t_idx].dimensions() == dims && existing_data[t_idx].is_contiguous()) {
+                if (existing_data.size() > t_idx && existing_data[t_idx].dimensions() == dims && is_row_major_contiguous(existing_data[t_idx])) {
                     buffer = static_cast<T*>(existing_data[t_idx].root());
                     reuse_buffer = true;
                 } else {
                     buffer = new T[tensor.numel()];
                 }
                 
-                if (tensor.is_contiguous()) {
+                if (is_row_major_contiguous(tensor)) {
                     std::copy(static_cast<const T*>(tensor.root()), static_cast<const T*>(tensor.root()) + tensor.numel(), buffer);
                 } else {
                     std::vector<T> flat = tensor.as_flat_vector();
@@ -527,7 +542,7 @@ protected:
 #endif
             if (existing_data.size() > t_idx &&
                 existing_data[t_idx].dimensions() == new_dims &&
-                existing_data[t_idx].is_contiguous()) {
+                is_row_major_contiguous(existing_data[t_idx])) {
                 buffer = static_cast<T*>(existing_data[t_idx].root());
                 reuse_buffer = true;
             } else {
@@ -544,7 +559,7 @@ protected:
                 for (size_t i = 0; i < m; ++i) {
                     const auto& tensor = data_list[i][t_idx];
                     size_t sn = slice_numels[i];
-                    if (tensor.is_contiguous()) {
+                    if (is_row_major_contiguous(tensor)) {
 #ifdef USE_SCOREP
                         SCOREP_USER_REGION_DEFINE(handle_flex_merge_copy_list)
                         SCOREP_USER_REGION_BEGIN(handle_flex_merge_copy_list, "flex_merge_copy", SCOREP_USER_REGION_TYPE_COMMON)
@@ -655,6 +670,23 @@ protected:
                 ordered_list.push_back(it->second);
             } else {
                 throw std::runtime_error("flex_keyed fallback: key '" + key + "' not found.");
+            }
+        }
+        // Mirror the ordered overload: a single contiguous input needs no
+        // merge, so pass it through by reference instead of stacking it to
+        // [B, 1, ...]. This keeps single-key inference/training cheap and
+        // avoids reinterpreting a previous external fallback buffer.
+        if (ordered_list.size() == 1 && merge_strategy != MLCouplingMergeStrategy::Stack) {
+            bool all_contiguous = true;
+            for (size_t i = 0; i < ordered_list[0].size(); ++i) {
+                if (!ordered_list[0][i].is_contiguous()) {
+                    all_contiguous = false;
+                    break;
+                }
+            }
+            if (all_contiguous) {
+                existing_data = ordered_list[0];
+                return;
             }
         }
         if (merge_strategy == MLCouplingMergeStrategy::None) {

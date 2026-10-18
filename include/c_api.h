@@ -152,11 +152,12 @@ enum cmi_merge_strategy {
  * @brief Type descriptor for dynamic constructor arguments passed to name-based factories.
  */
 enum cmi_config_param_type {
-    CMI_PARAM_RAW    = 0, /**< Raw pointer passed as-is. */
-    CMI_PARAM_INT64  = 1, /**< 64-bit integer value (int64_t). */
-    CMI_PARAM_DOUBLE = 2, /**< 64-bit floating point value (double). */
-    CMI_PARAM_STRING = 3, /**< Null-terminated string (const char*). */
-    CMI_PARAM_BOOL   = 4  /**< Boolean value (0 = false, 1 = true). */
+    CMI_PARAM_RAW          = 0, /**< Raw pointer passed as-is. */
+    CMI_PARAM_INT64        = 1, /**< 64-bit integer value (int64_t). */
+    CMI_PARAM_DOUBLE       = 2, /**< 64-bit floating point value (double). */
+    CMI_PARAM_STRING       = 3, /**< Null-terminated string (const char*). */
+    CMI_PARAM_BOOL         = 4, /**< Boolean value (0 = false, 1 = true). */
+    CMI_PARAM_STRING_ARRAY = 5  /**< Array of null-terminated strings (const char**). */
 };
 
 /** @} */ /* end of c_types */
@@ -179,8 +180,104 @@ typedef struct cmi_normalization_s* cmi_normalization_t; /**< Handle to an MLCou
 typedef struct cmi_library_s*       cmi_library_t;       /**< Handle to an MLCouplingLibrary backend. */
 typedef struct cmi_application_s*   cmi_application_t;   /**< Handle to an MLCouplingApplication pipeline. */
 typedef struct cmi_coupling_s*      cmi_coupling_t;      /**< Handle to an MLCoupling orchestrator. */
+typedef struct cmi_config_overrides_s* cmi_config_overrides_t; /**< Handle to a set of TOML config overrides. */
 
 /** @} */ /* end of c_handles */
+
+/* ========================================================================= */
+/* Configuration Overrides                                                   */
+/* ========================================================================= */
+
+/**
+ * @defgroup c_config_overrides Configuration Overrides
+ * @ingroup c_api
+ * @brief Runtime overrides for values parsed from a TOML configuration.
+ * @{
+ */
+
+/**
+ * @brief Creates an empty override set.
+ *
+ * @param[out] out Receives the created override handle.
+ * @return @ref CMI_SUCCESS on success, or an error code.
+ */
+int cmi_config_overrides_create(cmi_config_overrides_t* out);
+
+/**
+ * @brief Destroys an override set.
+ *
+ * @param[in] overrides Override handle. Safe if NULL.
+ * @return @ref CMI_SUCCESS on success.
+ */
+int cmi_config_overrides_destroy(cmi_config_overrides_t overrides);
+
+/**
+ * @brief Sets a section-scoped override value.
+ *
+ * @param[in] overrides Override handle.
+ * @param[in] section TOML section name (e.g. "library", "application", "behavior").
+ * @param[in] key Key within the section (e.g. "class", "model_file").
+ * @param[in] value_type One of @ref cmi_config_param_type.
+ * @param[in] value Pointer to the value; interpretation depends on @p value_type:
+ *                  - @ref CMI_PARAM_RAW: the pointer value itself is stored.
+ *                  - @ref CMI_PARAM_INT64: pointer to @c int64_t.
+ *                  - @ref CMI_PARAM_DOUBLE: pointer to @c double.
+ *                  - @ref CMI_PARAM_STRING: pointer to a null-terminated string.
+ *                  - @ref CMI_PARAM_BOOL: pointer to @c bool.
+ *                  Use @ref cmi_config_overrides_set_string_array for arrays.
+ * @return @ref CMI_SUCCESS on success, or an error code.
+ */
+int cmi_config_overrides_set(cmi_config_overrides_t overrides,
+                             const char* section,
+                             const char* key,
+                             int value_type,
+                             const void* value);
+
+/**
+ * @brief Sets a dotted-key override (e.g. "library.class").
+ *
+ * @param[in] overrides Override handle.
+ * @param[in] dotted_key Override key in `section.key` form.
+ * @param[in] value_type One of @ref cmi_config_param_type.
+ * @param[in] value Pointer to the value (see @ref cmi_config_overrides_set).
+ * @return @ref CMI_SUCCESS on success, or an error code.
+ */
+int cmi_config_overrides_set_dotted(cmi_config_overrides_t overrides,
+                                    const char* dotted_key,
+                                    int value_type,
+                                    const void* value);
+
+/**
+ * @brief Sets a section-scoped string-array override.
+ *
+ * @param[in] overrides Override handle.
+ * @param[in] section TOML section name.
+ * @param[in] key Key within the section.
+ * @param[in] values Array of null-terminated strings.
+ * @param[in] count Number of entries in @p values.
+ * @return @ref CMI_SUCCESS on success, or an error code.
+ */
+int cmi_config_overrides_set_string_array(cmi_config_overrides_t overrides,
+                                          const char* section,
+                                          const char* key,
+                                          const char* const* values,
+                                          int count);
+
+/**
+ * @brief Sets a dotted-key string-array override.
+ *
+ * @param[in] overrides Override handle.
+ * @param[in] dotted_key Override key in `section.key` form.
+ * @param[in] values Array of null-terminated strings.
+ * @param[in] count Number of entries in @p values.
+ * @return @ref CMI_SUCCESS on success, or an error code.
+ */
+int cmi_config_overrides_set_dotted_string_array(cmi_config_overrides_t overrides,
+                                                 const char* dotted_key,
+                                                 const char* const* values,
+                                                 int count);
+
+/** @} */ /* end of c_config_overrides */
 
 /* ========================================================================= */
 /* Tensor API                                                                */
@@ -645,6 +742,28 @@ int cmi_library_create_generic(cmi_library_t* out,
                                void* user_data);
 
 /**
+ * @brief Creates a generic ML library provider with both inference and training callbacks.
+ *
+ * Identical to @ref cmi_library_create_generic, but additionally wires a training
+ * callback so that @ref cmi_library_train, @ref cmi_library_flex_ordered_train,
+ * and @ref cmi_library_flex_keyed_train can invoke user code.
+ *
+ * @param[out] out Receives the created library handle.
+ * @param[in]  in_type Input scalar type (@ref cmi_data_type).
+ * @param[in]  out_type Output scalar type (@ref cmi_data_type).
+ * @param[in]  inference_fn User callback executing inference.
+ * @param[in]  train_fn User callback executing training (may be NULL).
+ * @param[in]  user_data Arbitrary context pointer passed to both callbacks.
+ * @return @ref CMI_SUCCESS on success, or an error code.
+ */
+int cmi_library_create_generic_with_training(cmi_library_t* out,
+                                             int in_type,
+                                             int out_type,
+                                             cmi_inference_fn inference_fn,
+                                             cmi_train_fn train_fn,
+                                             void* user_data);
+
+/**
  * @brief Instantiates an ML library provider by name (e.g. "Phydll", "Smartsim", "Aixelerator", "Dummy").
  *
  * @param[out] out Receives the created library handle.
@@ -732,6 +851,29 @@ int cmi_library_flex_ordered_set_target(cmi_library_t lib, cmi_data_t data);
 int cmi_library_flex_ordered_inference(cmi_library_t lib, cmi_data_t fallback_output);
 
 /**
+ * @brief Retrieves the result of ordered flexible inference into the supplied container.
+ *
+ * Mirrors the C++ `MLCouplingLibrary::flex_ordered_get` operation. Providers that
+ * write directly into the fallback output of @ref cmi_library_flex_ordered_inference
+ * implement this as a no-op; providers that stage results separately populate
+ * @p output here.
+ *
+ * @param[in]  lib Library handle.
+ * @param[out] output Container receiving the ordered output tensors.
+ * @return @ref CMI_SUCCESS on success, or an error code.
+ */
+int cmi_library_flex_ordered_get(cmi_library_t lib, cmi_data_t output);
+
+/**
+ * @brief Executes ordered flexible training over all staged inputs and targets.
+ *
+ * @param[in] lib Library handle.
+ * @param[in] step_id Simulation iteration identifier for training tracking.
+ * @return @ref CMI_SUCCESS on success, or an error code.
+ */
+int cmi_library_flex_ordered_train(cmi_library_t lib, int64_t step_id);
+
+/**
  * @brief Stages input data with an associated string key for keyed flexible inference (Tier 2).
  *
  * @param[in] lib Library handle.
@@ -768,6 +910,36 @@ int cmi_library_flex_keyed_inference(cmi_library_t lib,
                                      const char** out_keys,
                                      int out_key_count,
                                      cmi_data_t fallback_output);
+
+/**
+ * @brief Retrieves a keyed flexible inference result into the supplied container.
+ *
+ * Mirrors the C++ `MLCouplingLibrary::flex_keyed_get` operation.
+ *
+ * @param[in]  lib Library handle.
+ * @param[in]  key Output key identifying the staged result.
+ * @param[out] output Container receiving the keyed output tensors.
+ * @return @ref CMI_SUCCESS on success, or an error code.
+ */
+int cmi_library_flex_keyed_get(cmi_library_t lib, const char* key, cmi_data_t output);
+
+/**
+ * @brief Executes keyed flexible training over the specified staged inputs and targets.
+ *
+ * @param[in] lib Library handle.
+ * @param[in] step_id Simulation iteration identifier for training tracking.
+ * @param[in] in_keys Array of input key names defining tensor order.
+ * @param[in] in_key_count Number of keys in @p in_keys.
+ * @param[in] target_keys Array of target key names.
+ * @param[in] target_key_count Number of keys in @p target_keys.
+ * @return @ref CMI_SUCCESS on success, or an error code.
+ */
+int cmi_library_flex_keyed_train(cmi_library_t lib,
+                                 int64_t step_id,
+                                 const char** in_keys,
+                                 int in_key_count,
+                                 const char** target_keys,
+                                 int target_key_count);
 
 /**
  * @brief Destroys an ML library instance and shuts down provider resources.
@@ -817,6 +989,37 @@ int cmi_application_create_generic(cmi_application_t* out,
                                    cmi_data_t coupling_input,
                                    cmi_data_t coupling_output,
                                    cmi_normalization_t normalization);
+
+/**
+ * @brief Creates a generic application component with custom preprocessing and postprocessing.
+ *
+ * Wires user callbacks into the app pipeline so that C/Fortran callers can transform
+ * data between the simulation (coupling) layout and the ML library layout.
+ *
+ * @param[out] out Receives the created application handle.
+ * @param[in]  coupling_in_type Coupling input scalar type (@ref cmi_data_type).
+ * @param[in]  coupling_out_type Coupling output scalar type (@ref cmi_data_type).
+ * @param[in]  library_in_type Library input scalar type (@ref cmi_data_type).
+ * @param[in]  library_out_type Library output scalar type (@ref cmi_data_type).
+ * @param[in]  coupling_input Container holding coupling inputs.
+ * @param[in]  coupling_output Container holding coupling outputs.
+ * @param[in]  preprocess_fn Optional preprocessing callback (may be NULL).
+ * @param[in]  postprocess_fn Optional postprocessing callback (may be NULL).
+ * @param[in]  normalization Optional normalization handle (can be NULL).
+ * @param[in]  user_data Arbitrary context pointer passed to both callbacks.
+ * @return @ref CMI_SUCCESS on success, or an error code.
+ */
+int cmi_application_create_generic_with_callbacks(cmi_application_t* out,
+                                                  int coupling_in_type,
+                                                  int coupling_out_type,
+                                                  int library_in_type,
+                                                  int library_out_type,
+                                                  cmi_data_t coupling_input,
+                                                  cmi_data_t coupling_output,
+                                                  cmi_preprocess_fn preprocess_fn,
+                                                  cmi_postprocess_fn postprocess_fn,
+                                                  cmi_normalization_t normalization,
+                                                  void* user_data);
 
 /**
  * @brief Instantiates an application component by name via the code-generated factory.
@@ -918,6 +1121,169 @@ int cmi_coupling_create_from_config(cmi_coupling_t* out,
                                     int coupling_out_type,
                                     int library_in_type,
                                     int library_out_type);
+
+/**
+ * @brief Creates an MLCoupling orchestrator from a TOML file bound to live caller buffers.
+ *
+ * Unlike @ref cmi_coupling_create_from_config, this function connects the configured
+ * pipeline to the supplied coupling input and output containers instead of creating
+ * empty internal buffers. This is the config-based counterpart of
+ * @ref cmi_coupling_create for callers that want both TOML configuration and
+ * zero-copy simulation buffers.
+ *
+ * @param[out] out Receives the created coupling handle.
+ * @param[in]  config_path Path to the TOML configuration file.
+ * @param[in]  coupling_in_type Coupling input type.
+ * @param[in]  coupling_out_type Coupling output type.
+ * @param[in]  library_in_type Library input type.
+ * @param[in]  library_out_type Library output type.
+ * @param[in]  coupling_input Container holding the simulation input tensors.
+ * @param[in]  coupling_output Container holding the simulation output tensors.
+ * @return @ref CMI_SUCCESS on success, or an error code.
+ */
+int cmi_coupling_create_from_config_with_data(cmi_coupling_t* out,
+                                              const char* config_path,
+                                              int coupling_in_type,
+                                              int coupling_out_type,
+                                              int library_in_type,
+                                              int library_out_type,
+                                              cmi_data_t coupling_input,
+                                              cmi_data_t coupling_output);
+
+/**
+ * @brief Creates an MLCoupling orchestrator from an inline TOML string bound to live buffers.
+ *
+ * @param[out] out Receives the created coupling handle.
+ * @param[in]  config_str Null-terminated TOML configuration text.
+ * @param[in]  coupling_in_type Coupling input type.
+ * @param[in]  coupling_out_type Coupling output type.
+ * @param[in]  library_in_type Library input type.
+ * @param[in]  library_out_type Library output type.
+ * @param[in]  coupling_input Container holding the simulation input tensors.
+ * @param[in]  coupling_output Container holding the simulation output tensors.
+ * @return @ref CMI_SUCCESS on success, or an error code.
+ */
+int cmi_coupling_create_from_config_string_with_data(cmi_coupling_t* out,
+                                                     const char* config_str,
+                                                     int coupling_in_type,
+                                                     int coupling_out_type,
+                                                     int library_in_type,
+                                                     int library_out_type,
+                                                     cmi_data_t coupling_input,
+                                                     cmi_data_t coupling_output);
+
+/**
+ * @brief Creates a config-file-bound coupling with runtime overrides.
+ *
+ * @param[out] out Receives the created coupling handle.
+ * @param[in]  config_path Path to the TOML configuration file.
+ * @param[in]  coupling_in_type Coupling input type.
+ * @param[in]  coupling_out_type Coupling output type.
+ * @param[in]  library_in_type Library input type.
+ * @param[in]  library_out_type Library output type.
+ * @param[in]  coupling_input Container holding the simulation input tensors.
+ * @param[in]  coupling_output Container holding the simulation output tensors.
+ * @param[in]  overrides Override set (may be NULL).
+ * @return @ref CMI_SUCCESS on success, or an error code.
+ */
+int cmi_coupling_create_from_config_with_data_and_overrides(cmi_coupling_t* out,
+                                                            const char* config_path,
+                                                            int coupling_in_type,
+                                                            int coupling_out_type,
+                                                            int library_in_type,
+                                                            int library_out_type,
+                                                            cmi_data_t coupling_input,
+                                                            cmi_data_t coupling_output,
+                                                            cmi_config_overrides_t overrides);
+
+/**
+ * @brief Creates a config-string-bound coupling with runtime overrides.
+ *
+ * @param[out] out Receives the created coupling handle.
+ * @param[in]  config_str Null-terminated TOML configuration text.
+ * @param[in]  coupling_in_type Coupling input type.
+ * @param[in]  coupling_out_type Coupling output type.
+ * @param[in]  library_in_type Library input type.
+ * @param[in]  library_out_type Library output type.
+ * @param[in]  coupling_input Container holding the simulation input tensors.
+ * @param[in]  coupling_output Container holding the simulation output tensors.
+ * @param[in]  overrides Override set (may be NULL).
+ * @return @ref CMI_SUCCESS on success, or an error code.
+ */
+int cmi_coupling_create_from_config_string_with_data_and_overrides(cmi_coupling_t* out,
+                                                                   const char* config_str,
+                                                                   int coupling_in_type,
+                                                                   int coupling_out_type,
+                                                                   int library_in_type,
+                                                                   int library_out_type,
+                                                                   cmi_data_t coupling_input,
+                                                                   cmi_data_t coupling_output,
+                                                                   cmi_config_overrides_t overrides);
+
+/**
+ * @brief Sets the fallback merge strategy on an existing coupling.
+ *
+ * Forwards to the underlying provider's tiered flexible merge configuration.
+ *
+ * @param[in] coupling Coupling orchestrator handle.
+ * @param[in] strategy Value from @ref cmi_merge_strategy.
+ * @return @ref CMI_SUCCESS on success, or an error code.
+ */
+int cmi_coupling_set_merge_strategy(cmi_coupling_t coupling, int strategy);
+
+/**
+ * @brief Registers a training metric field for history tracking.
+ *
+ * @param[in] coupling Coupling orchestrator handle.
+ * @param[in] field Metric name (e.g. "loss").
+ * @return @ref CMI_SUCCESS on success, or an error code.
+ */
+int cmi_coupling_track(cmi_coupling_t coupling, const char* field);
+
+/**
+ * @brief Retrieves the most recent value of a tracked training metric.
+ *
+ * @param[in]  coupling Coupling orchestrator handle.
+ * @param[in]  field Metric name.
+ * @param[out] out_value Receives the latest value.
+ * @return @ref CMI_SUCCESS on success, or an error code if no value exists.
+ */
+int cmi_coupling_get_current(cmi_coupling_t coupling, const char* field, double* out_value);
+
+/**
+ * @brief Copies the recorded history of a tracked training metric.
+ *
+ * @param[in]  coupling Coupling orchestrator handle.
+ * @param[in]  field Metric name.
+ * @param[out] out_values Destination buffer (may be NULL when @p capacity is 0).
+ * @param[in]  capacity Maximum number of values to write.
+ * @param[out] out_count Receives the total number of recorded values, which may
+ *             exceed @p capacity. Check this to size a subsequent call.
+ * @return @ref CMI_SUCCESS on success, or an error code.
+ */
+int cmi_coupling_get_history(cmi_coupling_t coupling,
+                             const char* field,
+                             double* out_values,
+                             int capacity,
+                             int* out_count);
+
+/**
+ * @brief Logs externally computed training metrics at a given step.
+ *
+ * Only fields previously registered with @ref cmi_coupling_track are recorded.
+ *
+ * @param[in] coupling Coupling orchestrator handle.
+ * @param[in] step_id Simulation iteration identifier.
+ * @param[in] fields Array of metric names.
+ * @param[in] values Array of metric values.
+ * @param[in] count Number of entries in @p fields and @p values.
+ * @return @ref CMI_SUCCESS on success, or an error code.
+ */
+int cmi_coupling_log_training_metrics(cmi_coupling_t coupling,
+                                      int64_t step_id,
+                                      const char** fields,
+                                      const double* values,
+                                      int count);
 
 /**
  * @brief Executes a single iteration of the coupled pipeline.

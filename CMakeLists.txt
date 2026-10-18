@@ -390,6 +390,20 @@ if(BUILD_TESTING)
     endif()
     add_test(NAME test_c_api COMMAND test_c_api)
 
+    # Pure C99 compilation/linkage test (compiled with the C compiler).
+    add_executable(test_c_api_c99 test/test_c_api_c99.c)
+    target_include_directories(test_c_api_c99 PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/include")
+    target_link_libraries(test_c_api_c99 PRIVATE cpp_ml_interface_library)
+    set_target_properties(test_c_api_c99 PROPERTIES
+        C_STANDARD 99
+        C_STANDARD_REQUIRED ON
+        C_EXTENSIONS OFF
+    )
+    if (WITH_SCOREP)
+        set_target_properties(test_c_api_c99 PROPERTIES SCOREP_MPP_SYSTEM "${CPPML_SCOREP_MPP}")
+    endif()
+    add_test(NAME test_c_api_c99 COMMAND test_c_api_c99)
+
     if(WITH_FORTRAN)
         add_executable(test_fortran_api test/test_fortran_api.f90)
         target_include_directories(test_fortran_api PRIVATE

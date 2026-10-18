@@ -191,6 +191,104 @@ int main(int argc, char** argv) {
     assert(stacked_tensor.at({1, 1, 2}) == 16);
     
     std::cout << "SUCCESS: Stack Strategy interleaved the tensors perfectly!\n";
-    
+
+    std::cout << "==========================================\n";
+    std::cout << "   TESTING FORTRAN-CONTIGUOUS MERGING     \n";
+    std::cout << "==========================================\n";
+
+    // Logical 2x3 tensors (row-major values 1..6 and 11..16) stored in
+    // column-major order: storage[i + j*rows].
+    std::vector<float> fortran_storage_1 = {1, 4, 2, 5, 3, 6};
+    std::vector<float> fortran_storage_2 = {11, 14, 12, 15, 13, 16};
+    MLCouplingTensor<float> tensor_fortran_1 =
+        MLCouplingTensor<float>::from_flat_copy(fortran_storage_1, {2, 3},
+                                                MLCouplingMemLayoutFortranContiguous);
+    MLCouplingTensor<float> tensor_fortran_2 =
+        MLCouplingTensor<float>::from_flat_copy(fortran_storage_2, {2, 3},
+                                                MLCouplingMemLayoutFortranContiguous);
+
+    assert(tensor_fortran_1.layout() == MLCouplingMemLayoutFortranContiguous);
+    assert(tensor_fortran_1.at({0, 1}) == 2);
+    assert(tensor_fortran_1.at({1, 0}) == 4);
+
+    MLCouplingLibraryTest<float, float> fortran_stack_library;
+    MLCouplingData<float> fortran_stack_fallback_out;
+    fortran_stack_library.set_merge_strategy(MLCouplingMergeStrategy::Stack);
+
+    MLCouplingData<float> fortran_stack_data_1;
+    fortran_stack_data_1.add_tensor(tensor_fortran_1);
+    MLCouplingData<float> fortran_stack_data_2;
+    fortran_stack_data_2.add_tensor(tensor_fortran_2);
+
+    fortran_stack_library.flex_ordered_set(fortran_stack_data_1);
+    fortran_stack_library.flex_ordered_set(fortran_stack_data_2);
+    fortran_stack_library.flex_ordered_inference(&fortran_stack_fallback_out);
+
+    assert(fortran_stack_library.received_input.size() == 1);
+    const MLCouplingTensor<float>& fortran_stacked = fortran_stack_library.received_input[0];
+    assert(fortran_stacked.layout() == MLCouplingMemLayoutContiguous);
+    auto fortran_stack_dims = fortran_stacked.dimensions();
+    assert(fortran_stack_dims.size() == 3);
+    assert(fortran_stack_dims[0] == 2);
+    assert(fortran_stack_dims[1] == 2);
+    assert(fortran_stack_dims[2] == 3);
+
+    assert(fortran_stacked.at({0, 0, 0}) == 1);
+    assert(fortran_stacked.at({0, 0, 1}) == 2);
+    assert(fortran_stacked.at({0, 0, 2}) == 3);
+    assert(fortran_stacked.at({0, 1, 0}) == 11);
+    assert(fortran_stacked.at({0, 1, 1}) == 12);
+    assert(fortran_stacked.at({0, 1, 2}) == 13);
+    assert(fortran_stacked.at({1, 0, 0}) == 4);
+    assert(fortran_stacked.at({1, 0, 1}) == 5);
+    assert(fortran_stacked.at({1, 0, 2}) == 6);
+    assert(fortran_stacked.at({1, 1, 0}) == 14);
+    assert(fortran_stacked.at({1, 1, 1}) == 15);
+    assert(fortran_stacked.at({1, 1, 2}) == 16);
+
+    std::cout << "SUCCESS: Stack merge respects Fortran-contiguous input layout.\n\n";
+
+    // Logical 2x2 tensor [[7, 8], [9, 10]] stored column-major.
+    std::vector<float> fortran_list_storage_2 = {7, 9, 8, 10};
+    MLCouplingTensor<float> tensor_fortran_list_2 =
+        MLCouplingTensor<float>::from_flat_copy(fortran_list_storage_2, {2, 2},
+                                                MLCouplingMemLayoutFortranContiguous);
+    assert(tensor_fortran_list_2.at({1, 0}) == 9);
+    assert(tensor_fortran_list_2.at({0, 1}) == 8);
+
+    MLCouplingLibraryTest<float, float> fortran_list_library;
+    MLCouplingData<float> fortran_list_fallback_out;
+    fortran_list_library.set_merge_strategy(MLCouplingMergeStrategy::List);
+
+    MLCouplingData<float> fortran_list_data_1;
+    fortran_list_data_1.add_tensor(tensor_fortran_1);
+    MLCouplingData<float> fortran_list_data_2;
+    fortran_list_data_2.add_tensor(tensor_fortran_list_2);
+
+    fortran_list_library.flex_ordered_set(fortran_list_data_1);
+    fortran_list_library.flex_ordered_set(fortran_list_data_2);
+    fortran_list_library.flex_ordered_inference(&fortran_list_fallback_out);
+
+    assert(fortran_list_library.received_input.size() == 1);
+    const MLCouplingTensor<float>& fortran_list_out = fortran_list_library.received_input[0];
+    assert(fortran_list_out.layout() == MLCouplingMemLayoutContiguous);
+    auto fortran_list_dims = fortran_list_out.dimensions();
+    assert(fortran_list_dims.size() == 2);
+    assert(fortran_list_dims[0] == 2);
+    assert(fortran_list_dims[1] == 5);
+
+    assert(fortran_list_out.at({0, 0}) == 1);
+    assert(fortran_list_out.at({0, 1}) == 2);
+    assert(fortran_list_out.at({0, 2}) == 3);
+    assert(fortran_list_out.at({0, 3}) == 7);
+    assert(fortran_list_out.at({0, 4}) == 8);
+    assert(fortran_list_out.at({1, 0}) == 4);
+    assert(fortran_list_out.at({1, 1}) == 5);
+    assert(fortran_list_out.at({1, 2}) == 6);
+    assert(fortran_list_out.at({1, 3}) == 9);
+    assert(fortran_list_out.at({1, 4}) == 10);
+
+    std::cout << "SUCCESS: List merge respects Fortran-contiguous input layout.\n";
+
     return 0;
 }
