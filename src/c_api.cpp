@@ -322,6 +322,12 @@ struct cmi_coupling_s {
     int lo_type = CMI_DTYPE_INVALID;
     virtual ~cmi_coupling_s() = default;
     virtual int step() = 0;
+    virtual void flex_ordered_set(cmi_data_s* data) = 0;
+    virtual void flex_ordered_inference() = 0;
+    virtual void flex_ordered_get(cmi_data_s* data) = 0;
+    virtual void flex_keyed_set(const std::string& key, cmi_data_s* data) = 0;
+    virtual void flex_keyed_inference(const std::vector<std::string>& inputs, const std::vector<std::string>& outputs) = 0;
+    virtual void flex_keyed_get(const std::string& key, cmi_data_s* data) = 0;
     virtual void train_step(int64_t step_id) = 0;
     virtual void set_merge_strategy(int strategy) = 0;
     virtual void track(const std::string& field) = 0;
@@ -346,6 +352,23 @@ struct cmi_coupling_impl : public cmi_coupling_s {
     int step() override {
         if (!obj) throw std::runtime_error("Coupling object is null.");
         return obj->step();
+    }
+
+    void flex_ordered_set(cmi_data_s* data) override {
+        obj->ordered().set(std::get<MLCouplingData<CI>>(data->data));
+    }
+    void flex_ordered_inference() override { obj->ordered().inference(); }
+    void flex_ordered_get(cmi_data_s* data) override {
+        obj->ordered().get(std::get<MLCouplingData<CO>>(data->data));
+    }
+    void flex_keyed_set(const std::string& key, cmi_data_s* data) override {
+        obj->keyed().set(key, std::get<MLCouplingData<CI>>(data->data));
+    }
+    void flex_keyed_inference(const std::vector<std::string>& inputs, const std::vector<std::string>& outputs) override {
+        obj->keyed().inference(inputs, outputs);
+    }
+    void flex_keyed_get(const std::string& key, cmi_data_s* data) override {
+        obj->keyed().get(key, std::get<MLCouplingData<CO>>(data->data));
     }
 
     void train_step(int64_t step_id) override {
@@ -2056,6 +2079,62 @@ extern "C" int cmi_coupling_create_from_config_string_with_data_and_overrides(cm
                                                library_in_type, library_out_type,
                                                coupling_input, coupling_output,
                                                override_values);
+}
+
+extern "C" int cmi_coupling_flex_ordered_set(cmi_coupling_t coupling, cmi_data_t data) {
+    if (!coupling || !data) { set_error(CMI_ERROR_NULL_POINTER, "coupling or data is null"); return CMI_ERROR_NULL_POINTER; }
+    if (data->data_type != coupling->ci_type) { set_error(CMI_ERROR_TYPE_MISMATCH, "data type does not match coupling input type"); return CMI_ERROR_TYPE_MISMATCH; }
+    try { coupling->flex_ordered_set(data); clear_error(); return CMI_SUCCESS; }
+    catch (const std::exception& e) { set_error(CMI_ERROR_RUNTIME, e.what()); return CMI_ERROR_RUNTIME; }
+}
+
+extern "C" int cmi_coupling_flex_ordered_inference(cmi_coupling_t coupling) {
+    if (!coupling) { set_error(CMI_ERROR_NULL_POINTER, "coupling is null"); return CMI_ERROR_NULL_POINTER; }
+    try { coupling->flex_ordered_inference(); clear_error(); return CMI_SUCCESS; }
+    catch (const std::exception& e) { set_error(CMI_ERROR_RUNTIME, e.what()); return CMI_ERROR_RUNTIME; }
+}
+
+extern "C" int cmi_coupling_flex_ordered_get(cmi_coupling_t coupling, cmi_data_t data) {
+    if (!coupling || !data) { set_error(CMI_ERROR_NULL_POINTER, "coupling or data is null"); return CMI_ERROR_NULL_POINTER; }
+    if (data->data_type != coupling->co_type) { set_error(CMI_ERROR_TYPE_MISMATCH, "data type does not match coupling output type"); return CMI_ERROR_TYPE_MISMATCH; }
+    try { coupling->flex_ordered_get(data); clear_error(); return CMI_SUCCESS; }
+    catch (const std::exception& e) { set_error(CMI_ERROR_RUNTIME, e.what()); return CMI_ERROR_RUNTIME; }
+}
+
+extern "C" int cmi_coupling_flex_keyed_set(cmi_coupling_t coupling, const char* key, cmi_data_t data) {
+    if (!coupling || !key || !data) { set_error(CMI_ERROR_NULL_POINTER, "coupling, key or data is null"); return CMI_ERROR_NULL_POINTER; }
+    if (data->data_type != coupling->ci_type) { set_error(CMI_ERROR_TYPE_MISMATCH, "data type does not match coupling input type"); return CMI_ERROR_TYPE_MISMATCH; }
+    try { coupling->flex_keyed_set(key, data); clear_error(); return CMI_SUCCESS; }
+    catch (const std::exception& e) { set_error(CMI_ERROR_RUNTIME, e.what()); return CMI_ERROR_RUNTIME; }
+}
+
+extern "C" int cmi_coupling_flex_keyed_inference(cmi_coupling_t coupling, const char** in_keys, int in_count,
+                                                  const char** out_keys, int out_count) {
+    if (!coupling) { set_error(CMI_ERROR_NULL_POINTER, "coupling is null"); return CMI_ERROR_NULL_POINTER; }
+    if (in_count < 0 || out_count < 0) { set_error(CMI_ERROR_INVALID_ARGUMENT, "key count is negative"); return CMI_ERROR_INVALID_ARGUMENT; }
+    if ((in_count && !in_keys) || (out_count && !out_keys)) {
+        set_error(CMI_ERROR_NULL_POINTER, "key array is null"); return CMI_ERROR_NULL_POINTER;
+    }
+    try {
+        std::vector<std::string> inputs, outputs;
+        for (int i = 0; i < in_count; ++i) {
+            if (!in_keys[i]) { set_error(CMI_ERROR_NULL_POINTER, "input key is null"); return CMI_ERROR_NULL_POINTER; }
+            inputs.emplace_back(in_keys[i]);
+        }
+        for (int i = 0; i < out_count; ++i) {
+            if (!out_keys[i]) { set_error(CMI_ERROR_NULL_POINTER, "output key is null"); return CMI_ERROR_NULL_POINTER; }
+            outputs.emplace_back(out_keys[i]);
+        }
+        coupling->flex_keyed_inference(inputs, outputs);
+        clear_error(); return CMI_SUCCESS;
+    } catch (const std::exception& e) { set_error(CMI_ERROR_RUNTIME, e.what()); return CMI_ERROR_RUNTIME; }
+}
+
+extern "C" int cmi_coupling_flex_keyed_get(cmi_coupling_t coupling, const char* key, cmi_data_t data) {
+    if (!coupling || !key || !data) { set_error(CMI_ERROR_NULL_POINTER, "coupling, key or data is null"); return CMI_ERROR_NULL_POINTER; }
+    if (data->data_type != coupling->co_type) { set_error(CMI_ERROR_TYPE_MISMATCH, "data type does not match coupling output type"); return CMI_ERROR_TYPE_MISMATCH; }
+    try { coupling->flex_keyed_get(key, data); clear_error(); return CMI_SUCCESS; }
+    catch (const std::exception& e) { set_error(CMI_ERROR_RUNTIME, e.what()); return CMI_ERROR_RUNTIME; }
 }
 
 extern "C" int cmi_coupling_step(cmi_coupling_t coupling, int* out_delta) {

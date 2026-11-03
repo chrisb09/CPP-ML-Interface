@@ -13,13 +13,6 @@ list(APPEND CMAKE_CXX_IMPLICIT_LINK_DIRECTORIES
 # Honor <Package>_ROOT variables like CUDA_ROOT.
 cmake_policy(SET CMP0074 NEW)
 
-if(NOT CMAKE_CXX_COMPILER)
-    if(WITH_SCOREP OR (DEFINED ENV{USE_SCOREP} AND NOT "$ENV{USE_SCOREP}" STREQUAL "" AND NOT "$ENV{USE_SCOREP}" STREQUAL "0"))
-        set(CMAKE_CXX_COMPILER scorep-mpicxx)
-        set(CMAKE_C_COMPILER scorep-mpicc)
-    endif()
-endif()
-
 project(PhyDLLDlClient LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 17)
@@ -44,7 +37,7 @@ target_link_directories(phydll_dl_runtime PRIVATE ${PHYDLL_BUILD_DIR}/lib)
 target_link_libraries(phydll_dl_runtime PRIVATE phydll)
 
 add_executable(phydll_dl_client dl_client.cpp)
-target_compile_options(phydll_dl_client PRIVATE -frtti)
+target_compile_options(phydll_dl_client PRIVATE $<$<COMPILE_LANGUAGE:CXX>:-frtti>)
 
 
 target_include_directories(phydll_dl_client PRIVATE ${PHYDLL_BUILD_DIR}/include)
@@ -111,28 +104,21 @@ if(PHYDLL_TEST_FAULT_CLIENT)
 endif()
 
 if(WITH_SCOREP)
+    # The helper supplies instrumentation and executable initialization itself.
+    # Combining it with a Score-P compiler or launcher duplicates that work.
+    foreach(_scorep_driver "${CMAKE_C_COMPILER}" "${CMAKE_CXX_COMPILER}"
+                           "${CMAKE_C_COMPILER_LAUNCHER}" "${CMAKE_CXX_COMPILER_LAUNCHER}")
+        if(_scorep_driver MATCHES "(^|[/; ])scorep([-/; ]|$)")
+            message(FATAL_ERROR "WITH_SCOREP requires uninstrumented C and C++ compilers and launchers; do not use Score-P wrappers with scorep_instrument_target.")
+        endif()
+    endforeach()
     list(APPEND CMAKE_MODULE_PATH "${CPP_MODULE_DIR}/extern/AIxeleratorService/cmake")
     find_package(Scorep REQUIRED)
-    if(SCOREP_FOUND)
-        if(NOT CPPML_SCOREP_MPP)
-            set(CPPML_SCOREP_MPP "mpi")
+    set(CPPML_SCOREP_MPP "mpi" CACHE STRING "Score-P MPP subsystem for client targets")
+    foreach(_scorep_target phydll_dl_runtime phydll_dl_client phydll_phy_test phydll_dl_fault_client)
+        if(TARGET ${_scorep_target})
+            scorep_instrument_target(${_scorep_target} COMPILER ON USER ON MPP "${CPPML_SCOREP_MPP}")
+            target_compile_definitions(${_scorep_target} PRIVATE USE_SCOREP)
         endif()
-        # scorep_instrument_target is NOT called here: when building with the
-        # scorep-mpicxx compiler wrapper, the wrapper already injects scorep_init.o
-        # at link time. Calling scorep_instrument_target additionally would produce
-        # a duplicate-symbol linker error (scorep_subsystems defined twice).
-        target_include_directories(phydll_dl_runtime PRIVATE ${SCOREP_ROOT_DIR}/include ${SCOREP_ROOT_DIR}/include/scorep)
-        target_include_directories(phydll_dl_client PRIVATE ${SCOREP_ROOT_DIR}/include ${SCOREP_ROOT_DIR}/include/scorep)
-        if(TARGET phydll_phy_test)
-            target_include_directories(phydll_phy_test PRIVATE ${SCOREP_ROOT_DIR}/include ${SCOREP_ROOT_DIR}/include/scorep)
-        endif()
-        target_link_libraries(phydll_dl_runtime PRIVATE Scorep::Plugin)
-        target_link_libraries(phydll_dl_client PRIVATE Scorep::Plugin)
-        target_link_options(phydll_dl_client PRIVATE -no-pie)
-    endif()
-    target_compile_definitions(phydll_dl_runtime PRIVATE USE_SCOREP)
-    target_compile_definitions(phydll_dl_client PRIVATE USE_SCOREP)
-    if(TARGET phydll_phy_test)
-        target_compile_definitions(phydll_phy_test PRIVATE USE_SCOREP)
-    endif()
+    endforeach()
 endif()

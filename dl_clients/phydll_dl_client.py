@@ -43,23 +43,25 @@ if inter_threads:
         print(f"[DL] Warning setting inter-op threads: {e}", flush=True)
 
 import contextlib
-ENABLE_SCOREP_USER = os.environ.get("ENABLE_SCOREP_USER", "0") == "1"
+ENABLE_SCOREP_USER = PY_SCOREP_WRAPPER or os.environ.get("ENABLE_SCOREP_USER", "0") == "1"
 HAS_SCOREP = False
 try:
     if ENABLE_SCOREP_USER:
-        print("[DL] ENABLE_SCOREP_USER is set. Importing scorep.user...", flush=True)
+        print("[DL] Importing scorep.user...", flush=True)
         import scorep.user
         import scorep.instrumenter
-        scorep.instrumenter.enable()
-        HAS_SCOREP = True
-        print("[DL] scorep.user and instrumenter enabled successfully. HAS_SCOREP=True", flush=True)
         inst = scorep.instrumenter.get_instrumenter()
+        if PY_SCOREP_WRAPPER and inst.__class__.__name__ == "ScorepDummy":
+            raise RuntimeError("Score-P dummy instrumenter cannot record regions or finalize")
+        HAS_SCOREP = True
         print(f"[DL] Instrumenter class: {inst.__class__.__name__}", flush=True)
         print(f"[DL] Instrumenter registered status: {inst.get_registered()}", flush=True)
     else:
         print("[DL] ENABLE_SCOREP_USER not set to 1.", flush=True)
 except Exception as e:
     print(f"[DL] Error importing/enabling scorep: {e}", flush=True)
+    if PY_SCOREP_WRAPPER:
+        raise
 
 @contextlib.contextmanager
 def scorep_region(name, enabled=True):
@@ -625,17 +627,25 @@ if __name__ == "__main__":
     try:
         main()
     finally:
-        if HAS_SCOREP:
+        scorep_error = None
+        # Independent (mpp=none) measurements must be written before _exit.
+        # With the MPI adapter, MPI_Finalize owns collective Score-P teardown.
+        if HAS_SCOREP and os.environ.get("SCOREP_MPP", "none") == "none":
             try:
                 print("[DL] Forcing Score-P finalization...", flush=True)
                 scorep.user.force_finalize()
                 print("[DL] Score-P finalization complete.", flush=True)
             except Exception as e:
                 print(f"[DL] Warning: force_finalize failed: {e}", flush=True)
+                if PY_SCOREP_WRAPPER:
+                    scorep_error = e
         if MPI.Is_initialized() and not MPI.Is_finalized():
             print("[DL] Entering MPI.Finalize()", flush=True)
             MPI.Finalize()
             print("[DL] Exited MPI.Finalize()", flush=True)
+
+        if scorep_error is not None:
+            raise scorep_error
 
         if os.environ.get("PHYDLL_PY_FORCE_EXIT", "1") == "1":
             print("[DL] Forcing clean process exit (PHYDLL_PY_FORCE_EXIT=1)...", flush=True)

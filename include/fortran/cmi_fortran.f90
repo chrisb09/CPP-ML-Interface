@@ -795,6 +795,57 @@ module cmi
        integer(c_int) :: st
      end function c_cmi_config_overrides_set_dotted_string_array
 
+     !> @brief Stages input; see the C API for borrowed storage lifetime and retry rules.
+     function c_cmi_coupling_flex_ordered_set(c, d) bind(C, name="cmi_coupling_flex_ordered_set") result(st)
+       import :: c_ptr, c_int
+       type(c_ptr), value :: c, d
+       integer(c_int) :: st
+     end function c_cmi_coupling_flex_ordered_set
+
+     function c_cmi_coupling_flex_ordered_inference(c) bind(C, name="cmi_coupling_flex_ordered_inference") result(st)
+       import :: c_ptr, c_int
+       type(c_ptr), value :: c
+       integer(c_int) :: st
+     end function c_cmi_coupling_flex_ordered_inference
+
+     function c_cmi_coupling_flex_ordered_get(c, d) bind(C, name="cmi_coupling_flex_ordered_get") result(st)
+       import :: c_ptr, c_int
+       type(c_ptr), value :: c, d
+       integer(c_int) :: st
+     end function c_cmi_coupling_flex_ordered_get
+
+     function c_cmi_coupling_flex_keyed_set(c, key, d) bind(C, name="cmi_coupling_flex_keyed_set") result(st)
+       import :: c_ptr, c_int, c_char
+       type(c_ptr), value :: c, d
+       character(kind=c_char), intent(in) :: key(*)
+       integer(c_int) :: st
+     end function c_cmi_coupling_flex_keyed_set
+
+     function c_cmi_coupling_flex_keyed_inference(c, in_keys, in_count, out_keys, out_count) &
+          bind(C, name="cmi_coupling_flex_keyed_inference") result(st)
+       import :: c_ptr, c_int
+       type(c_ptr), value :: c
+       type(c_ptr), intent(in) :: in_keys(*), out_keys(*)
+       integer(c_int), value :: in_count, out_count
+       integer(c_int) :: st
+     end function c_cmi_coupling_flex_keyed_inference
+
+     !> @brief Pointer-valued variant for null key arrays or c_loc of target arrays.
+     function c_cmi_coupling_flex_keyed_inference_ptr(c, in_keys, in_count, out_keys, out_count) &
+          bind(C, name="cmi_coupling_flex_keyed_inference") result(st)
+       import :: c_ptr, c_int
+       type(c_ptr), value :: c, in_keys, out_keys
+       integer(c_int), value :: in_count, out_count
+       integer(c_int) :: st
+     end function c_cmi_coupling_flex_keyed_inference_ptr
+
+     function c_cmi_coupling_flex_keyed_get(c, key, d) bind(C, name="cmi_coupling_flex_keyed_get") result(st)
+       import :: c_ptr, c_int, c_char
+       type(c_ptr), value :: c, d
+       character(kind=c_char), intent(in) :: key(*)
+       integer(c_int) :: st
+     end function c_cmi_coupling_flex_keyed_get
+
      !> @brief Advances coupled pipeline one step.
      function c_cmi_coupling_step(c, out_delta) bind(C, name="cmi_coupling_step") result(st)
        import :: c_ptr, c_int

@@ -660,6 +660,8 @@ contains
     type(cmi_tensor) :: tin, tout
     type(cmi_data) :: din, dout
     real(c_float), target :: in_arr(2), out_arr(2)
+    character(kind=c_char, len=6), target :: input_key
+    type(c_ptr), target :: input_keys(1)
     integer :: ierr, delta
 
     in_arr = [3.0_c_float, 4.0_c_float]
@@ -695,6 +697,17 @@ contains
 
     if (abs(out_arr(1) - 30.0_c_float) > 1.0e-5 .or. abs(out_arr(2) - 40.0_c_float) > 1.0e-5) then
        error stop "Coupling output incorrect"
+    end if
+
+    input_key = 'input' // c_null_char
+    input_keys(1) = c_loc(input_key)
+    ierr = c_cmi_coupling_flex_keyed_set(coupling%ptr, input_key, din%ptr)
+    if (ierr /= CMI_SUCCESS) error stop "Keyed set failed"
+    out_arr = 0.0_c_float
+    ierr = c_cmi_coupling_flex_keyed_inference_ptr(coupling%ptr, c_loc(input_keys), 1_c_int, c_null_ptr, 0_c_int)
+    if (ierr /= CMI_SUCCESS) error stop "Keyed inference with null output keys failed"
+    if (abs(out_arr(1) - 30.0_c_float) > 1.0e-5 .or. abs(out_arr(2) - 40.0_c_float) > 1.0e-5) then
+       error stop "Keyed inference output incorrect"
     end if
 
     ierr = c_cmi_coupling_destroy(coupling%ptr)

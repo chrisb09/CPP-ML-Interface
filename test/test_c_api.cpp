@@ -352,6 +352,50 @@ static void test_full_coupling_c_api() {
     assert(out_val[0] == 50.0f);
     assert(out_val[1] == 100.0f);
 
+    cmi_data_t result = nullptr, wrong = nullptr;
+    assert(cmi_data_create(&result, CMI_DTYPE_FLOAT) == CMI_SUCCESS);
+    assert(cmi_data_create(&wrong, CMI_DTYPE_DOUBLE) == CMI_SUCCESS);
+    assert(cmi_coupling_flex_ordered_set(nullptr, din) == CMI_ERROR_NULL_POINTER);
+    assert(cmi_coupling_flex_ordered_set(coupling, wrong) == CMI_ERROR_TYPE_MISMATCH);
+    assert(cmi_coupling_flex_ordered_get(coupling, wrong) == CMI_ERROR_TYPE_MISMATCH);
+    assert(cmi_coupling_flex_keyed_set(coupling, nullptr, din) == CMI_ERROR_NULL_POINTER);
+    assert(cmi_coupling_flex_keyed_set(coupling, "input", wrong) == CMI_ERROR_TYPE_MISMATCH);
+    assert(cmi_coupling_flex_keyed_get(coupling, "output", wrong) == CMI_ERROR_TYPE_MISMATCH);
+    const char* in_keys[] = {"input"};
+    const char* out_keys[] = {"output"};
+    const char* null_keys[] = {nullptr};
+    assert(cmi_coupling_flex_keyed_inference(coupling, in_keys, -1, out_keys, 1) == CMI_ERROR_INVALID_ARGUMENT);
+    assert(cmi_coupling_flex_keyed_inference(coupling, nullptr, 1, out_keys, 1) == CMI_ERROR_NULL_POINTER);
+    assert(cmi_coupling_flex_keyed_inference(coupling, null_keys, 1, out_keys, 1) == CMI_ERROR_NULL_POINTER);
+
+    out_val[0] = out_val[1] = 0.0f;
+    assert(cmi_coupling_flex_ordered_set(coupling, din) == CMI_SUCCESS);
+    // The fallback stages borrowed storage, not a snapshot.
+    in_val[0] = 3.0f;
+    assert(cmi_coupling_flex_ordered_inference(coupling) == CMI_SUCCESS);
+    assert(cmi_coupling_flex_ordered_get(coupling, result) == CMI_SUCCESS);
+    int result_size = 0;
+    assert(cmi_data_size(result, &result_size) == CMI_SUCCESS && result_size == 1);
+    cmi_tensor_t result_tensor = nullptr;
+    void* result_ptr = nullptr;
+    assert(cmi_data_get_tensor(result, 0, &result_tensor) == CMI_SUCCESS);
+    assert(cmi_tensor_get_data(result_tensor, &result_ptr) == CMI_SUCCESS);
+    assert(static_cast<float*>(result_ptr)[0] == 150.0f && static_cast<float*>(result_ptr)[1] == 100.0f);
+    assert(cmi_tensor_destroy(result_tensor) == CMI_SUCCESS);
+
+    in_val[0] = 1.0f;
+    out_val[0] = out_val[1] = 0.0f;
+    assert(cmi_coupling_flex_keyed_set(coupling, "input", din) == CMI_SUCCESS);
+    assert(cmi_coupling_flex_keyed_inference(coupling, nullptr, 1, out_keys, 1) == CMI_ERROR_NULL_POINTER);
+    assert(cmi_coupling_flex_keyed_inference(coupling, in_keys, 1, out_keys, 1) == CMI_SUCCESS);
+    assert(cmi_coupling_flex_keyed_get(coupling, "output", result) == CMI_SUCCESS);
+    assert(cmi_data_get_tensor(result, 0, &result_tensor) == CMI_SUCCESS);
+    assert(cmi_tensor_get_data(result_tensor, &result_ptr) == CMI_SUCCESS);
+    assert(static_cast<float*>(result_ptr)[0] == 50.0f && static_cast<float*>(result_ptr)[1] == 100.0f);
+    assert(cmi_tensor_destroy(result_tensor) == CMI_SUCCESS);
+    assert(cmi_data_destroy(result) == CMI_SUCCESS);
+    assert(cmi_data_destroy(wrong) == CMI_SUCCESS);
+
     assert(cmi_coupling_destroy(coupling) == CMI_SUCCESS);
     assert(cmi_library_destroy(lib) == CMI_SUCCESS);
     assert(cmi_application_destroy(app) == CMI_SUCCESS);
@@ -602,6 +646,33 @@ static void test_application_callbacks_c_api() {
     // [1, 2] -> preprocess *2 -> [2, 4] -> inference *10 -> [20, 40] -> postprocess *3 -> [60, 120]
     assert(out_val[0] == 60.0f);
     assert(out_val[1] == 120.0f);
+
+    cmi_data_t result = nullptr;
+    assert(cmi_data_create(&result, CMI_DTYPE_FLOAT) == CMI_SUCCESS);
+    assert(cmi_coupling_flex_ordered_set(coupling, d_in) == CMI_SUCCESS);
+    assert(ctx.pre_calls == 2 && ctx.post_calls == 1);
+    assert(cmi_coupling_flex_ordered_inference(coupling) == CMI_SUCCESS);
+    assert(cmi_coupling_flex_ordered_get(coupling, result) == CMI_SUCCESS);
+    assert(ctx.post_calls == 2);
+    cmi_tensor_t result_tensor = nullptr;
+    void* result_ptr = nullptr;
+    assert(cmi_data_get_tensor(result, 0, &result_tensor) == CMI_SUCCESS);
+    assert(cmi_tensor_get_data(result_tensor, &result_ptr) == CMI_SUCCESS);
+    assert(static_cast<float*>(result_ptr)[0] == 60.0f && static_cast<float*>(result_ptr)[1] == 120.0f);
+    assert(cmi_tensor_destroy(result_tensor) == CMI_SUCCESS);
+
+    const char* in_keys[] = {"input"};
+    const char* out_keys[] = {"output"};
+    assert(cmi_coupling_flex_keyed_set(coupling, "input", d_in) == CMI_SUCCESS);
+    assert(ctx.pre_calls == 3);
+    assert(cmi_coupling_flex_keyed_inference(coupling, in_keys, 1, out_keys, 1) == CMI_SUCCESS);
+    assert(cmi_coupling_flex_keyed_get(coupling, "output", result) == CMI_SUCCESS);
+    assert(ctx.post_calls == 3);
+    assert(cmi_data_get_tensor(result, 0, &result_tensor) == CMI_SUCCESS);
+    assert(cmi_tensor_get_data(result_tensor, &result_ptr) == CMI_SUCCESS);
+    assert(static_cast<float*>(result_ptr)[0] == 60.0f && static_cast<float*>(result_ptr)[1] == 120.0f);
+    assert(cmi_tensor_destroy(result_tensor) == CMI_SUCCESS);
+    assert(cmi_data_destroy(result) == CMI_SUCCESS);
 
     assert(cmi_coupling_destroy(coupling) == CMI_SUCCESS);
     assert(cmi_library_destroy(lib) == CMI_SUCCESS);

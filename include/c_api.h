@@ -1298,6 +1298,55 @@ int cmi_coupling_log_training_metrics(cmi_coupling_t coupling,
 int cmi_coupling_step(cmi_coupling_t coupling, int* out_delta);
 
 /**
+ * @brief Stage coupling input, applying the application's preprocessing.
+ *
+ * Staging does not guarantee a deep copy. Keep externally owned tensor storage
+ * (including any storage returned by preprocessing) valid and unchanged for as
+ * long as the provider may retain the staged input. The fallback ordered provider
+ * releases staged inputs after successful inference; on failure they remain staged.
+ * Provider overrides may have different retention and failure behavior.
+ * If preprocessing or staging fails, application or provider state may have
+ * changed; do not assume the input was staged or that repeating set is safe.
+ * @return @ref CMI_SUCCESS or an error code.
+ */
+int cmi_coupling_flex_ordered_set(cmi_coupling_t coupling, cmi_data_t data);
+/**
+ * @brief Run inference on staged ordered inputs.
+ *
+ * The fallback clears staged inputs and targets only after successful inference.
+ * A failed operation may have modified output buffers; provider overrides may
+ * consume or retain staged data on failure. Do not assume retry is safe without
+ * consulting the provider's contract.
+ */
+int cmi_coupling_flex_ordered_inference(cmi_coupling_t coupling);
+/**
+ * @brief Retrieve and postprocess an ordered output, replacing the contents of data.
+ * The assignment may share tensor storage with the application; it is not a deep copy.
+ */
+int cmi_coupling_flex_ordered_get(cmi_coupling_t coupling, cmi_data_t data);
+/**
+ * @brief Stage keyed coupling input, applying preprocessing.
+ *
+ * The lifetime requirements of @ref cmi_coupling_flex_ordered_set apply. The
+ * fallback retains keyed inputs across inference and replaces an input when the
+ * same key is set again; provider overrides may behave differently, including on
+ * failure. Keys are copied during this call.
+ */
+int cmi_coupling_flex_keyed_set(cmi_coupling_t coupling, const char* key, cmi_data_t data);
+/**
+ * @brief Run inference with the specified input and output key arrays.
+ * Null arrays are allowed for zero counts; nonzero counts require arrays of
+ * non-null, null-terminated strings. Keys are copied during the call. The
+ * fallback requires at least one input key and retains keyed inputs even on
+ * success; failure and retry behavior of provider overrides may differ. Failed
+ * inference may modify output buffers.
+ */
+int cmi_coupling_flex_keyed_inference(cmi_coupling_t coupling, const char** in_keys, int in_count,
+                                      const char** out_keys, int out_count);
+/** @brief Retrieve and postprocess a keyed output; see @ref cmi_coupling_flex_ordered_get. */
+int cmi_coupling_flex_keyed_get(cmi_coupling_t coupling, const char* key, cmi_data_t data);
+
+/**
  * @brief Executes a training step for in-situ model updating.
  *
  * @param[in] coupling Coupling orchestrator handle.

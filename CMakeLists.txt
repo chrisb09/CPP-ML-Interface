@@ -23,6 +23,7 @@ option(FORCE_AIX_REBUILD "Force rebuilding AIxelerator from source even if a pre
 option(WITH_SCOREP "Enable Score-P manual instrumentation" OFF)
 option(WITH_FORTRAN "Build Fortran API bindings" ON)
 set(CPPML_SCOREP_MPP "mpi" CACHE STRING "Score-P MPP subsystem for CMI targets")
+set(AIX_SCOREP_MPP "none" CACHE STRING "Score-P MPP subsystem for AIxelerator")
 
 # Set Variables
 set(EXECUTABLE_NAME "cpp_ml_interface_executable")
@@ -31,6 +32,7 @@ set(SMARTREDIS_DIR "${CMAKE_CURRENT_SOURCE_DIR}/extern/SmartRedis")
 set(AIXELERATOR_DIR "${CMAKE_CURRENT_SOURCE_DIR}/extern/AIxeleratorService" CACHE PATH "AIxeleratorService directory")
 set(AIXELERATOR_PREBUILT_INSTALL_PREFIX "${AIXELERATOR_DIR}/INSTALL-SCOREP" CACHE PATH "Install prefix used for prebuilt AIxelerator")
 set(AIXELERATOR_PREBUILT_LIB_DIR "${AIXELERATOR_PREBUILT_INSTALL_PREFIX}/lib" CACHE PATH "Library directory containing prebuilt AIxelerator .so")
+set(AIXELERATOR_PREBUILT_BUILD_DIR "${CMAKE_BINARY_DIR}/aixelerator-prebuilt-build" CACHE PATH "AIxelerator bootstrap build directory")
 set(AIXELERATOR_CMAKE_ARGS "-DWITH_TORCH=ON" CACHE STRING "Additional CMake args used when auto-building prebuilt AIxelerator")
 set(TORCH_VERSION "2.4.0" CACHE STRING "PyTorch/LibTorch version")
 set(LIBTORCH_DIR "${CMAKE_CURRENT_SOURCE_DIR}/extern/libtorch" CACHE PATH "Path to libtorch directory")
@@ -205,14 +207,13 @@ if(WITH_AIX)
         endif()
 
         if(_aix_needs_rebuild)
-            set(AIXELERATOR_PREBUILT_BUILD_DIR "${CMAKE_BINARY_DIR}/aixelerator-prebuilt-build")
             file(MAKE_DIRECTORY "${AIXELERATOR_PREBUILT_BUILD_DIR}")
 
             set(_aixelerator_cmake_args "${AIXELERATOR_CMAKE_ARGS}")
             separate_arguments(_aixelerator_cmake_args NATIVE_COMMAND "${_aixelerator_cmake_args}")
             set(_aixelerator_scorep_arg)
             if(WITH_SCOREP)
-                set(_aixelerator_scorep_arg -DWITH_SCOREP=ON)
+                set(_aixelerator_scorep_arg -DWITH_SCOREP=ON -DAIX_SCOREP_MPP=${AIX_SCOREP_MPP})
             endif()
 
             message(STATUS "Configuring AIxelerator prebuilt bootstrap build in ${AIXELERATOR_PREBUILT_BUILD_DIR}...")
@@ -228,8 +229,8 @@ if(WITH_AIX)
                     -DTORCH_VERSION=${TORCH_VERSION}
                     -DLIBTORCH_DIR=${LIBTORCH_DIR}
                     -DAIX_VENV_DIR=${AIX_VENV_DIR}
-                    ${_aixelerator_scorep_arg}
                     ${_aixelerator_cmake_args}
+                    ${_aixelerator_scorep_arg}
                 RESULT_VARIABLE AIXELERATOR_CONFIGURE_RESULT
             )
             if(NOT AIXELERATOR_CONFIGURE_RESULT EQUAL 0)
@@ -472,4 +473,3 @@ if(DOXYGEN_FOUND)
         VERBATIM
     )
 endif()
-
