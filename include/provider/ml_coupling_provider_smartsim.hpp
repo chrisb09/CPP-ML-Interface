@@ -13,6 +13,9 @@
 #include <vector>
 #include <cstdlib> // for setenv
 #include <climits>
+#include <chrono>
+#include <fstream>
+#include <iomanip>
 
 #if defined(WITH_SMARTSIM)
 #include "client.h"
@@ -585,6 +588,12 @@ public:
     void static_inference(MLCouplingData<In> *input_after_preprocessing,
                           MLCouplingData<Out> *output_before_postprocessing) override
     {
+        // Per-inference substep timings, written next to the main timing CSV as
+        // <CMI_ML_TIMING_CSV>_stages_rank<N>.csv so put/run_model/get can be
+        // attributed without a Score-P rebuild.
+        stage_put_total_ = 0.0;
+        stage_run_total_ = 0.0;
+        stage_get_total_ = 0.0;
 
         guarantee(input_after_preprocessing != nullptr, "Smartsim inference requires input_after_preprocessing.");
         guarantee(output_before_postprocessing != nullptr, "Smartsim inference requires output_before_postprocessing.");
@@ -768,6 +777,7 @@ public:
             if (num_chunks > 1) logging::debug("Write these tensors to SmartSim (chunk " + std::to_string(chunk_idx+1) + "/" + std::to_string(num_chunks) + "):");
             else logging::debug("Write these tensors to SmartSim:");
 
+            const double stage_put_begin = stage_seconds();
             std::vector<std::string> input_tensor_names;
             for (size_t tensor_index = 0; tensor_index < input_data_after_preprocessing.size(); ++tensor_index)
             {
@@ -839,6 +849,9 @@ public:
             }
 #endif
 
+            stage_put_total_ += stage_seconds() - stage_put_begin;
+            const double stage_run_begin = stage_seconds();
+
             std::vector<std::string> output_tensor_names;
             for (size_t tensor_index = 0; tensor_index < output_data_before_postprocessing.size(); ++tensor_index)
             {
@@ -870,6 +883,9 @@ public:
                 std::cerr << "run_model failed: " << ex.what() << std::endl;
                 throw;
             }
+
+            stage_run_total_ += stage_seconds() - stage_run_begin;
+            const double stage_get_begin = stage_seconds();
 
             logging::debug("Retrieve these tensors from SmartSim:");
             for (size_t tensor_index = 0; tensor_index < output_data_before_postprocessing.size(); ++tensor_index)
@@ -921,6 +937,7 @@ public:
                 }
                 logging::debug("  " + tensor.to_string("Tensor " + std::to_string(tensor_index)));
             }
+            stage_get_total_ += stage_seconds() - stage_get_begin;
         }
 
 #ifdef USE_SCOREP
@@ -929,9 +946,42 @@ public:
         }
 #endif
 #endif
+        write_stage_timing(stage_put_total_, stage_run_total_, stage_get_total_);
+    }
+
+    static double stage_seconds()
+    {
+        using clock = std::chrono::steady_clock;
+        return std::chrono::duration<double>(clock::now().time_since_epoch()).count();
+    }
+
+    void write_stage_timing(double put_s, double run_s, double get_s)
+    {
+        const char *path = std::getenv("CMI_ML_TIMING_CSV");
+        if (path == nullptr || *path == '\0') { return; }
+
+        std::string file(path);
+        const std::string suffix = "_stages_rank" + std::to_string(this->rank);
+        const auto dot = file.rfind(".csv");
+        if (dot != std::string::npos) { file.insert(dot, suffix); } else { file += suffix; }
+
+        bool write_header = true;
+        {
+            std::ifstream probe(file);
+            write_header = !probe.good() || probe.peek() == std::ifstream::traits_type::eof();
+        }
+        std::ofstream out(file, std::ios::app);
+        if (!out) { return; }
+        if (write_header) { out << "step,put_s,run_model_s,get_s\n"; }
+        out << std::setprecision(9) << (++stage_counter_) << ','
+            << put_s << ',' << run_s << ',' << get_s << '\n';
     }
 
 private:
+    unsigned long stage_counter_ = 0;
+    double stage_put_total_ = 0.0;
+    double stage_run_total_ = 0.0;
+    double stage_get_total_ = 0.0;
     MLCouplingData<In> *input_after_preprocessing = nullptr;
     MLCouplingData<Out> *output_before_postprocessing = nullptr;
 };
