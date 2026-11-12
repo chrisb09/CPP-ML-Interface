@@ -338,6 +338,8 @@ int main(int argc, char **argv) {
     phydll_dl::Frame frame;
     std::vector<double> output;
     std::vector<float> input;
+    std::vector<double> input64;
+    bool input_is_double = false;
     while (runtime.is_running()) {
         const bool profile_details = frame_id >= profile_warmup_calls;
         if (warmup_env != nullptr) runtime.set_detailed_profile_enabled(profile_details);
@@ -410,7 +412,22 @@ int main(int argc, char **argv) {
                     model = torch::jit::load(model_path);
                     model.eval();
                     model.to(torch_device);
-                    std::cerr << "[PHYDLL:DL] model loaded" << std::endl;
+                    // The physics solver packs double precision; the TorchScript
+                    // model may expect either float32 or float64.  Match the
+                    // model's own dtype (env override: PHYDLL_DL_DTYPE).
+                    const char* dtype_env = std::getenv("PHYDLL_DL_DTYPE");
+                    if (dtype_env && (std::strcmp(dtype_env, "float64") == 0 || std::strcmp(dtype_env, "double") == 0)) {
+                        input_is_double = true;
+                    } else if (dtype_env && (std::strcmp(dtype_env, "float32") == 0 || std::strcmp(dtype_env, "float") == 0)) {
+                        input_is_double = false;
+                    } else {
+                        for (const auto& buf : model.buffers(/*recurse=*/true)) {
+                            input_is_double = (buf.scalar_type() == torch::kFloat64);
+                            break;
+                        }
+                    }
+                    std::cerr << "[PHYDLL:DL] model loaded (input dtype "
+                              << (input_is_double ? "float64" : "float32") << ")" << std::endl;
                 } catch (const c10::Error &e) {
                     std::cerr << "Failed to load TorchScript model: " << e.what() << std::endl;
                     MPI_Abort(MPI_COMM_WORLD, 1);
@@ -453,8 +470,20 @@ int main(int argc, char **argv) {
             #ifdef USE_SCOREP
             if (profile_details) SCOREP_USER_REGION_BEGIN(handle_dl_input_allocate, "dl_input_allocate", SCOREP_USER_REGION_TYPE_COMMON);
             #endif
-            input.resize(static_cast<size_t>(total_input_size));
-            std::fill(input.begin(), input.end(), 0.0f);
+            if (input_is_double) {
+                input64.resize(static_cast<size_t>(total_input_size));
+                std::fill(input64.begin(), input64.end(), 0.0);
+            } else {
+                input.resize(static_cast<size_t>(total_input_size));
+                std::fill(input.begin(), input.end(), 0.0f);
+            }
+            auto store_input = [&](long long idx, double value) {
+                if (input_is_double) {
+                    input64[static_cast<size_t>(idx)] = value;
+                } else {
+                    input[static_cast<size_t>(idx)] = static_cast<float>(value);
+                }
+            };
             #ifdef USE_SCOREP
             if (profile_details) SCOREP_USER_REGION_END(handle_dl_input_allocate);
             #endif
@@ -496,8 +525,7 @@ int main(int argc, char **argv) {
                         const long long src_base = f * agg + agg_offsets[i];
                         const long long dst_base = in_offsets[i] + f * g_r;
                         for (long long b = 0; b < g_r; ++b) {
-                            input[static_cast<size_t>(dst_base + b)] =
-                                static_cast<float>(frame.data[static_cast<size_t>(src_base + b)]);
+                            store_input(dst_base + b, frame.data[static_cast<size_t>(src_base + b)]);
                         }
                     }
                 }
@@ -508,7 +536,7 @@ int main(int argc, char **argv) {
                         long long src_start = src_rank_start + s * input_per_rank_used;
                         long long dest_start = (offset_so_far + s) * input_per_rank_used;
                         for (long long j = 0; j < input_per_rank_used; ++j) {
-                            input[dest_start + j] = static_cast<float>(frame.data[src_start + j]);
+                            store_input(dest_start + j, frame.data[src_start + j]);
                         }
                     }
                     offset_so_far += rank_batch;
@@ -523,7 +551,7 @@ int main(int argc, char **argv) {
             std::fprintf(stderr, "[PHYDLL:DL] Frame %llu running inference\n", (unsigned long long)frame_id); std::fflush(stderr);
 #endif
 
-            auto options = torch::TensorOptions().dtype(torch::kFloat32);
+            auto options = torch::TensorOptions().dtype(input_is_double ? torch::kFloat64 : torch::kFloat32);
             std::vector<int64_t> actual_shape = {batch_size};
             if (!final_meta.input_shapes.empty()) {
                 const auto& shape = final_meta.input_shapes.front();
@@ -546,7 +574,10 @@ int main(int argc, char **argv) {
             // `input` is stable for the whole synchronous loop iteration, so the
             // borrowed from_blob view stays valid through forward(). `.to` is a
             // no-op on CPU and keeps this path correct on other devices.
-            auto input_tensor = torch::from_blob(input.data(), {batch_size, input_per_rank_used}, options);
+            void* input_ptr = input_is_double
+                ? static_cast<void*>(input64.data())
+                : static_cast<void*>(input.data());
+            auto input_tensor = torch::from_blob(input_ptr, {batch_size, input_per_rank_used}, options);
             input_tensor = input_tensor.view(actual_shape);
             input_tensor = input_tensor.to(torch_device);
             #ifdef PHYDLL_HAS_CUDA_STREAM
@@ -632,7 +663,14 @@ int main(int argc, char **argv) {
                 if (profile_details) SCOREP_USER_REGION_END(handle_dl_d2h);
                 #endif
 
-                auto output_ptr = output_tensor.data_ptr<float>();
+                const bool output_is_double = (output_tensor.scalar_type() == torch::kFloat64);
+                const double* output_ptr_d = output_is_double ? output_tensor.data_ptr<double>() : nullptr;
+                const float* output_ptr_f = output_is_double ? nullptr : output_tensor.data_ptr<float>();
+                auto read_output = [&](long long idx) -> double {
+                    return output_is_double
+                        ? output_ptr_d[static_cast<size_t>(idx)]
+                        : static_cast<double>(output_ptr_f[static_cast<size_t>(idx)]);
+                };
                 const long long outputs_per_rank_used = static_cast<long long>(total_output_size) / batch_size;
 
                 const int64_t produced = static_cast<int64_t>(output_tensor.numel());
@@ -664,7 +702,7 @@ int main(int argc, char **argv) {
                             const long long dst_base = f * agg + agg_offsets[i];
                             for (long long b = 0; b < g_r; ++b) {
                                 output[static_cast<size_t>(dst_base + b)] =
-                                    static_cast<double>(output_ptr[static_cast<size_t>(src_base + b)]);
+                                    read_output(src_base + b);
                             }
                         }
                     }
@@ -675,7 +713,7 @@ int main(int argc, char **argv) {
                             long long dest_start = dest_rank_start + s * outputs_per_rank_used;
                             long long src_start = (offset_so_far + s) * outputs_per_rank_used;
                             for (long long j = 0; j < outputs_per_rank_used; ++j) {
-                                output[dest_start + j] = static_cast<double>(output_ptr[src_start + j]);
+                                output[dest_start + j] = read_output(src_start + j);
                             }
                         }
                         offset_so_far += rank_batch;
