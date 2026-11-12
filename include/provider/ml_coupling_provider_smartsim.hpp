@@ -189,7 +189,10 @@ private:
         : device(std::move(device)),
           model_backend(std::move(model_backend)),
           model_name(std::move(model_name)),
-          num_gpus(resolve_num_gpus(device, num_gpus)),
+          // Use the already-initialised member: the constructor parameter
+          // `device` was moved from above, so resolving from it would treat
+          // GPU runs as CPU runs (num_gpus == 0).
+          num_gpus(resolve_num_gpus(this->device, num_gpus)),
           first_gpu(first_gpu),
           batch_size(batch_size),
           min_batch_size(min_batch_size),
