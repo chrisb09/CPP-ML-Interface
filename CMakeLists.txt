@@ -28,7 +28,7 @@ set(AIX_SCOREP_MPP "none" CACHE STRING "Score-P MPP subsystem for AIxelerator")
 # Set Variables
 set(EXECUTABLE_NAME "cpp_ml_interface_executable")
 set(LIBRARY_NAME "cpp_ml_interface_library")
-set(SMARTREDIS_DIR "${CMAKE_CURRENT_SOURCE_DIR}/extern/SmartRedis")
+set(SMARTREDIS_DIR "${CMAKE_CURRENT_SOURCE_DIR}/extern/SmartRedis" CACHE PATH "SmartRedis prefix (must contain install/)")
 set(AIXELERATOR_DIR "${CMAKE_CURRENT_SOURCE_DIR}/extern/AIxeleratorService" CACHE PATH "AIxeleratorService directory")
 set(AIXELERATOR_PREBUILT_INSTALL_PREFIX "${AIXELERATOR_DIR}/INSTALL-SCOREP" CACHE PATH "Install prefix used for prebuilt AIxelerator")
 set(AIXELERATOR_PREBUILT_LIB_DIR "${AIXELERATOR_PREBUILT_INSTALL_PREFIX}/lib" CACHE PATH "Library directory containing prebuilt AIxelerator .so")
