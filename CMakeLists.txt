@@ -51,6 +51,14 @@ message("Using AIXelerator directory: ${AIXELERATOR_DIR}")
 
 include(FetchContent)
 
+# Prefer a vendored tomlplusplus checkout (CMI workspace layout: <root>/cmi and
+# <root>/external/tomlplusplus) so that configure works offline. Override with
+# -DFETCHCONTENT_SOURCE_DIR_TOMLPLUSPLUS=<path> for other layouts.
+set(_cmi_vendored_tomlplusplus "${CMAKE_CURRENT_SOURCE_DIR}/../external/tomlplusplus")
+if(NOT DEFINED FETCHCONTENT_SOURCE_DIR_TOMLPLUSPLUS AND EXISTS "${_cmi_vendored_tomlplusplus}/CMakeLists.txt")
+    set(FETCHCONTENT_SOURCE_DIR_TOMLPLUSPLUS "${_cmi_vendored_tomlplusplus}" CACHE PATH "Vendored tomlplusplus source directory")
+endif()
+
 FetchContent_Declare(
     tomlplusplus
     GIT_REPOSITORY https://github.com/marzer/tomlplusplus.git
